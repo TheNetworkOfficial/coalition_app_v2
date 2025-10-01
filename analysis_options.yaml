@@ -1,0 +1,9 @@
+analyzer:
+  plugins:
+    - riverpod_lint
+  exclude:
+    - build/**
+
+linter:
+  rules:
+    # Add project-specific lint rules here if needed.
