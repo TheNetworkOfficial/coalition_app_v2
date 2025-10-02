@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../env.dart';
 import '../models/post_draft.dart';
 
 class ApiException implements IOException {
@@ -81,7 +82,7 @@ class CreateUploadResponse {
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl})
       : _httpClient = httpClient ?? http.Client(),
-        _baseUri = Uri.parse(baseUrl ?? 'http://localhost:54321');
+        _baseUri = Uri.parse(baseUrl ?? API_BASE_URL);
 
   final http.Client _httpClient;
   final Uri _baseUri;
