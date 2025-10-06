@@ -20,18 +20,23 @@ class _FeedPageState extends State<FeedPage> {
   static const _pageSize = 10;
   static const _baseUrl = 'http://localhost:54321';
 
-  final PagingController<int, FeedEntry> _pagingController =
-      PagingController(firstPageKey: 1);
+  late final PagingController<int, FeedEntry> _pagingController;
   final ScrollController _scrollController = ScrollController();
   final Map<int, GlobalKey<_FeedListItemContainerState>> _itemKeys = {};
 
   int? _activeVideoIndex;
   bool _visibilityUpdateScheduled = false;
+  int? _nextPageKey = 1;
+  int? _lastRequestedPageKey;
+  bool _hasMore = true;
 
   @override
   void initState() {
     super.initState();
-    _pagingController.addPageRequestListener(_fetchPage);
+    _pagingController = PagingController<int, FeedEntry>(
+      getNextPageKey: _getNextPageKey,
+      fetchPage: _fetchPage,
+    );
   }
 
   @override
@@ -41,7 +46,7 @@ class _FeedPageState extends State<FeedPage> {
     super.dispose();
   }
 
-  Future<void> _fetchPage(int pageKey) async {
+  Future<List<FeedEntry>> _fetchPage(int pageKey) async {
     try {
       final uri = Uri.parse('$_baseUrl/api/feed').replace(
         queryParameters: {
@@ -74,36 +79,62 @@ class _FeedPageState extends State<FeedPage> {
       }
 
       final nextPageKey = _resolveNextPageKey(body, pageKey, items.length);
-      if (nextPageKey == null) {
-        _pagingController.appendLastPage(items);
-      } else {
-        _pagingController.appendPage(items, nextPageKey);
-      }
+      _hasMore = nextPageKey != null;
+      _nextPageKey = nextPageKey;
+      _pagingController.value = _pagingController.value.copyWith(
+        hasNextPage: _hasMore,
+        error: null,
+      );
 
       _scheduleVisibilityUpdate();
+      return items;
     } catch (error) {
-      _pagingController.error = error;
+      _nextPageKey = _lastRequestedPageKey ?? pageKey;
+      rethrow;
     }
+  }
+
+  int? _getNextPageKey(PagingState<int, FeedEntry> state) {
+    if (!_hasMore) {
+      return null;
+    }
+
+    int? key = _nextPageKey;
+    if (key == null) {
+      final existingKeys = state.keys;
+      if (existingKeys != null && existingKeys.isNotEmpty) {
+        key = existingKeys.last + 1;
+      } else {
+        key = 1;
+      }
+    }
+
+    _lastRequestedPageKey = key;
+    _nextPageKey = null;
+    return key;
   }
 
   Future<void> _handleRefresh() {
     final completer = Completer<void>();
-
-    void statusListener(PagingStatus status) {
-      if (status != PagingStatus.loadingFirstPage) {
-        _pagingController.removeStatusListener(statusListener);
+    void listener() {
+      if (_pagingController.status != PagingStatus.loadingFirstPage) {
+        _pagingController.removeListener(listener);
         if (!completer.isCompleted) {
           completer.complete();
         }
       }
     }
 
-    _pagingController.addStatusListener(statusListener);
+    _pagingController.addListener(listener);
 
     setState(() {
       _activeVideoIndex = null;
       _itemKeys.clear();
     });
+
+    _hasMore = true;
+    _nextPageKey = 1;
+    _lastRequestedPageKey = null;
 
     _pagingController.refresh();
     _scheduleVisibilityUpdate();
@@ -139,7 +170,7 @@ class _FeedPageState extends State<FeedPage> {
       return;
     }
 
-    final items = _pagingController.itemList;
+    final items = _pagingController.items;
     if (items == null || items.isEmpty) {
       if (_activeVideoIndex != null) {
         setState(() => _activeVideoIndex = null);
@@ -169,9 +200,6 @@ class _FeedPageState extends State<FeedPage> {
         return;
       }
       final viewport = RenderAbstractViewport.of(renderObject);
-      if (viewport == null) {
-        return;
-      }
 
       final metricsTop = viewport.getOffsetToReveal(renderObject, 0).offset;
       final metricsBottom =
@@ -186,8 +214,8 @@ class _FeedPageState extends State<FeedPage> {
       final visibleEnd = math.min(metricsBottom, viewportEnd);
       final visibleExtent = visibleEnd - visibleStart;
       final fraction = (visibleExtent <= 0)
-          ? 0
-          : (visibleExtent / itemExtent).clamp(0.0, 1.0);
+          ? 0.0
+          : math.min(1.0, math.max(0.0, visibleExtent / itemExtent));
 
       if (fraction > bestFraction) {
         bestFraction = fraction;
@@ -224,46 +252,52 @@ class _FeedPageState extends State<FeedPage> {
         onNotification: _onScrollNotification,
         child: RefreshIndicator(
           onRefresh: _handleRefresh,
-          child: PagedListView<int, FeedEntry>.separated(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-            pagingController: _pagingController,
-            scrollController: _scrollController,
-            separatorBuilder: (context, index) => const SizedBox(height: 12),
-            builderDelegate: PagedChildBuilderDelegate<FeedEntry>(
-              itemBuilder: (context, item, index) {
-                final key = _itemKeys[index] ??
-                    GlobalKey<_FeedListItemContainerState>();
-                _itemKeys[index] = key;
+          child: ValueListenableBuilder<PagingState<int, FeedEntry>>(
+            valueListenable: _pagingController,
+            builder: (context, state, _) {
+              return PagedListView<int, FeedEntry>.separated(
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                state: state,
+                fetchNextPage: _pagingController.fetchNextPage,
+                scrollController: _scrollController,
+                separatorBuilder: (context, index) => const SizedBox(height: 12),
+                builderDelegate: PagedChildBuilderDelegate<FeedEntry>(
+                  itemBuilder: (context, item, index) {
+                    final key = _itemKeys[index] ??
+                        GlobalKey<_FeedListItemContainerState>();
+                    _itemKeys[index] = key;
 
-                _scheduleVisibilityUpdate();
+                    _scheduleVisibilityUpdate();
 
-                return _FeedListItemContainer(
-                  key: key,
-                  index: index,
-                  onRemoved: _handleItemRemoved,
-                  onMetricsChanged: _scheduleVisibilityUpdate,
-                  child: FeedItem(
-                    item: item,
-                    isActive: _activeVideoIndex == index,
+                    return _FeedListItemContainer(
+                      key: key,
+                      index: index,
+                      onRemoved: _handleItemRemoved,
+                      onMetricsChanged: _scheduleVisibilityUpdate,
+                      child: FeedItem(
+                        item: item,
+                        isActive: _activeVideoIndex == index,
+                      ),
+                    );
+                  },
+                  firstPageProgressIndicatorBuilder: (context) => const Center(
+                    child: CircularProgressIndicator(),
                   ),
-                );
-              },
-              firstPageProgressIndicatorBuilder: (context) => const Center(
-                child: CircularProgressIndicator(),
-              ),
-              newPageProgressIndicatorBuilder: (context) => const Center(
-                child: CircularProgressIndicator(),
-              ),
-              firstPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
-                onRetry: _pagingController.refresh,
-                error: _pagingController.error,
-              ),
-              newPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
-                onRetry: () => _pagingController.retryLastFailedRequest(),
-                error: _pagingController.error,
-              ),
-              noItemsFoundIndicatorBuilder: (context) => const _FeedEmptyIndicator(),
-            ),
+                  newPageProgressIndicatorBuilder: (context) => const Center(
+                    child: CircularProgressIndicator(),
+                  ),
+                  firstPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
+                    onRetry: _pagingController.refresh,
+                    error: _pagingController.error,
+                  ),
+                  newPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
+                    onRetry: _pagingController.fetchNextPage,
+                    error: _pagingController.error,
+                  ),
+                  noItemsFoundIndicatorBuilder: (context) => const _FeedEmptyIndicator(),
+                ),
+              );
+            },
           ),
         ),
       ),

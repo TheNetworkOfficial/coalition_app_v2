@@ -19,6 +19,7 @@ class UploadService {
 
   final ApiClient _apiClient;
   final FileDownloader _downloader;
+  final Map<String, Task> _trackedTasks = {};
 
   Stream<TaskUpdate> get updates => _downloader.updates;
 
@@ -49,42 +50,41 @@ class UploadService {
 
     final taskId = createResponse.taskId ?? createResponse.postId;
 
-    final Task task;
-    if (createResponse.requiresMultipart) {
-      task = MultipartUploadTask(
-        taskId: taskId,
-        url: createResponse.uploadUrl,
-        files: [
-          MultipartFile(
-            fieldName: createResponse.fileFieldName ?? 'file',
-            filePath: file.path,
-            filename: fileName,
-            contentType: createResponse.contentType ?? assumedContentType,
-          ),
-        ],
-        fields: createResponse.fields,
-        method: createResponse.method,
-        headers: createResponse.headers,
-      );
-    } else {
-      task = UploadTask(
-        taskId: taskId,
-        url: createResponse.uploadUrl,
-        filename: fileName,
-        filePath: file.path,
-        method: createResponse.method,
-        headers: {
-          HttpHeaders.contentTypeHeader:
-              createResponse.contentType ?? assumedContentType,
-          ...createResponse.headers,
-        },
-      );
-    }
+    final String httpMethod = createResponse.method;
+
+    final UploadTask task = createResponse.requiresMultipart
+        ? UploadTask.fromFile(
+            taskId: taskId,
+            file: file,
+            url: createResponse.uploadUrl,
+            httpRequestMethod: httpMethod,
+            headers: createResponse.headers,
+            fields: createResponse.fields,
+            fileField: createResponse.fileFieldName ?? 'file',
+            mimeType: createResponse.contentType ?? assumedContentType,
+            updates: Updates.statusAndProgress,
+          )
+        : UploadTask.fromFile(
+            taskId: taskId,
+            file: file,
+            url: createResponse.uploadUrl,
+            httpRequestMethod: httpMethod,
+            post: 'binary',
+            headers: {
+              HttpHeaders.contentTypeHeader:
+                  createResponse.contentType ?? assumedContentType,
+              ...createResponse.headers,
+            },
+            mimeType: createResponse.contentType ?? assumedContentType,
+            updates: Updates.statusAndProgress,
+          );
 
     final enqueued = await _downloader.enqueue(task);
     if (!enqueued) {
       throw const FileSystemException('Failed to enqueue upload task');
     }
+
+    _trackedTasks[task.taskId] = task;
 
     await _apiClient.postMetadata(
       postId: createResponse.postId,
@@ -98,5 +98,18 @@ class UploadService {
     return UploadStartResult(postId: createResponse.postId, taskId: task.taskId);
   }
 
-  Future<void> retryTask(String taskId) => _downloader.retryTaskWithId(taskId);
+  Future<void> retryTask(String taskId) async {
+    Task? task = _trackedTasks[taskId];
+    task ??= await _downloader.taskForId(taskId);
+    task ??= await _downloader.database.recordForId(taskId).then((record) => record?.task);
+
+    if (task == null) {
+      throw const FileSystemException('Upload task not found for retry');
+    }
+
+    final enqueued = await _downloader.enqueue(task);
+    if (!enqueued) {
+      throw const FileSystemException('Failed to enqueue upload task');
+    }
+  }
 }

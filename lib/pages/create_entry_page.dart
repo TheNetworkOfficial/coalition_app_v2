@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import 'edit_media_page.dart';
@@ -29,13 +30,28 @@ class CreateEntryPage extends StatelessWidget {
   }
 
   Future<void> _onCreatePressed(BuildContext context) async {
-    final assets = await AssetPicker.pickAssets(
-      context,
-      pickerConfig: const AssetPickerConfig(
-        maxAssets: 1,
-        requestType: RequestType.common,
-      ),
-    );
+    List<AssetEntity>? assets;
+
+    try {
+      assets = await AssetPicker.pickAssets(
+        context,
+        pickerConfig: const AssetPickerConfig(
+          maxAssets: 1,
+          requestType: RequestType.common,
+        ),
+      );
+    } on StateError catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enable photo and video permissions to continue.'),
+        ),
+      );
+      return;
+    }
 
     if (!context.mounted || assets == null || assets.isEmpty) {
       return;

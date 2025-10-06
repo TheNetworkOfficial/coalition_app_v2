@@ -1,0 +1,48 @@
+group 'xyz.justsoft.video_thumbnail'
+version '1.0-SNAPSHOT'
+
+/**
+ * This plugin module is built by the root project's Android Gradle Plugin (AGP).
+ * Remove old per-module classpath and use modern repositories.
+ */
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    // REQUIRED for AGP 8+
+    namespace "xyz.justsoft.video_thumbnail"
+
+    // Use a modern compile SDK (match your app if different)
+    compileSdkVersion 34
+
+    defaultConfig {
+        // Modern minSdk for current Flutter ecosystem
+        minSdkVersion 21
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    // Java 8+ bytecode
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    // Keep existing lint relaxations
+    lintOptions {
+        disable 'InvalidPackage'
+    }
+}
+
+// If the plugin needs annotations at compile time, keep this;
+// safe to leave even if unused.
+dependencies {
+    implementation 'androidx.annotation:annotation:1.7.1'
+}
+

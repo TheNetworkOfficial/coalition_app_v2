@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show Rect;
 
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
@@ -34,9 +33,6 @@ class EditMediaPage extends StatefulWidget {
 
 class _EditMediaPageState extends State<EditMediaPage> {
   static const _videoTrimHeight = 72.0;
-  static const _coverSelectionHeight = 96.0;
-
-  final TextEditingController _descriptionController = TextEditingController();
 
   VideoEditorController? _videoController;
   bool _videoInitialized = false;
@@ -62,7 +58,6 @@ class _EditMediaPageState extends State<EditMediaPage> {
 
   @override
   void dispose() {
-    _descriptionController.dispose();
     unawaited(_videoController?.dispose());
     super.dispose();
   }
@@ -157,23 +152,9 @@ class _EditMediaPageState extends State<EditMediaPage> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextField(
-                    controller: _descriptionController,
-                    maxLines: null,
-                    decoration: const InputDecoration(
-                      labelText: 'Description',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: _canContinue ? _onContinuePressed : null,
-                    child: const Text('Continue'),
-                  ),
-                ],
+              child: ElevatedButton(
+                onPressed: _canContinue ? _onContinuePressed : null,
+                child: const Text('Continue'),
               ),
             ),
           ],
@@ -214,18 +195,21 @@ class _EditMediaPageState extends State<EditMediaPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              color: Colors.black,
-              child: CropGridViewer.preview(controller: controller),
+          child: Center(
+            child: AspectRatio(
+              aspectRatio: 9 / 16,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  color: Colors.black,
+                  child: CropGridViewer.preview(controller: controller),
+                ),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 16),
         _buildTrimControls(controller),
-        const SizedBox(height: 16),
-        _buildCoverControls(controller),
       ],
     );
   }
@@ -256,48 +240,6 @@ class _EditMediaPageState extends State<EditMediaPage> {
               controller: controller,
               padding: const EdgeInsets.only(top: 12),
             ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCoverControls(VideoEditorController controller) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Cover Frame',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: _coverSelectionHeight,
-          child: ValueListenableBuilder(
-            valueListenable: controller.selectedCoverNotifier,
-            builder: (context, _, __) {
-              return CoverSelection(
-                controller: controller,
-                size: _coverSelectionHeight - 12,
-                quantity: 8,
-                selectedCoverBuilder: (child, size) => Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    child,
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: Theme.of(context).colorScheme.primary,
-                            width: 2,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
           ),
         ),
       ],
@@ -364,7 +306,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
                               color: Theme.of(context).colorScheme.primary,
                               width: 2,
                             ),
-                            color: Colors.black.withOpacity(0.1),
+                            color: Colors.black.withValues(alpha: 0.1),
                           ),
                         ),
                       ),
@@ -465,11 +407,10 @@ class _EditMediaPageState extends State<EditMediaPage> {
   }
 
   void _onContinuePressed() {
-    final description = _descriptionController.text.trim();
     final draft = PostDraft(
       originalFilePath: widget.media.originalFilePath,
       type: widget.media.type,
-      description: description,
+      description: '',
       videoTrim: _buildVideoTrim(),
       coverFrameMs: _buildCoverFrameMs(),
       imageCrop: _buildImageCrop(),

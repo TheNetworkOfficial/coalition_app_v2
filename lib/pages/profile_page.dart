@@ -603,7 +603,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     Widget fallbackIcon(ColorScheme colorScheme) {
       return Container(
-        color: colorScheme.surfaceVariant,
+        color: colorScheme.surfaceContainerHighest,
         child: Icon(
           icon,
           color: colorScheme.onSurfaceVariant,

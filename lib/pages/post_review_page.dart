@@ -21,7 +21,8 @@ class _PostReviewPageState extends State<PostReviewPage> {
   late final TextEditingController _descriptionController;
   late final UploadService _uploadService;
   StreamSubscription<TaskUpdate>? _updateSubscription;
-  TaskUpdate? _latestUpdate;
+  TaskStatus? _latestStatus;
+  double? _latestProgress;
   String? _currentTaskId;
   String? _postId;
   bool _isPosting = false;
@@ -32,9 +33,22 @@ class _PostReviewPageState extends State<PostReviewPage> {
     _descriptionController = TextEditingController(text: widget.draft.description);
     _uploadService = UploadService();
     _updateSubscription = _uploadService.updates.listen((update) {
-      if (update.task.taskId == _currentTaskId) {
+      if (update.task.taskId != _currentTaskId) {
+        return;
+      }
+
+      if (update is TaskStatusUpdate) {
         setState(() {
-          _latestUpdate = update;
+          _latestStatus = update.status;
+          if (update.status == TaskStatus.complete) {
+            _latestProgress = 1.0;
+          } else if (update.status.isFinalState) {
+            _latestProgress ??= 0.0;
+          }
+        });
+      } else if (update is TaskProgressUpdate) {
+        setState(() {
+          _latestProgress = update.progress;
         });
       }
     });
@@ -67,7 +81,8 @@ class _PostReviewPageState extends State<PostReviewPage> {
       setState(() {
         _currentTaskId = result.taskId;
         _postId = result.postId;
-        _latestUpdate = null;
+        _latestStatus = null;
+        _latestProgress = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Upload started in background')),
@@ -137,7 +152,7 @@ class _PostReviewPageState extends State<PostReviewPage> {
         bottom: 12,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.6),
+            color: Colors.black.withValues(alpha: 0.6),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Padding(
@@ -201,9 +216,9 @@ class _PostReviewPageState extends State<PostReviewPage> {
       return const SizedBox.shrink();
     }
 
-    final update = _latestUpdate;
-    final status = update?.status;
-    final rawProgress = update?.progress ?? (status == TaskStatus.complete ? 1.0 : 0.0);
+    final status = _latestStatus;
+    final rawProgress = _latestProgress ??
+        (status == TaskStatus.complete ? 1.0 : 0.0);
     final progressValue = rawProgress.clamp(0.0, 1.0).toDouble();
 
     String label;
@@ -374,7 +389,7 @@ class _PreviewPlaceholder extends StatelessWidget {
       height: 240,
       width: double.infinity,
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
       ),
       child: Center(
         child: Column(
