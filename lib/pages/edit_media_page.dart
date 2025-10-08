@@ -37,6 +37,9 @@ class _EditMediaPageState extends State<EditMediaPage> {
   VideoEditorController? _videoController;
   bool _videoInitialized = false;
   Object? _videoInitError;
+  Duration? _videoDuration;
+  RangeValues? _videoTrimRangeMs;
+  Timer? _trimSeekDebounce;
 
   double? _imageWidth;
   double? _imageHeight;
@@ -58,7 +61,12 @@ class _EditMediaPageState extends State<EditMediaPage> {
 
   @override
   void dispose() {
-    unawaited(_videoController?.dispose());
+    final controller = _videoController;
+    if (controller != null) {
+      controller.removeListener(_handleVideoControllerUpdate);
+      unawaited(controller.dispose());
+    }
+    _trimSeekDebounce?.cancel();
     super.dispose();
   }
 
@@ -81,8 +89,14 @@ class _EditMediaPageState extends State<EditMediaPage> {
     try {
       await controller.initialize();
       if (!mounted) return;
+      controller.addListener(_handleVideoControllerUpdate);
       setState(() {
         _videoInitialized = true;
+        _videoDuration = controller.videoDuration;
+        _videoTrimRangeMs = RangeValues(
+          controller.startTrim.inMilliseconds.toDouble(),
+          controller.endTrim.inMilliseconds.toDouble(),
+        );
       });
     } catch (error) {
       if (!mounted) return;
@@ -151,7 +165,12 @@ class _EditMediaPageState extends State<EditMediaPage> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                MediaQuery.of(context).padding.bottom + 16,
+              ),
               child: ElevatedButton(
                 onPressed: _canContinue ? _onContinuePressed : null,
                 child: const Text('Continue'),
@@ -191,13 +210,18 @@ class _EditMediaPageState extends State<EditMediaPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
+    final videoValue = controller.video.value;
+    final aspectRatio = videoValue.isInitialized && videoValue.aspectRatio > 0
+        ? videoValue.aspectRatio
+        : 9 / 16;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
           child: Center(
             child: AspectRatio(
-              aspectRatio: 9 / 16,
+              aspectRatio: aspectRatio,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
@@ -215,30 +239,50 @@ class _EditMediaPageState extends State<EditMediaPage> {
   }
 
   Widget _buildTrimControls(VideoEditorController controller) {
+    final duration = _videoDuration;
+    final range = _videoTrimRangeMs;
+    if (duration == null || range == null) {
+      return const SizedBox(
+        height: _videoTrimHeight,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final totalMs = duration.inMilliseconds.toDouble();
+    final trimRange = RangeValues(
+      range.start.clamp(0, totalMs),
+      range.end.clamp(0, totalMs),
+    );
+    final sliderDivisions = duration.inSeconds > 0 ? duration.inSeconds : null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AnimatedBuilder(
-          animation: Listenable.merge([controller, controller.video]),
-          builder: (context, _) {
-            final start = controller.startTrim;
-            final end = controller.endTrim;
-            String format(Duration d) =>
-                '${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:'
-                '${d.inSeconds.remainder(60).toString().padLeft(2, '0')}';
-            return Text('Trim: ${format(start)} - ${format(end)}');
-          },
+        Text(
+          'Trim: ${_formatDuration(trimRange.start)} - ${_formatDuration(trimRange.end)}',
         ),
         const SizedBox(height: 8),
         SizedBox(
           height: _videoTrimHeight,
-          child: TrimSlider(
-            controller: controller,
-            height: _videoTrimHeight,
-            horizontalMargin: 16,
-            child: TrimTimeline(
-              controller: controller,
-              padding: const EdgeInsets.only(top: 12),
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              overlayShape: SliderComponentShape.noOverlay,
+              trackHeight: 4,
+              rangeThumbShape:
+                  const RoundRangeSliderThumbShape(enabledThumbRadius: 10),
+            ),
+            child: RangeSlider(
+              min: 0,
+              max: totalMs,
+              divisions: sliderDivisions,
+              values: trimRange,
+              labels: RangeLabels(
+                _formatDuration(trimRange.start),
+                _formatDuration(trimRange.end),
+              ),
+              onChangeStart: (_) => _onTrimChangeStart(),
+              onChanged: (values) => _onTrimChanged(values, duration),
+              onChangeEnd: (values) => _onTrimChangeEnd(values, duration),
             ),
           ),
         ),
@@ -477,6 +521,97 @@ class _EditMediaPageState extends State<EditMediaPage> {
       height: cropRect.height,
       rotation: rotation.toDouble(),
     );
+  }
+
+  void _onTrimChangeStart() {
+    final controller = _videoController;
+    if (controller == null) return;
+    controller.isTrimming = true;
+    final video = controller.video;
+    if (video.value.isInitialized && video.value.isPlaying) {
+      video.pause();
+    }
+    _trimSeekDebounce?.cancel();
+  }
+
+  void _onTrimChanged(RangeValues values, Duration duration) {
+    final controller = _videoController;
+    if (controller == null) return;
+    final totalMs = duration.inMilliseconds.toDouble();
+    final clamped = RangeValues(
+      values.start.clamp(0, totalMs),
+      values.end.clamp(0, totalMs),
+    );
+    setState(() {
+      _videoTrimRangeMs = clamped;
+    });
+
+    _trimSeekDebounce?.cancel();
+    _trimSeekDebounce = Timer(const Duration(milliseconds: 120), () {
+      final video = controller.video;
+      if (!video.value.isInitialized) return;
+      unawaited(
+        video.seekTo(Duration(milliseconds: clamped.start.round())),
+      );
+    });
+  }
+
+  void _onTrimChangeEnd(RangeValues values, Duration duration) {
+    final controller = _videoController;
+    if (controller == null) return;
+    _trimSeekDebounce?.cancel();
+    final totalMs = duration.inMilliseconds.toDouble();
+    final clampedStart = values.start.clamp(0, totalMs);
+    final clampedEnd = values.end.clamp(0, totalMs);
+    if (clampedEnd <= clampedStart) {
+      return;
+    }
+    final min = clampedStart / totalMs;
+    final max = clampedEnd / totalMs;
+    controller.updateTrim(min, max);
+    controller.isTrimming = false;
+    final video = controller.video;
+    if (video.value.isInitialized) {
+      unawaited(video.seekTo(Duration(milliseconds: clampedStart.round())));
+    }
+  }
+
+  String _formatDuration(double milliseconds) {
+    final duration = Duration(milliseconds: milliseconds.round());
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+    final buffer = StringBuffer();
+
+    if (hours > 0) {
+      buffer.write(hours.toString().padLeft(2, '0'));
+      buffer.write(':');
+    }
+
+    buffer.write(minutes.toString().padLeft(2, '0'));
+    buffer.write(':');
+    buffer.write(seconds.toString().padLeft(2, '0'));
+
+    return buffer.toString();
+  }
+
+  void _handleVideoControllerUpdate() {
+    if (!mounted) return;
+    final controller = _videoController;
+    final duration = _videoDuration;
+    if (controller == null || duration == null) {
+      return;
+    }
+    final nextRange = RangeValues(
+      controller.startTrim.inMilliseconds.toDouble(),
+      controller.endTrim.inMilliseconds.toDouble(),
+    );
+    if (_videoTrimRangeMs == nextRange) {
+      return;
+    }
+    setState(() {
+      _videoTrimRangeMs = nextRange;
+    });
   }
 }
 
