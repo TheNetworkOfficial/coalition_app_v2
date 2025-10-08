@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:photo_manager/photo_manager.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import '../pickers/lightweight_asset_picker.dart';
@@ -120,7 +119,7 @@ class CreateEntryPage extends StatelessWidget {
     if (Platform.isAndroid) {
       final deviceInfo = DeviceInfoPlugin();
       final androidInfo = await deviceInfo.androidInfo;
-      final sdkInt = androidInfo.version.sdkInt ?? 0;
+      final sdkInt = androidInfo.version.sdkInt;
       if (sdkInt >= 33) {
         permissions.addAll({Permission.photos, Permission.videos});
       } else {

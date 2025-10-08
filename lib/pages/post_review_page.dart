@@ -4,6 +4,9 @@ import 'dart:io';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:get_thumbnail_video/index.dart' show ImageFormat;
+import 'package:get_thumbnail_video/video_thumbnail.dart';
+import 'package:video_player/video_player.dart';
 
 import '../models/post_draft.dart';
 import '../services/upload_service.dart';
@@ -26,6 +29,15 @@ class _PostReviewPageState extends State<PostReviewPage> {
   String? _currentTaskId;
   String? _postId;
   bool _isPosting = false;
+  VideoPlayerController? _videoController;
+  Future<void>? _videoInitFuture;
+  Duration? _trimStart;
+  Duration? _trimEnd;
+  Duration? _videoDuration;
+  int? _coverFrameMs;
+  Uint8List? _coverThumbnail;
+  bool _isCoverLoading = false;
+  Object? _videoInitError;
 
   @override
   void initState() {
@@ -52,12 +64,27 @@ class _PostReviewPageState extends State<PostReviewPage> {
         });
       }
     });
+
+    if (widget.draft.type == 'video') {
+      final initialCover = widget.draft.coverFrameMs ??
+          widget.draft.videoTrim?.startMs ??
+          0;
+      _coverFrameMs = initialCover;
+      if (!kIsWeb) {
+        _initializeVideoPreview();
+        unawaited(_refreshCoverThumbnail(initialCover));
+      }
+    } else {
+      _coverFrameMs = widget.draft.coverFrameMs;
+    }
   }
 
   @override
   void dispose() {
     _updateSubscription?.cancel();
     _descriptionController.dispose();
+    _videoController?.removeListener(_handleVideoLoop);
+    _videoController?.dispose();
     super.dispose();
   }
 
@@ -71,8 +98,19 @@ class _PostReviewPageState extends State<PostReviewPage> {
     });
 
     try {
+      final updatedDraft = PostDraft(
+        originalFilePath: widget.draft.originalFilePath,
+        type: widget.draft.type,
+        description: _descriptionController.text,
+        videoTrim: widget.draft.videoTrim,
+        coverFrameMs: widget.draft.type == 'video'
+            ? _effectiveCoverFrameMs
+            : widget.draft.coverFrameMs,
+        imageCrop: widget.draft.imageCrop,
+      );
+
       final result = await _uploadService.startUpload(
-        draft: widget.draft,
+        draft: updatedDraft,
         description: _descriptionController.text,
       );
       if (!mounted) {
@@ -124,56 +162,449 @@ class _PostReviewPageState extends State<PostReviewPage> {
     }
   }
 
+  void _initializeVideoPreview() {
+    if (kIsWeb) {
+      return;
+    }
+    final trim = widget.draft.videoTrim;
+    _trimStart =
+        trim != null ? Duration(milliseconds: trim.startMs) : Duration.zero;
+    _trimEnd = trim != null ? Duration(milliseconds: trim.endMs) : null;
+
+    final controller =
+        VideoPlayerController.file(File(widget.draft.originalFilePath));
+    _videoController = controller;
+    _videoInitFuture = controller.initialize().then((_) {
+      _videoDuration = controller.value.duration;
+      final start = _trimStart ?? Duration.zero;
+      final safeStart = _clampDuration(start);
+      controller.setLooping(true);
+      controller.seekTo(safeStart);
+      controller.play();
+      controller.addListener(_handleVideoLoop);
+      setState(() {
+        final fallback = _coverFrameMs ?? safeStart.inMilliseconds;
+        _coverFrameMs = _clampFrameMs(fallback);
+      });
+    }).catchError((error) {
+      if (mounted) {
+        setState(() {
+          _videoInitError = error;
+        });
+      }
+    });
+  }
+
+  void _handleVideoLoop() {
+    final controller = _videoController;
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+    final end = _trimEnd ?? _videoDuration;
+    if (end == null) {
+      return;
+    }
+    final position = controller.value.position;
+    if (position >= end) {
+      controller.seekTo(_trimStart ?? Duration.zero);
+    }
+  }
+
+  Future<void> _refreshCoverThumbnail(int? frameMs) async {
+    if (kIsWeb || frameMs == null) {
+      return;
+    }
+    final clamped = _clampFrameMs(frameMs);
+    setState(() {
+      _isCoverLoading = true;
+    });
+    final bytes = await _createThumbnail(clamped);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _coverFrameMs = clamped;
+      _coverThumbnail = bytes;
+      _isCoverLoading = false;
+    });
+  }
+
+  Future<Uint8List?> _createThumbnail(int frameMs) async {
+    if (kIsWeb) {
+      return null;
+    }
+    try {
+      return await VideoThumbnail.thumbnailData(
+        video: widget.draft.originalFilePath,
+        timeMs: frameMs,
+        quality: 80,
+        imageFormat: ImageFormat.JPEG,
+      );
+    } catch (error) {
+      debugPrint('Cover thumbnail generation failed: $error');
+      return null;
+    }
+  }
+
+  int? get _effectiveCoverFrameMs {
+    if (widget.draft.type != 'video') {
+      return widget.draft.coverFrameMs;
+    }
+    final baseFrame = _coverFrameMs ??
+        widget.draft.coverFrameMs ??
+        widget.draft.videoTrim?.startMs ??
+        (_trimStart ?? Duration.zero).inMilliseconds;
+    return _clampFrameMs(baseFrame);
+  }
+
+  int _clampFrameMs(int frameMs) {
+    final min = (_trimStart ?? Duration.zero).inMilliseconds;
+    final maxDuration = _trimEnd ?? _videoDuration;
+    if (maxDuration == null) {
+      return frameMs < min ? min : frameMs;
+    }
+    final max = maxDuration.inMilliseconds;
+    if (max <= min) {
+      return min;
+    }
+    final clamped = frameMs.clamp(min, max);
+    return clamped is int ? clamped : clamped.toInt();
+  }
+
+  Duration _clampDuration(Duration input) {
+    final duration = _videoDuration;
+    if (duration == null || duration <= Duration.zero) {
+      return input;
+    }
+    final clamped = input.inMilliseconds.clamp(0, duration.inMilliseconds);
+    return Duration(milliseconds: clamped);
+  }
+
+  String _formatMilliseconds(int ms) {
+    final duration = Duration(milliseconds: ms);
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+    final hoursPart =
+        hours > 0 ? '${hours.toString().padLeft(2, '0')}:' : '';
+    final minutesPart = minutes.toString().padLeft(2, '0');
+    final secondsPart = seconds.toString().padLeft(2, '0');
+    return '$hoursPart$minutesPart:$secondsPart';
+  }
+
+  Future<void> _showCoverPicker() async {
+    final controller = _videoController;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        kIsWeb) {
+      return;
+    }
+    final startMs =
+        (_trimStart ?? Duration.zero).inMilliseconds.toDouble();
+    final endDuration =
+        _trimEnd ?? _videoDuration ?? controller.value.duration;
+    final endMs = endDuration.inMilliseconds.toDouble();
+    double sliderValue =
+        (_effectiveCoverFrameMs ?? startMs.toInt()).toDouble().clamp(
+              startMs,
+              endMs > startMs ? endMs : startMs + 1,
+            );
+    Uint8List? initialBytes = _coverThumbnail;
+    if (initialBytes == null) {
+      initialBytes = await _createThumbnail(sliderValue.toInt());
+    }
+
+    final result = await showModalBottomSheet<_CoverSelection>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        double currentValue = sliderValue;
+        Uint8List? previewBytes = initialBytes;
+        bool localLoading = false;
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            Future<void> updatePreview(double value) async {
+              setModalState(() {
+                currentValue = value;
+                localLoading = true;
+              });
+              final bytes = await _createThumbnail(value.toInt());
+              if (!mounted) {
+                return;
+              }
+              setModalState(() {
+                previewBytes = bytes;
+                localLoading = false;
+              });
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 16,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Select cover frame',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 200,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: previewBytes != null
+                            ? FittedBox(
+                                fit: BoxFit.contain,
+                                child: Image.memory(
+                                  previewBytes!,
+                                ),
+                              )
+                            : localLoading
+                                ? const Center(
+                                    child: CircularProgressIndicator(),
+                                  )
+                                : const Center(
+                                    child: Icon(
+                                      Icons.image_not_supported_outlined,
+                                      size: 40,
+                                    ),
+                                  ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Slider(
+                      min: startMs,
+                      max: endMs > startMs ? endMs : startMs + 1,
+                      value: currentValue.clamp(
+                        startMs,
+                        endMs > startMs ? endMs : startMs + 1,
+                      ),
+                      onChanged: (value) {
+                        setModalState(() {
+                          currentValue = value;
+                        });
+                      },
+                      onChangeEnd: updatePreview,
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(_formatMilliseconds(currentValue.toInt())),
+                        if (localLoading)
+                          const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.of(context).pop(
+                                _CoverSelection(
+                                  frameMs: currentValue.toInt(),
+                                  bytes: previewBytes,
+                                ),
+                              );
+                            },
+                            child: const Text('Save cover'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    setState(() {
+      _coverFrameMs = result.frameMs;
+      if (result.bytes != null) {
+        _coverThumbnail = result.bytes;
+      }
+    });
+    if (result.bytes == null) {
+      unawaited(_refreshCoverThumbnail(result.frameMs));
+    }
+  }
+
+  Widget _buildVideoPreview(BorderRadius borderRadius) {
+    final controller = _videoController;
+    if (_videoInitError != null) {
+      return ClipRRect(
+        borderRadius: borderRadius,
+        child: _PreviewPlaceholder(
+          icon: Icons.error_outline,
+          label: 'Unable to load video preview',
+        ),
+      );
+    }
+    if (controller == null) {
+      return ClipRRect(
+        borderRadius: borderRadius,
+        child: const SizedBox(
+          height: 240,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    return ClipRRect(
+      borderRadius: borderRadius,
+      child: FutureBuilder<void>(
+        future: _videoInitFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const SizedBox(
+              height: 240,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (snapshot.hasError) {
+            return const _PreviewPlaceholder(
+              icon: Icons.error_outline,
+              label: 'Unable to load video preview',
+            );
+          }
+          final aspectRatio = controller.value.aspectRatio == 0
+              ? 9 / 16
+              : controller.value.aspectRatio;
+          final mediaQuery = MediaQuery.of(context);
+          final maxHeight = mediaQuery.size.height * (2 / 3);
+          return ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxHeight),
+            child: AspectRatio(
+              aspectRatio: aspectRatio,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    color: Colors.black,
+                    child: VideoPlayer(controller),
+                  ),
+                Positioned(
+                  left: 12,
+                  bottom: 12,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Row(
+                      children: [
+                        _buildPlayPauseButton(),
+                        const SizedBox(width: 12),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: ValueListenableBuilder<VideoPlayerValue>(
+                            valueListenable: controller,
+                            builder: (_, value, __) => Text(
+                              _formatMilliseconds(
+                                value.position.inMilliseconds,
+                              ),
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.black54,
+                    ),
+                    onPressed: _isCoverLoading ? null : _showCoverPicker,
+                    icon: const Icon(Icons.photo),
+                    label: const Text('Edit cover'),
+                  ),
+                ),
+                  if (_isCoverLoading)
+                    const Positioned.fill(
+                      child: ColoredBox(
+                        color: Color(0x55000000),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildPlayPauseButton() {
+    final controller = _videoController!;
+    return ValueListenableBuilder<VideoPlayerValue>(
+      valueListenable: controller,
+      builder: (_, value, __) {
+        final isPlaying = value.isPlaying;
+        return IconButton(
+          onPressed: () {
+            if (isPlaying) {
+              controller.pause();
+            } else {
+              final start = _trimStart ?? Duration.zero;
+              if (value.position < start ||
+                  (_trimEnd != null && value.position >= _trimEnd!)) {
+                controller.seekTo(start);
+              }
+              controller.play();
+            }
+          },
+          icon: Icon(
+            isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill,
+          ),
+          color: Colors.white,
+          iconSize: 32,
+        );
+      },
+    );
+  }
+
   Widget _buildPreview() {
     final borderRadius = BorderRadius.circular(16);
     final trim = widget.draft.videoTrim;
     final crop = widget.draft.imageCrop;
-
-    Widget detailsOverlay() {
-      final details = <String>[];
-      if (trim != null) {
-        details.add('Trim: ${trim.startMs}ms - ${trim.endMs}ms');
-      }
-      if (widget.draft.coverFrameMs != null) {
-        details.add('Cover @ ${widget.draft.coverFrameMs}ms');
-      }
-      if (crop != null) {
-        details.add(
-          'Crop x${crop.x.toStringAsFixed(2)}, y${crop.y.toStringAsFixed(2)}, '
-          'w${crop.width.toStringAsFixed(2)}, h${crop.height.toStringAsFixed(2)}',
-        );
-      }
-      if (details.isEmpty) {
-        return const SizedBox.shrink();
-      }
-      return Positioned(
-        left: 12,
-        right: 12,
-        bottom: 12,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final line in details)
-                  Text(
-                    line,
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
+    final coverFrame = widget.draft.type == 'video'
+        ? _effectiveCoverFrameMs
+        : widget.draft.coverFrameMs;
 
     Widget previewContent;
-    if (widget.draft.type == 'image' && !kIsWeb) {
+    if (widget.draft.type == 'video' && !kIsWeb) {
+      previewContent = _buildVideoPreview(borderRadius);
+    } else if (widget.draft.type == 'image' && !kIsWeb) {
       previewContent = ClipRRect(
         borderRadius: borderRadius,
         child: Image.file(
@@ -182,7 +613,7 @@ class _PostReviewPageState extends State<PostReviewPage> {
           width: double.infinity,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) {
-            return _PreviewPlaceholder(
+            return const _PreviewPlaceholder(
               icon: Icons.image_not_supported_outlined,
               label: 'Unable to load image preview',
             );
@@ -196,17 +627,45 @@ class _PostReviewPageState extends State<PostReviewPage> {
           icon: widget.draft.type == 'video'
               ? Icons.videocam_outlined
               : Icons.image_outlined,
-          label: widget.draft.type == 'video'
-              ? 'Video preview unavailable'
-              : 'Preview unavailable on web',
-        ),
+              label: 'Preview unavailable on this platform',
+            ),
+          );
+    }
+
+    final infoLines = <String>[];
+    if (trim != null) {
+      infoLines.add(
+        'Trim: ${_formatMilliseconds(trim.startMs)} - ${_formatMilliseconds(trim.endMs)}',
+      );
+    }
+    if (coverFrame != null) {
+      infoLines.add('Cover @ ${_formatMilliseconds(coverFrame)}');
+    }
+    if (crop != null) {
+      infoLines.add(
+        'Crop x${crop.x.toStringAsFixed(2)}, y${crop.y.toStringAsFixed(2)}, '
+        'w${crop.width.toStringAsFixed(2)}, h${crop.height.toStringAsFixed(2)}',
       );
     }
 
-    return Stack(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         previewContent,
-        detailsOverlay(),
+        if (infoLines.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final line in infoLines)
+                  Text(
+                    line,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -332,11 +791,7 @@ class _PostReviewPageState extends State<PostReviewPage> {
                     widget.draft.type.toUpperCase(),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.draft.originalFilePath,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+                  const SizedBox(height: 8),
                   if (_postId != null) ...[
                     const SizedBox(height: 8),
                     Text('Post ID: $_postId', style: Theme.of(context).textTheme.bodySmall),
@@ -375,6 +830,13 @@ class _PostReviewPageState extends State<PostReviewPage> {
       ),
     );
   }
+}
+
+class _CoverSelection {
+  const _CoverSelection({required this.frameMs, this.bytes});
+
+  final int frameMs;
+  final Uint8List? bytes;
 }
 
 class _PreviewPlaceholder extends StatelessWidget {

@@ -1,7 +1,5 @@
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:photo_manager/photo_manager.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import '../widgets/asset_thumb.dart';
@@ -39,16 +37,18 @@ class LightweightAssetPickerProvider extends DefaultAssetPickerProvider {
         return null;
       }
       final asset = assets.single;
-      if (asset.type != AssetType.image && asset.type != AssetType.video) {
+      Uint8List? data;
+      if (asset.type == AssetType.image) {
+        data = await asset.thumbnailDataWithOption(
+          ThumbnailOption(
+            size: pathThumbnailSize,
+            format: ThumbnailFormat.jpeg,
+            quality: thumbnailQuality.clamp(1, 100).toInt(),
+          ),
+        );
+      } else if (asset.type != AssetType.video) {
         return null;
       }
-      final data = await asset.thumbnailDataWithOption(
-        ThumbnailOption(
-          size: pathThumbnailSize,
-          format: ThumbnailFormat.jpeg,
-          quality: thumbnailQuality.clamp(1, 100).toInt(),
-        ),
-      );
       final index = paths.indexWhere(
         (wrapper) => wrapper.path == path.path,
       );
@@ -61,13 +61,8 @@ class LightweightAssetPickerProvider extends DefaultAssetPickerProvider {
       }
       return data;
     } catch (error, stack) {
-      FlutterError.presentError(
-        FlutterErrorDetails(
-          exception: error,
-          stack: stack,
-          library: 'lightweight_asset_picker',
-          silent: true,
-        ),
+      debugPrint(
+        'Path thumbnail generation failed: $error\n$stack',
       );
       return null;
     }
