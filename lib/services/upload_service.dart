@@ -37,6 +37,7 @@ class UploadService {
   final FileDownloader _downloader;
   final TusUploader _tusUploader;
   final StreamController<TaskUpdate> _updatesController;
+  VoidCallback? onFeedRefreshRequested;
   StreamSubscription<TaskUpdate>? _downloaderSubscription;
   final Map<String, Task> _trackedTasks = {};
   final Map<String, _TusUploadState> _tusUploads = {};
@@ -352,6 +353,7 @@ class UploadService {
           coverFrameMs: state.draft.coverFrameMs,
           imageCrop: state.draft.imageCrop,
         );
+        await _finalizePostUpload(state);
         _emitStatus(state.task, TaskStatus.complete);
         _tusUploads.remove(state.task.taskId);
         _trackedTasks.remove(state.task.taskId);
@@ -386,6 +388,48 @@ class UploadService {
         state.cancelToken = null;
       }
     }());
+  }
+
+  Future<void> _finalizePostUpload(_TusUploadState state) async {
+    const visibility = 'public';
+    final description = state.description.trim();
+    final hasDescription = description.isNotEmpty;
+    final effectiveDescription = hasDescription ? description : null;
+    final type = state.draft.type;
+    final cfUid = state.response.uid;
+
+    try {
+      await _apiClient.createPost(
+        type: type,
+        cfUid: cfUid,
+        description: effectiveDescription,
+        visibility: visibility,
+      );
+      final status = _apiClient.lastCreatePostStatusCode;
+      debugPrint(
+        '[UploadService] finalize createPost: {type: $type, cfUid: $cfUid, hasDescription: $hasDescription, visibility: $visibility} -> status=${status ?? 'unknown'}',
+      );
+      _notifyFeedRefreshRequested();
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[UploadService] finalize createPost failed for $cfUid: $error\n$stackTrace',
+      );
+      rethrow;
+    }
+  }
+
+  void _notifyFeedRefreshRequested() {
+    final callback = onFeedRefreshRequested;
+    if (callback != null) {
+      try {
+        callback();
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[UploadService] feed refresh callback threw: $error\n$stackTrace',
+        );
+      }
+    }
+    debugPrint('[UploadService] finalize success -> requested feed refresh');
   }
 
   void _emitStatus(Task task, TaskStatus status) {
