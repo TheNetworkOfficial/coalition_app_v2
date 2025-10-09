@@ -22,26 +22,31 @@ class AppShell extends StatelessWidget {
         onDestinationSelected: _onDestinationSelected,
         destinations: const [
           NavigationDestination(
+            key: Key('tab_feed'),
             icon: Icon(Icons.dynamic_feed_outlined),
             selectedIcon: Icon(Icons.dynamic_feed),
             label: 'Feed',
           ),
           NavigationDestination(
+            key: Key('tab_candidates'),
             icon: Icon(Icons.people_outline),
             selectedIcon: Icon(Icons.people),
             label: 'Candidates',
           ),
           NavigationDestination(
+            key: Key('tab_create'),
             icon: Icon(Icons.add_circle_outline),
             selectedIcon: Icon(Icons.add_circle),
             label: 'Create',
           ),
           NavigationDestination(
+            key: Key('tab_events'),
             icon: Icon(Icons.event_outlined),
             selectedIcon: Icon(Icons.event),
             label: 'Events',
           ),
           NavigationDestination(
+            key: Key('tab_profile'),
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),
             label: 'Profile',
