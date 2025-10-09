@@ -401,7 +401,8 @@ class _TestHttpClientResponse extends Stream<List<int>> implements HttpClientRes
   int get contentLength => _bytes.length;
 
   @override
-  CompressionState get compressionState => CompressionState.notCompressed;
+  HttpClientResponseCompressionState get compressionState =>
+      HttpClientResponseCompressionState.notCompressed;
 
   @override
   List<Cookie> get cookies => const <Cookie>[];
