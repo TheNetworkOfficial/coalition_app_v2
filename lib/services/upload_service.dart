@@ -11,55 +11,57 @@ import 'package:path/path.dart' as p;
 import '../env.dart';
 import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
+import '../models/upload_outcome.dart';
 import 'api_client.dart';
 import 'tus_uploader.dart';
-
-class UploadStartResult {
-  const UploadStartResult({required this.postId, required this.taskId});
-
-  final String postId;
-  final String taskId;
-}
 
 class UploadService {
   UploadService({
     ApiClient? apiClient,
-    FileDownloader? downloader,
     TusUploader? tusUploader,
   })  : _apiClient = apiClient ?? ApiClient(),
-        _downloader = downloader ?? FileDownloader(),
         _tusUploader = tusUploader ?? TusUploader(),
-        _updatesController = StreamController<TaskUpdate>.broadcast() {
-    _downloaderSubscription = _downloader.updates.listen(_updatesController.add);
-  }
+        _updatesController = StreamController<TaskUpdate>.broadcast();
 
   final ApiClient _apiClient;
-  final FileDownloader _downloader;
   final TusUploader _tusUploader;
   final StreamController<TaskUpdate> _updatesController;
-  VoidCallback? onFeedRefreshRequested;
-  StreamSubscription<TaskUpdate>? _downloaderSubscription;
-  final Map<String, Task> _trackedTasks = {};
   final Map<String, _TusUploadState> _tusUploads = {};
+
+  VoidCallback? onFeedRefreshRequested;
+  String? _lastStartedTaskId;
+
+  String? get lastStartedTaskId => _lastStartedTaskId;
 
   Stream<TaskUpdate> get updates => _updatesController.stream;
 
   void dispose() {
-    _downloaderSubscription?.cancel();
-    for (final entry in _tusUploads.values) {
-      entry.cancelToken?.cancel('dispose');
+    for (final state in _tusUploads.values) {
+      state.cancelToken?.cancel('dispose');
+      if (!state.completer.isCompleted) {
+        state.completer.complete(
+          UploadOutcome(
+            ok: false,
+            cfUid: state.response.uid,
+            message: 'Upload canceled',
+          ),
+        );
+      }
     }
     _tusUploads.clear();
     _updatesController.close();
   }
 
-  Future<UploadStartResult> startUpload({
+  Future<UploadOutcome> startUpload({
     required PostDraft draft,
     required String description,
+    VoidCallback? onFeedRefreshRequested,
   }) async {
     final file = File(draft.originalFilePath);
     if (!await file.exists()) {
-      throw const FileSystemException('Original file for upload not found');
+      const message = 'Original file for upload not found';
+      debugPrint('[UploadService] $message');
+      return const UploadOutcome(ok: false, message: message);
     }
 
     final fileSize = await file.length();
@@ -83,9 +85,21 @@ class UploadService {
         fileSize: fileSize,
         contentType: assumedContentType,
       );
+    } on ApiException catch (error) {
+      debugPrint(
+        '[UploadService] createUpload failed: ${error.message} (status=${error.statusCode ?? 'unknown'})',
+      );
+      return UploadOutcome(
+        ok: false,
+        message: error.message,
+        statusCode: error.statusCode,
+      );
     } on FormatException catch (error, stackTrace) {
       debugPrint('[UploadService] createUpload parse error: $error\n$stackTrace');
-      rethrow;
+      return UploadOutcome(ok: false, message: error.toString());
+    } catch (error, stackTrace) {
+      debugPrint('[UploadService] createUpload unexpected error: $error\n$stackTrace');
+      return UploadOutcome(ok: false, message: error.toString());
     }
 
     final create = createResult.response;
@@ -140,6 +154,9 @@ class UploadService {
       tusHeaders['Tus-Resumable'] = '1.0.0';
     }
 
+    final feedRefreshCallback =
+        onFeedRefreshRequested ?? this.onFeedRefreshRequested;
+
     final shouldUseTus = tusEndpoint != null && draft.type == 'video';
     if (shouldUseTus) {
       debugPrint('[UploadService] Using TUS endpoint: ${tusEndpoint.toString()}');
@@ -153,28 +170,66 @@ class UploadService {
         create: create,
         tusEndpoint: tusEndpoint,
         tusHeaders: tusHeaders,
+        feedRefreshCallback: feedRefreshCallback,
       );
     }
 
     debugPrint('[UploadService] Using legacy direct upload: ${create.uploadUrl}');
+    return _startDirectUpload(
+      draft: draft,
+      description: description,
+      file: file,
+      fileName: fileName,
+      fileSize: fileSize,
+      contentType: assumedContentType,
+      create: create,
+      feedRefreshCallback: feedRefreshCallback,
+    );
+  }
 
-    final method = create.method.toUpperCase();
-    final bool isDirectPost = method == 'POST';
-    if (isDirectPost) {
-      debugPrint('[UploadService] using direct POST upload for asset ${create.uid}');
+  Future<UploadOutcome> _startDirectUpload({
+    required PostDraft draft,
+    required String description,
+    required File file,
+    required String fileName,
+    required int fileSize,
+    required String contentType,
+    required CreateUploadResponse create,
+    required VoidCallback? feedRefreshCallback,
+  }) async {
+    final taskId = create.taskId ?? create.uid;
+    final task = UploadTask.fromFile(
+      taskId: taskId,
+      file: file,
+      url: create.uploadUrl.toString(),
+      httpRequestMethod: create.method,
+      headers: create.headers,
+      fields: create.fields,
+      fileField: create.fileFieldName ?? 'file',
+      mimeType: create.contentType ?? contentType,
+      updates: Updates.statusAndProgress,
+    );
+
+    _lastStartedTaskId = taskId;
+    _emitStatus(task, TaskStatus.running);
+    _emitProgress(task, 0);
+
+    try {
       if (create.requiresMultipart) {
         await _performDirectMultipartUpload(
           file: file,
           create: create,
-          fallbackContentType: assumedContentType,
+          fallbackContentType: contentType,
         );
       } else {
         await _performDirectBinaryUpload(
           file: file,
           create: create,
-          fallbackContentType: assumedContentType,
+          fallbackContentType: contentType,
         );
       }
+
+      _emitProgress(task, 1);
 
       await _apiClient.postMetadata(
         postId: create.uid,
@@ -182,64 +237,32 @@ class UploadService {
         description: description.trim(),
         fileName: fileName,
         fileSize: fileSize,
-        contentType: assumedContentType,
+        contentType: contentType,
         trim: draft.videoTrim,
         coverFrameMs: draft.coverFrameMs,
         imageCrop: draft.imageCrop,
       );
 
-      return UploadStartResult(postId: create.uid, taskId: create.uid);
+      final outcome = await _finalizePostUpload(
+        type: draft.type,
+        cfUid: create.uid,
+        description: description,
+        visibility: 'public',
+        feedRefreshCallback: feedRefreshCallback,
+      );
+
+      if (outcome.ok) {
+        _emitStatus(task, TaskStatus.complete);
+      } else {
+        _emitStatus(task, TaskStatus.failed);
+      }
+      return outcome;
+    } catch (error, stackTrace) {
+      final failure = _mapFailure(error, cfUid: create.uid);
+      debugPrint('[UploadService] direct upload failed: $error\n$stackTrace');
+      _emitStatus(task, TaskStatus.failed);
+      return failure;
     }
-
-    final taskId = create.taskId ?? create.uid;
-
-    final UploadTask task = create.requiresMultipart
-        ? UploadTask.fromFile(
-            taskId: taskId,
-            file: file,
-            url: create.uploadUrl.toString(),
-            httpRequestMethod: method,
-            headers: create.headers,
-            fields: create.fields,
-            fileField: create.fileFieldName ?? 'file',
-            mimeType: create.contentType ?? assumedContentType,
-            updates: Updates.statusAndProgress,
-          )
-        : UploadTask.fromFile(
-            taskId: taskId,
-            file: file,
-            url: create.uploadUrl.toString(),
-            httpRequestMethod: method,
-            post: 'binary',
-            headers: {
-              HttpHeaders.contentTypeHeader:
-                  create.contentType ?? assumedContentType,
-              ...create.headers,
-            },
-            mimeType: create.contentType ?? assumedContentType,
-            updates: Updates.statusAndProgress,
-          );
-
-    final enqueued = await _downloader.enqueue(task);
-    if (!enqueued) {
-      throw const FileSystemException('Failed to enqueue upload task');
-    }
-
-    _trackedTasks[task.taskId] = task;
-
-    await _apiClient.postMetadata(
-      postId: create.uid,
-      type: draft.type,
-      description: description.trim(),
-      fileName: fileName,
-      fileSize: fileSize,
-      contentType: assumedContentType,
-      trim: draft.videoTrim,
-      coverFrameMs: draft.coverFrameMs,
-      imageCrop: draft.imageCrop,
-    );
-
-    return UploadStartResult(postId: create.uid, taskId: task.taskId);
   }
 
   UploadTask _createSyntheticTusTask({
@@ -263,7 +286,7 @@ class UploadService {
     );
   }
 
-  Future<UploadStartResult> _startTusUpload({
+  Future<UploadOutcome> _startTusUpload({
     required PostDraft draft,
     required String description,
     required File file,
@@ -273,7 +296,8 @@ class UploadService {
     required CreateUploadResponse create,
     required Uri tusEndpoint,
     required Map<String, String> tusHeaders,
-  }) async {
+    required VoidCallback? feedRefreshCallback,
+  }) {
     final taskId = create.taskId ?? create.uid;
     final task = _createSyntheticTusTask(
       taskId: taskId,
@@ -282,8 +306,9 @@ class UploadService {
       contentType: contentType,
     );
 
-    _trackedTasks[taskId] = task;
+    _lastStartedTaskId = taskId;
 
+    final completer = Completer<UploadOutcome>();
     final state = _TusUploadState(
       task: task,
       file: file,
@@ -295,6 +320,8 @@ class UploadService {
       response: create,
       draft: draft,
       description: description.trim(),
+      completer: completer,
+      feedRefreshCallback: feedRefreshCallback,
     );
     _tusUploads[taskId] = state;
 
@@ -303,7 +330,7 @@ class UploadService {
 
     _startTusTransfer(state);
 
-    return UploadStartResult(postId: create.uid, taskId: taskId);
+    return completer.future;
   }
 
   void _startTusTransfer(_TusUploadState state) {
@@ -311,7 +338,6 @@ class UploadService {
       return;
     }
     state.isPaused = false;
-    state.lastError = null;
     final existingProgress = state.lastProgress;
     if (existingProgress > 0) {
       _emitProgress(state.task, existingProgress);
@@ -322,6 +348,7 @@ class UploadService {
     _emitStatus(state.task, TaskStatus.running);
 
     unawaited(() async {
+      UploadOutcome? outcome;
       try {
         await _tusUploader.uploadFile(
           file: state.file,
@@ -353,10 +380,18 @@ class UploadService {
           coverFrameMs: state.draft.coverFrameMs,
           imageCrop: state.draft.imageCrop,
         );
-        await _finalizePostUpload(state);
-        _emitStatus(state.task, TaskStatus.complete);
-        _tusUploads.remove(state.task.taskId);
-        _trackedTasks.remove(state.task.taskId);
+        outcome = await _finalizePostUpload(
+          type: state.draft.type,
+          cfUid: state.response.uid,
+          description: state.description,
+          visibility: 'public',
+          feedRefreshCallback: state.feedRefreshCallback,
+        );
+        if (outcome.ok) {
+          _emitStatus(state.task, TaskStatus.complete);
+        } else {
+          _emitStatus(state.task, TaskStatus.failed);
+        }
       } on DioException catch (dioError, stackTrace) {
         if (dioError.type == DioExceptionType.cancel) {
           if (state.isPaused) {
@@ -369,57 +404,137 @@ class UploadService {
               '[UploadService] TUS upload canceled for ${state.response.uid}',
             );
             _emitStatus(state.task, TaskStatus.canceled);
+            outcome = UploadOutcome(
+              ok: false,
+              cfUid: state.response.uid,
+              message: 'Upload canceled',
+            );
           }
         } else {
           debugPrint(
             '[UploadService] TUS upload Dio failure for ${state.response.uid}: $dioError\n$stackTrace',
           );
           _emitStatus(state.task, TaskStatus.failed);
-          state.lastError = dioError;
+          outcome = UploadOutcome(
+            ok: false,
+            cfUid: state.response.uid,
+            message: dioError.message ?? dioError.toString(),
+            statusCode: dioError.response?.statusCode,
+          );
         }
       } catch (error, stackTrace) {
         debugPrint(
           '[UploadService] TUS upload failed for ${state.response.uid}: $error\n$stackTrace',
         );
         _emitStatus(state.task, TaskStatus.failed);
-        state.lastError = error;
+        outcome = _mapFailure(error, cfUid: state.response.uid);
       } finally {
         state.isUploading = false;
         state.cancelToken = null;
+        if (outcome != null) {
+          _completeTusState(state, outcome);
+        }
       }
     }());
   }
 
-  Future<void> _finalizePostUpload(_TusUploadState state) async {
-    const visibility = 'public';
-    final description = state.description.trim();
-    final hasDescription = description.isNotEmpty;
-    final effectiveDescription = hasDescription ? description : null;
-    final type = state.draft.type;
-    final cfUid = state.response.uid;
-
-    try {
-      await _apiClient.createPost(
-        type: type,
-        cfUid: cfUid,
-        description: effectiveDescription,
-        visibility: visibility,
-      );
-      final status = _apiClient.lastCreatePostStatusCode;
-      debugPrint(
-        '[UploadService] finalize createPost: {type: $type, cfUid: $cfUid, hasDescription: $hasDescription, visibility: $visibility} -> status=${status ?? 'unknown'}',
-      );
-      _notifyFeedRefreshRequested();
-    } catch (error, stackTrace) {
-      debugPrint(
-        '[UploadService] finalize createPost failed for $cfUid: $error\n$stackTrace',
-      );
-      rethrow;
+  void _completeTusState(_TusUploadState state, UploadOutcome outcome) {
+    final taskId = state.task.taskId;
+    final tracked = _tusUploads.remove(taskId);
+    if (tracked != null && !tracked.completer.isCompleted) {
+      tracked.completer.complete(outcome);
     }
   }
 
-  void _notifyFeedRefreshRequested() {
-    final callback = onFeedRefreshRequested;
+  Future<UploadOutcome> _finalizePostUpload({
+    required String type,
+    required String cfUid,
+    required String description,
+    required String visibility,
+    required VoidCallback? feedRefreshCallback,
+  }) async {
+    final trimmedDescription = description.trim();
+    final hasDescription = trimmedDescription.isNotEmpty;
+    final effectiveDescription = hasDescription ? trimmedDescription : null;
+
+    const maxAttempts = 3;
+    int attempt = 0;
+
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        final response = await _apiClient.createPost(
+          type: type,
+          cfUid: cfUid,
+          description: effectiveDescription,
+          visibility: visibility,
+        );
+        final status = _apiClient.lastCreatePostStatusCode;
+        debugPrint(
+          '[UploadService] finalize createPost: {type: $type, cfUid: $cfUid, hasDescription: $hasDescription, visibility: $visibility} -> status=${status ?? 'unknown'}',
+        );
+        await _notifyFeedRefreshRequested(feedRefreshCallback);
+        final postId = _extractPostId(response);
+        return UploadOutcome(
+          ok: true,
+          postId: postId,
+          cfUid: cfUid,
+          statusCode: status,
+        );
+      } on ApiException catch (error) {
+        final status = error.statusCode;
+        if (status == 409) {
+          debugPrint(
+            '[UploadService] finalize createPost: {type: $type, cfUid: $cfUid, hasDescription: $hasDescription, visibility: $visibility} -> status=409 (conflict treated as success)',
+          );
+          await _notifyFeedRefreshRequested(feedRefreshCallback);
+          return UploadOutcome(
+            ok: true,
+            cfUid: cfUid,
+            statusCode: status,
+            message: error.message,
+          );
+        }
+
+        final shouldRetry = status == null || status >= 500;
+        if (shouldRetry && attempt < maxAttempts) {
+          await Future<void>.delayed(_retryDelay(attempt));
+          continue;
+        }
+        final statusString = status ?? 'unknown';
+        debugPrint(
+          '[UploadService] finalize error: ${error.message} (status=$statusString)',
+        );
+        return UploadOutcome(
+          ok: false,
+          cfUid: cfUid,
+          message: error.message,
+          statusCode: status,
+        );
+      } catch (error) {
+        if (attempt < maxAttempts) {
+          await Future<void>.delayed(_retryDelay(attempt));
+          continue;
+        }
+        debugPrint(
+          '[UploadService] finalize error: $error (status=unknown)',
+        );
+        return UploadOutcome(
+          ok: false,
+          cfUid: cfUid,
+          message: error.toString(),
+        );
+      }
+    }
+
+    return UploadOutcome(
+      ok: false,
+      cfUid: cfUid,
+      message: 'Failed to finalize upload',
+    );
+  }
+
+  Future<void> _notifyFeedRefreshRequested(VoidCallback? callback) async {
     if (callback != null) {
       try {
         callback();
@@ -430,6 +545,55 @@ class UploadService {
       }
     }
     debugPrint('[UploadService] finalize success -> requested feed refresh');
+  }
+
+  UploadOutcome _mapFailure(Object error, {String? cfUid}) {
+    if (error is ApiException) {
+      return UploadOutcome(
+        ok: false,
+        cfUid: cfUid,
+        message: error.message,
+        statusCode: error.statusCode,
+      );
+    }
+    if (error is IOException) {
+      return UploadOutcome(
+        ok: false,
+        cfUid: cfUid,
+        message: error.toString(),
+      );
+    }
+    return UploadOutcome(
+      ok: false,
+      cfUid: cfUid,
+      message: error.toString(),
+    );
+  }
+
+  Duration _retryDelay(int attempt) {
+    if (attempt <= 1) {
+      return const Duration(milliseconds: 300);
+    }
+    if (attempt == 2) {
+      return const Duration(milliseconds: 1000);
+    }
+    return const Duration(milliseconds: 3000);
+  }
+
+  String? _extractPostId(Map<String, dynamic> response) {
+    if (response.containsKey('postId')) {
+      final value = response['postId'];
+      if (value is String && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    }
+    if (response.containsKey('id')) {
+      final value = response['id'];
+      if (value is String && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    }
+    return null;
   }
 
   void _emitStatus(Task task, TaskStatus status) {
@@ -445,6 +609,27 @@ class UploadService {
     }
     final normalized = progress.clamp(0.0, 1.0);
     _updatesController.add(TaskProgressUpdate(task, normalized));
+  }
+
+  Future<void> pauseTusUpload(String taskId) async {
+    final state = _tusUploads[taskId];
+    if (state == null || !state.isUploading) {
+      return;
+    }
+    state.isPaused = true;
+    state.cancelToken?.cancel('pause');
+    while (state.isUploading) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  Future<void> resumeTusUpload(String taskId) async {
+    final state = _tusUploads[taskId];
+    if (state == null || state.isUploading) {
+      return;
+    }
+    state.isPaused = false;
+    _startTusTransfer(state);
   }
 
   Future<void> _performDirectMultipartUpload({
@@ -536,56 +721,6 @@ class UploadService {
     }
     return MediaType('application', 'octet-stream');
   }
-
-  Future<void> retryTask(String taskId) async {
-    final tusState = _tusUploads[taskId];
-    if (tusState != null) {
-      if (tusState.isUploading) {
-        tusState.isPaused = false;
-        tusState.cancelToken?.cancel('retry');
-        while (tusState.isUploading) {
-          await Future<void>.delayed(const Duration(milliseconds: 50));
-        }
-      }
-      tusState.lastError = null;
-      _startTusTransfer(tusState);
-      return;
-    }
-
-    Task? task = _trackedTasks[taskId];
-    task ??= await _downloader.taskForId(taskId);
-    task ??= await _downloader.database.recordForId(taskId).then((record) => record?.task);
-
-    if (task == null) {
-      throw const FileSystemException('Upload task not found for retry');
-    }
-
-    final enqueued = await _downloader.enqueue(task);
-    if (!enqueued) {
-      throw const FileSystemException('Failed to enqueue upload task');
-    }
-  }
-
-  Future<void> pauseTusUpload(String taskId) async {
-    final state = _tusUploads[taskId];
-    if (state == null || !state.isUploading) {
-      return;
-    }
-    state.isPaused = true;
-    state.cancelToken?.cancel('pause');
-    while (state.isUploading) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    }
-  }
-
-  Future<void> resumeTusUpload(String taskId) async {
-    final state = _tusUploads[taskId];
-    if (state == null || state.isUploading) {
-      return;
-    }
-    state.isPaused = false;
-    _startTusTransfer(state);
-  }
 }
 
 class _TusUploadState {
@@ -600,6 +735,8 @@ class _TusUploadState {
     required this.response,
     required this.draft,
     required this.description,
+    required this.completer,
+    required this.feedRefreshCallback,
     this.chunkSize = 5 * 1024 * 1024,
   }) : tusHeaders = Map.unmodifiable(Map<String, String>.from(tusHeaders));
 
@@ -613,10 +750,11 @@ class _TusUploadState {
   final CreateUploadResponse response;
   final PostDraft draft;
   final String description;
+  final Completer<UploadOutcome> completer;
+  final VoidCallback? feedRefreshCallback;
   final int chunkSize;
   CancelToken? cancelToken;
   bool isUploading = false;
   bool isPaused = false;
-  Object? lastError;
   double lastProgress = 0.0;
 }

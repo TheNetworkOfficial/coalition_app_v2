@@ -1,27 +1,27 @@
-import 'dart:async';
 import 'dart:io';
 
-import 'package:background_downloader/background_downloader.dart';
 import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
-import 'package:test/fake.dart';
 import 'package:test/test.dart';
 
 import 'package:coalition_app_v2/models/create_upload_response.dart';
 import 'package:coalition_app_v2/models/post_draft.dart';
+import 'package:coalition_app_v2/models/upload_outcome.dart';
 import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/services/tus_uploader.dart';
 import 'package:coalition_app_v2/services/upload_service.dart';
 
 void main() {
-  group('UploadService TUS finalize', () {
+  group('UploadService', () {
     late Directory tempDir;
     late File tempFile;
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp('upload_service_test');
       tempFile = File('${tempDir.path}/video.mp4');
-      await tempFile.writeAsBytes(List<int>.generate(1024, (index) => index % 256));
+      await tempFile.writeAsBytes(
+        List<int>.generate(1024, (index) => index % 256),
+      );
     });
 
     tearDown(() async {
@@ -33,7 +33,7 @@ void main() {
       }
     });
 
-    test('creates post after successful tus upload and requests feed refresh', () async {
+    test('resolves with success after finalize and feed refresh', () async {
       final createResponse = CreateUploadResponse(
         uploadUrl: Uri.parse('https://example.com/upload'),
         uid: 'cf-upload-123',
@@ -51,13 +51,11 @@ void main() {
         },
       );
 
-      final apiClient = _FakeApiClient(createResult: createResult);
+      final apiClient = _StubbedApiClient(createResult: createResult);
       final tusUploader = _FakeTusUploader();
-      final downloader = _FakeFileDownloader();
       final service = UploadService(
         apiClient: apiClient,
         tusUploader: tusUploader,
-        downloader: downloader,
       );
 
       bool feedRefreshed = false;
@@ -71,12 +69,15 @@ void main() {
         description: 'example',
       );
 
-      await service.startUpload(
+      final outcome = await service.startUpload(
         draft: draft,
         description: '  Final caption  ',
       );
 
-      await apiClient.createPostCalled.future;
+      expect(outcome.ok, isTrue);
+      expect(outcome.cfUid, 'cf-upload-123');
+      expect(outcome.postId, 'post-abc');
+      expect(feedRefreshed, isTrue);
 
       expect(apiClient.createPostCalls, 1);
       expect(
@@ -90,21 +91,141 @@ void main() {
           ),
         ),
       );
+      expect(apiClient.lastPostedMetadataDescription, 'Final caption');
+
+      service.dispose();
+    });
+
+    test('retries finalize on transient failures', () async {
+      final createResponse = CreateUploadResponse(
+        uploadUrl: Uri.parse('https://example.com/upload'),
+        uid: 'cf-upload-123',
+        method: 'PATCH',
+      );
+      final createResult = CreateUploadResult(
+        response: createResponse,
+        rawJson: {
+          'tusInfo': {
+            'endpoint': 'https://tus.example.com/upload',
+            'headers': {
+              'Authorization': 'Bearer token',
+            },
+          },
+        },
+      );
+
+      final apiClient = _StubbedApiClient(
+        createResult: createResult,
+        createPostQueue: <Object>[
+          _CreatePostError(
+            ApiException('temporary failure', statusCode: 502),
+          ),
+          _CreatePostError(
+            ApiException('temporary failure', statusCode: 502),
+          ),
+          const _CreatePostSuccess({'postId': 'post-abc'}, statusCode: 201),
+        ],
+      );
+      final tusUploader = _FakeTusUploader();
+      final service = UploadService(
+        apiClient: apiClient,
+        tusUploader: tusUploader,
+      );
+
+      bool feedRefreshed = false;
+      service.onFeedRefreshRequested = () {
+        feedRefreshed = true;
+      };
+
+      final draft = PostDraft(
+        originalFilePath: tempFile.path,
+        type: 'video',
+        description: 'example',
+      );
+
+      final outcome = await service.startUpload(
+        draft: draft,
+        description: 'Caption',
+      );
+
+      expect(outcome.ok, isTrue);
       expect(feedRefreshed, isTrue);
+      expect(apiClient.createPostCalls, 3);
+
+      service.dispose();
+    });
+
+    test('treats 409 conflict as success', () async {
+      final createResponse = CreateUploadResponse(
+        uploadUrl: Uri.parse('https://example.com/upload'),
+        uid: 'cf-upload-123',
+        method: 'PATCH',
+      );
+      final createResult = CreateUploadResult(
+        response: createResponse,
+        rawJson: {
+          'tusInfo': {
+            'endpoint': 'https://tus.example.com/upload',
+            'headers': {
+              'Authorization': 'Bearer token',
+            },
+          },
+        },
+      );
+
+      final apiClient = _StubbedApiClient(
+        createResult: createResult,
+        createPostQueue: <Object>[
+          _CreatePostError(
+            ApiException('duplicate', statusCode: 409),
+          ),
+        ],
+      );
+      final tusUploader = _FakeTusUploader();
+      final service = UploadService(
+        apiClient: apiClient,
+        tusUploader: tusUploader,
+      );
+
+      bool feedRefreshed = false;
+      service.onFeedRefreshRequested = () {
+        feedRefreshed = true;
+      };
+
+      final draft = PostDraft(
+        originalFilePath: tempFile.path,
+        type: 'video',
+        description: 'example',
+      );
+
+      final outcome = await service.startUpload(
+        draft: draft,
+        description: 'Caption',
+      );
+
+      expect(outcome.ok, isTrue);
+      expect(outcome.statusCode, 409);
+      expect(feedRefreshed, isTrue);
+      expect(apiClient.createPostCalls, 1);
 
       service.dispose();
     });
   });
 }
 
-class _FakeApiClient extends ApiClient {
-  _FakeApiClient({required this.createResult})
-      : super(httpClient: _NoopHttpClient(), baseUrl: 'https://example.com');
+class _StubbedApiClient extends ApiClient {
+  _StubbedApiClient({
+    required this.createResult,
+    List<Object>? createPostQueue,
+  })  : _createPostQueue =
+            createPostQueue == null ? <Object>[] : List<Object>.from(createPostQueue),
+        super(httpClient: _NoopHttpClient(), baseUrl: 'https://example.com');
 
   final CreateUploadResult createResult;
+  final List<Object> _createPostQueue;
   int createPostCalls = 0;
   _CreatePostArgs? lastCreatePostArgs;
-  final Completer<void> createPostCalled = Completer<void>();
+  String? lastPostedMetadataDescription;
 
   @override
   Future<CreateUploadResult> createUpload({
@@ -128,7 +249,9 @@ class _FakeApiClient extends ApiClient {
     VideoTrimData? trim,
     int? coverFrameMs,
     ImageCropData? imageCrop,
-  }) async {}
+  }) async {
+    lastPostedMetadataDescription = description;
+  }
 
   @override
   Future<Map<String, dynamic>> createPost({
@@ -144,12 +267,36 @@ class _FakeApiClient extends ApiClient {
       description: description,
       visibility: visibility,
     );
-    recordCreatePostStatus(201);
-    if (!createPostCalled.isCompleted) {
-      createPostCalled.complete();
+
+    Object? behavior;
+    if (_createPostQueue.isNotEmpty) {
+      behavior = _createPostQueue.removeAt(0);
     }
-    return <String, dynamic>{'id': 'post-123'};
+
+    if (behavior is _CreatePostError) {
+      throw behavior.exception;
+    }
+
+    final success = behavior is _CreatePostSuccess
+        ? behavior
+        : const _CreatePostSuccess({'postId': 'post-abc'}, statusCode: 201);
+
+    recordCreatePostStatus(success.statusCode);
+    return success.body;
   }
+}
+
+class _CreatePostSuccess {
+  const _CreatePostSuccess(this.body, {this.statusCode = 201});
+
+  final Map<String, dynamic> body;
+  final int statusCode;
+}
+
+class _CreatePostError {
+  const _CreatePostError(this.exception);
+
+  final ApiException exception;
 }
 
 class _FakeTusUploader extends TusUploader {
@@ -167,16 +314,6 @@ class _FakeTusUploader extends TusUploader {
     final total = await file.length();
     onProgress?.call(total, total);
   }
-}
-
-class _FakeFileDownloader extends Fake implements FileDownloader {
-  final StreamController<TaskUpdate> _controller = StreamController<TaskUpdate>.broadcast();
-
-  @override
-  Stream<TaskUpdate> get updates => _controller.stream;
-
-  @override
-  Future<bool> get ready async => true;
 }
 
 class _NoopHttpClient extends http.BaseClient {
