@@ -7,8 +7,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as p;
-import 'package:uuid/uuid.dart';
-
 import '../env.dart';
 import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
@@ -16,26 +14,20 @@ import '../models/upload_outcome.dart';
 import 'api_client.dart';
 import 'tus_uploader.dart';
 
-typedef UserIdResolver = FutureOr<String> Function();
-
 class UploadService {
   UploadService({
     ApiClient? apiClient,
     TusUploader? tusUploader,
-    UserIdResolver? userIdResolver,
   })  : _apiClient = apiClient ?? ApiClient(),
         _tusUploader = tusUploader ?? TusUploader(),
-        _userIdResolver = userIdResolver,
         _updatesController = StreamController<TaskUpdate>.broadcast();
 
   final ApiClient _apiClient;
   final TusUploader _tusUploader;
-  final UserIdResolver? _userIdResolver;
   final StreamController<TaskUpdate> _updatesController;
   final Map<String, _TusUploadState> _tusUploads = {};
-  String? _cachedUserId;
-
-  static const String _fallbackUserId = 'local-user';
+  final Map<String, Future<UploadOutcome>> _finalizationInFlight = {};
+  final Map<String, UploadOutcome> _finalizedOutcomes = {};
 
   VoidCallback? onFeedRefreshRequested;
   String? _lastStartedTaskId;
@@ -58,6 +50,8 @@ class UploadService {
       }
     }
     _tusUploads.clear();
+    _finalizationInFlight.clear();
+    _finalizedOutcomes.clear();
     _updatesController.close();
   }
 
@@ -224,6 +218,10 @@ class UploadService {
     _emitProgress(task, 0);
 
     try {
+      final trimmedDescription = description.trim();
+      const visibility = 'public';
+      final hasDescription = trimmedDescription.isNotEmpty;
+
       if (create.requiresMultipart) {
         await _performDirectMultipartUpload(
           file: file,
@@ -243,7 +241,7 @@ class UploadService {
       await _apiClient.postMetadata(
         postId: create.uid,
         type: draft.type,
-        description: description.trim(),
+        description: trimmedDescription,
         fileName: fileName,
         fileSize: fileSize,
         contentType: contentType,
@@ -252,10 +250,16 @@ class UploadService {
         imageCrop: draft.imageCrop,
       );
 
+      debugPrint(
+        '[UploadService] direct upload complete -> finalize createPost: '
+        '{type: ${draft.type}, cfUid: ${create.uid}, hasDescription: $hasDescription, visibility: $visibility}',
+      );
+
       final outcome = await _finalizePostUpload(
         type: draft.type,
-        uploadId: create.uid,
-        description: description,
+        cfUid: create.uid,
+        description: trimmedDescription,
+        visibility: visibility,
         feedRefreshCallback: feedRefreshCallback,
       );
 
@@ -388,10 +392,18 @@ class UploadService {
           coverFrameMs: state.draft.coverFrameMs,
           imageCrop: state.draft.imageCrop,
         );
+        final trimmedDescription = state.description.trim();
+        const visibility = 'public';
+        final hasDescription = trimmedDescription.isNotEmpty;
+        debugPrint(
+          '[UploadService] TUS complete -> finalize createPost: '
+          '{type: ${state.draft.type}, cfUid: ${state.response.uid}, hasDescription: $hasDescription, visibility: $visibility}',
+        );
         outcome = await _finalizePostUpload(
           type: state.draft.type,
-          uploadId: state.response.uid,
-          description: state.description,
+          cfUid: state.response.uid,
+          description: trimmedDescription,
+          visibility: visibility,
           feedRefreshCallback: state.feedRefreshCallback,
         );
         if (outcome.ok) {
@@ -455,93 +467,122 @@ class UploadService {
 
   Future<UploadOutcome> _finalizePostUpload({
     required String type,
-    required String uploadId,
+    required String cfUid,
     required String description,
+    required String visibility,
     required VoidCallback? feedRefreshCallback,
-  }) async {
-    final trimmedDescription = description.trim();
-    final hasDescription = trimmedDescription.isNotEmpty;
-    final effectiveDescription = hasDescription ? trimmedDescription : null;
-    final userId = await _resolveUserId();
-    final String postId = const Uuid().v4();
-
-    const maxAttempts = 3;
-    int attempt = 0;
-
-    while (attempt < maxAttempts) {
-      attempt += 1;
-      try {
-        final response = await _apiClient.createPost(
-          postId: postId,
-          userId: userId,
-          type: type,
-          uploadId: uploadId,
-          description: effectiveDescription,
-        );
-        final status = _apiClient.lastCreatePostStatusCode;
-        debugPrint(
-          '[UploadService] finalize createPost: {type: $type, uploadId: $uploadId, hasDescription: $hasDescription, userId: $userId} -> status=${status ?? 'unknown'}',
-        );
-        await _notifyFeedRefreshRequested(feedRefreshCallback);
-        final resolvedPostId = _extractPostId(response) ?? postId;
-        return UploadOutcome(
-          ok: true,
-          postId: resolvedPostId,
-          uploadId: uploadId,
-          statusCode: status,
-        );
-      } on ApiException catch (error) {
-        final status = error.statusCode;
-        if (status == 409) {
-          debugPrint(
-            '[UploadService] finalize createPost: {type: $type, uploadId: $uploadId, hasDescription: $hasDescription, userId: $userId} -> status=409 (conflict treated as success)',
-          );
-          await _notifyFeedRefreshRequested(feedRefreshCallback);
-          return UploadOutcome(
-            ok: true,
-            postId: postId,
-            uploadId: uploadId,
-            statusCode: status,
-            message: error.message,
-          );
-        }
-
-        final shouldRetry = status == null || status >= 500;
-        if (shouldRetry && attempt < maxAttempts) {
-          await Future<void>.delayed(_retryDelay(attempt));
-          continue;
-        }
-        final statusString = status ?? 'unknown';
-        debugPrint(
-          '[UploadService] finalize error: ${error.message} (status=$statusString)',
-        );
-        return UploadOutcome(
-          ok: false,
-          uploadId: uploadId,
-          message: error.message,
-          statusCode: status,
-        );
-      } catch (error, stackTrace) {
-        if (attempt < maxAttempts) {
-          await Future<void>.delayed(_retryDelay(attempt));
-          continue;
-        }
-        debugPrint(
-          '[UploadService] finalize error: $error (status=unknown)\n$stackTrace',
-        );
-        return UploadOutcome(
-          ok: false,
-          uploadId: uploadId,
-          message: error.toString(),
-        );
-      }
+  }) {
+    final completed = _finalizedOutcomes[cfUid];
+    if (completed != null) {
+      return Future<UploadOutcome>.value(completed);
     }
 
-    return UploadOutcome(
-      ok: false,
-      uploadId: uploadId,
-      message: 'Failed to finalize upload',
-    );
+    final inFlight = _finalizationInFlight[cfUid];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = () async {
+      final trimmedDescription = description.trim();
+      final hasDescription = trimmedDescription.isNotEmpty;
+      final effectiveDescription = hasDescription ? trimmedDescription : null;
+
+      const maxAttempts = 3;
+      int attempt = 0;
+
+      while (attempt < maxAttempts) {
+        attempt += 1;
+        try {
+          final response = await _apiClient.createPost(
+            type: type,
+            cfUid: cfUid,
+            description: effectiveDescription,
+            visibility: visibility,
+          );
+          final status = _apiClient.lastCreatePostStatusCode;
+          debugPrint(
+            '[UploadService] finalize createPost: {type: $type, cfUid: $cfUid, hasDescription: $hasDescription, visibility: $visibility} -> status=${status ?? 'unknown'}',
+          );
+          await _notifyFeedRefreshRequested(feedRefreshCallback);
+          final resolvedPostId = _extractPostId(response);
+          return UploadOutcome(
+            ok: true,
+            postId: resolvedPostId,
+            uploadId: cfUid,
+            statusCode: status,
+          );
+        } on ApiException catch (error) {
+          final status = error.statusCode;
+          if (status == 409) {
+            debugPrint(
+              '[UploadService] finalize createPost: {type: $type, cfUid: $cfUid, hasDescription: $hasDescription, visibility: $visibility} -> status=409 (conflict treated as success)',
+            );
+            await _notifyFeedRefreshRequested(feedRefreshCallback);
+            return UploadOutcome(
+              ok: true,
+              uploadId: cfUid,
+              statusCode: status,
+              message: error.message,
+            );
+          }
+
+          final shouldRetry = status == null || status >= 500;
+          if (shouldRetry && attempt < maxAttempts) {
+            await Future<void>.delayed(_retryDelay(attempt));
+            continue;
+          }
+          final statusLabel = status ?? 'unknown';
+          final details =
+              (error.details != null && error.details!.isNotEmpty)
+                  ? error.details!
+                  : error.message;
+          debugPrint(
+            '[UploadService] finalize error: createPost failed: $statusLabel $details',
+          );
+          return UploadOutcome(
+            ok: false,
+            uploadId: cfUid,
+            message: error.message,
+            statusCode: status,
+          );
+        } catch (error, stackTrace) {
+          if (attempt < maxAttempts) {
+            await Future<void>.delayed(_retryDelay(attempt));
+            continue;
+          }
+          debugPrint(
+            '[UploadService] finalize error: createPost failed: unknown $error\n$stackTrace',
+          );
+          return UploadOutcome(
+            ok: false,
+            uploadId: cfUid,
+            message: error.toString(),
+          );
+        }
+      }
+
+      return UploadOutcome(
+        ok: false,
+        uploadId: cfUid,
+        message: 'Failed to finalize upload',
+      );
+    }();
+
+    final completer = Completer<UploadOutcome>();
+
+    future.then((outcome) {
+      if (outcome.ok) {
+        _finalizedOutcomes[cfUid] = outcome;
+      }
+      _finalizationInFlight.remove(cfUid);
+      completer.complete(outcome);
+    }).catchError((Object error, StackTrace stackTrace) {
+      _finalizationInFlight.remove(cfUid);
+      completer.completeError(error, stackTrace);
+    });
+
+    _finalizationInFlight[cfUid] = completer.future;
+    return completer.future;
   }
 
   Future<void> _notifyFeedRefreshRequested(VoidCallback? callback) async {
@@ -578,30 +619,6 @@ class UploadService {
       uploadId: uploadId,
       message: error.toString(),
     );
-  }
-
-  Future<String> _resolveUserId() async {
-    final cached = _cachedUserId;
-    if (cached != null && cached.isNotEmpty) {
-      return cached;
-    }
-
-    final resolver = _userIdResolver;
-    if (resolver != null) {
-      try {
-        final resolved = await Future<String>.value(resolver());
-        final trimmed = resolved.trim();
-        if (trimmed.isNotEmpty) {
-          _cachedUserId = trimmed;
-          return trimmed;
-        }
-      } catch (error, stackTrace) {
-        debugPrint('[UploadService] userId resolver failed: $error\n$stackTrace');
-      }
-    }
-
-    _cachedUserId = _fallbackUserId;
-    return _fallbackUserId;
   }
 
   Duration _retryDelay(int attempt) {
