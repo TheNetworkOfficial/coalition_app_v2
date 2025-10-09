@@ -89,7 +89,7 @@ void main() {
       expect(args.userId, 'test-user');
       expect(args.description, 'Final caption');
       expect(args.postId, isNotEmpty);
-      expect(() => const Uuid().parse(args.postId), returnsNormally);
+      expect(Uuid.isValidUUID(fromString: args.postId), isTrue);
       expect(apiClient.lastPostedMetadataDescription, 'Final caption');
 
       service.dispose();
