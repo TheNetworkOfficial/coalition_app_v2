@@ -22,6 +22,7 @@ dependencies:
   uuid: ^4.4.2
   infinite_scroll_pagination: ^5.0.0
   device_info_plus: ^10.1.0
+  dio: ^5.9.0
 
 flutter:
   uses-material-design: true

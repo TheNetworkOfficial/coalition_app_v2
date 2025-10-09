@@ -82,6 +82,7 @@ class _PostReviewPageState extends State<PostReviewPage> {
   @override
   void dispose() {
     _updateSubscription?.cancel();
+    _uploadService.dispose();
     _descriptionController.dispose();
     _videoController?.removeListener(_handleVideoLoop);
     _videoController?.dispose();

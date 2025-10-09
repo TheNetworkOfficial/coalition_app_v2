@@ -5,8 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../env.dart';
-import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
+import '../models/create_upload_response.dart';
 
 class ApiException implements IOException {
   ApiException(this.message, {this.statusCode, this.details});
@@ -20,6 +20,16 @@ class ApiException implements IOException {
     final extras = details == null || details!.isEmpty ? '' : ', details: $details';
     return 'ApiException(statusCode: ${statusCode ?? 'unknown'}, message: $message$extras)';
   }
+}
+
+class CreateUploadResult {
+  CreateUploadResult({
+    required this.response,
+    required this.rawJson,
+  });
+
+  final CreateUploadResponse response;
+  final Map<String, dynamic> rawJson;
 }
 
 class ApiClient {
@@ -46,28 +56,37 @@ class ApiClient {
     return Uri.parse('$base$path');
   }
 
-  Future<CreateUploadResponse> createUpload({
+  Future<CreateUploadResult> createUpload({
     required String type,
     required String fileName,
     required int fileSize,
-    String? contentType,
+    required String contentType,
+    int? maxDurationSeconds,
   }) async {
-    final url = _resolve('/api/uploads/create');
-    debugPrint('[ApiClient] POST $url');
-    debugPrint(
-      '[ApiClient] createUpload payload type=$type fileName=$fileName fileSize=$fileSize contentType=$contentType',
-    );
+    final uri = _resolve('/api/uploads/create');
+    final payload = <String, dynamic>{
+      'type': type,
+      'fileName': fileName,
+      'fileSize': fileSize,
+      'contentType': contentType,
+      if (maxDurationSeconds != null) 'maxDurationSeconds': maxDurationSeconds,
+    };
+
+    debugPrint('[ApiClient] POST $uri');
+    debugPrint('[ApiClient] createUpload payload: $payload');
+
     final response = await _httpClient.post(
-      url,
+      uri,
       headers: {HttpHeaders.contentTypeHeader: 'application/json'},
-      body: jsonEncode({}),
+      body: jsonEncode(payload),
     );
     debugPrint('[ApiClient] createUpload status=${response.statusCode}');
 
-    if (response.statusCode != 200) {
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
         'createUpload failed: ${response.statusCode} ${response.body}',
         statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
       );
     }
 
@@ -79,14 +98,23 @@ class ApiClient {
       throw ApiException('Unexpected response when creating upload');
     }
 
-    final create = CreateUploadResponse.fromJson(decoded, rawJson: rawBody);
-    return create;
+    final jsonMap = Map<String, dynamic>.from(decoded);
+
+    final uploadResponse = CreateUploadResponse.fromJson(jsonMap, rawJson: rawBody);
+
+    return CreateUploadResult(
+      response: uploadResponse,
+      rawJson: jsonMap,
+    );
   }
 
   Future<void> postMetadata({
     required String postId,
     required String type,
     required String description,
+    required String fileName,
+    required int fileSize,
+    required String contentType,
     VideoTrimData? trim,
     int? coverFrameMs,
     ImageCropData? imageCrop,
@@ -94,8 +122,12 @@ class ApiClient {
     final uri = _resolve('/api/posts/metadata');
     final body = <String, dynamic>{
       'postId': postId,
+      'uid': postId,
       'type': type,
       'description': description,
+      'fileName': fileName,
+      'fileSize': fileSize,
+      'contentType': contentType,
       'trim': trim == null
           ? null
           : {

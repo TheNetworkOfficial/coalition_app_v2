@@ -9,13 +9,14 @@ class CreateUploadResponse {
     String? taskId,
     this.fileFieldName,
     this.contentType,
+    this.tus,
   })  : requiresMultipart = requiresMultipart ?? false,
         headers = headers ?? const {},
         fields = fields ?? const {},
         method = (method == null || method.isEmpty)
             ? ((requiresMultipart ?? false) ? 'POST' : 'PUT')
             : method.toUpperCase(),
-        taskId = taskId ?? uid;
+        taskId = (taskId == null || taskId.isEmpty) ? uid : taskId;
 
   factory CreateUploadResponse.fromJson(
     Map<String, dynamic> json, {
@@ -67,12 +68,13 @@ class CreateUploadResponse {
 
     String? urlString;
     for (final entry in <MapEntry<String, dynamic?>>[
-      MapEntry('uploadUrl', json['uploadUrl']),
       MapEntry('uploadURL', json['uploadURL']),
+      MapEntry('uploadUrl', json['uploadUrl']),
       MapEntry('url', json['url']),
+      MapEntry('endpoint', json['endpoint']),
       if (cfAssetMap != null) ...[
-        MapEntry('cfAsset.uploadUrl', cfAssetMap['uploadUrl']),
         MapEntry('cfAsset.uploadURL', cfAssetMap['uploadURL']),
+        MapEntry('cfAsset.uploadUrl', cfAssetMap['uploadUrl']),
         MapEntry('cfAsset.url', cfAssetMap['url']),
       ],
     ]) {
@@ -86,6 +88,7 @@ class CreateUploadResponse {
     String? uidString;
     for (final entry in <MapEntry<String, dynamic?>>[
       MapEntry('uid', json['uid']),
+      MapEntry('postId', json['postId']),
       if (cfAssetMap != null) MapEntry('cfAsset.uid', cfAssetMap['uid']),
     ]) {
       final candidate = _stringValue(entry.value);
@@ -109,9 +112,8 @@ class CreateUploadResponse {
           : snippetRaw.length > 200
               ? '${snippetRaw.substring(0, 200)}...'
               : snippetRaw;
-      final sanitized = truncated
-          ?.replaceAll('\n', '\\n')
-          ?.replaceAll('\r', '\\r');
+      final sanitized =
+          truncated == null ? null : truncated.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
       final details =
           sanitized == null || sanitized.isEmpty ? '' : ' | raw: $sanitized';
       throw FormatException(
@@ -127,13 +129,23 @@ class CreateUploadResponse {
         _stringMap(json['headers']) ?? _stringMap(cfAssetMap?['headers']);
     final fields =
         _stringMap(json['fields']) ?? _stringMap(cfAssetMap?['fields']);
-    final method = _stringValue(json['method']) ?? _stringValue(cfAssetMap?['method']);
+    final method =
+        _stringValue(json['method']) ?? _stringValue(cfAssetMap?['method']);
     final taskId =
         _stringValue(json['taskId']) ?? _stringValue(cfAssetMap?['taskId']);
     final fileFieldName = _stringValue(json['fileFieldName']) ??
         _stringValue(cfAssetMap?['fileFieldName']);
     final contentType = _stringValue(json['contentType']) ??
         _stringValue(cfAssetMap?['contentType']);
+
+    final tusJson = json['tus'];
+    TusInfo? tus;
+    if (tusJson is Map<String, dynamic>) {
+      tus = TusInfo.fromJson(
+        tusJson,
+        fallbackEndpoint: urlString,
+      );
+    }
 
     return CreateUploadResponse(
       uploadUrl: Uri.parse(urlString!),
@@ -145,6 +157,7 @@ class CreateUploadResponse {
       taskId: taskId,
       fileFieldName: fileFieldName,
       contentType: contentType,
+      tus: tus,
     );
   }
 
@@ -157,4 +170,65 @@ class CreateUploadResponse {
   final String? taskId;
   final String? fileFieldName;
   final String? contentType;
+  final TusInfo? tus;
+}
+
+class TusInfo {
+  TusInfo({
+    required this.endpoint,
+    required this.protocol,
+    required this.resumable,
+  });
+
+  factory TusInfo.fromJson(
+    Map<String, dynamic> json, {
+    String? fallbackEndpoint,
+  }) {
+    String? endpointString;
+    final dynamic endpointRaw = json['endpoint'] ?? json['uploadUrl'] ?? json['uploadURL'];
+    if (endpointRaw is String && endpointRaw.isNotEmpty) {
+      endpointString = endpointRaw;
+    } else if (fallbackEndpoint != null && fallbackEndpoint.isNotEmpty) {
+      endpointString = fallbackEndpoint;
+    }
+
+    if (endpointString == null) {
+      throw FormatException('tus.endpoint missing from response');
+    }
+
+    String? _stringValue(dynamic value) {
+      if (value == null) {
+        return null;
+      }
+      if (value is String) {
+        return value;
+      }
+      return value.toString();
+    }
+
+    bool _boolValue(dynamic value, {bool defaultValue = true}) {
+      if (value is bool) {
+        return value;
+      }
+      if (value is String) {
+        if (value.toLowerCase() == 'true') {
+          return true;
+        }
+        if (value.toLowerCase() == 'false') {
+          return false;
+        }
+      }
+      return defaultValue;
+    }
+
+    return TusInfo(
+      endpoint: Uri.parse(endpointString),
+      protocol: _stringValue(json['protocol']) ?? 'tus/1.0.0',
+      resumable: _boolValue(json['resumable'], defaultValue: true),
+    );
+  }
+
+  final Uri endpoint;
+  final String protocol;
+  final bool resumable;
 }
