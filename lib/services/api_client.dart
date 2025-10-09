@@ -45,6 +45,7 @@ class ApiClient {
 
   final http.Client _httpClient;
   final String? _baseUrlOverride;
+  int? _lastCreatePostStatusCode;
 
   Uri _resolve(String path) {
     assert(path.startsWith('/'), 'path must start with "/"');
@@ -67,6 +68,13 @@ class ApiClient {
   }
 
   http.Client get httpClient => _httpClient;
+
+  int? get lastCreatePostStatusCode => _lastCreatePostStatusCode;
+
+  @protected
+  void recordCreatePostStatus(int status) {
+    _lastCreatePostStatusCode = status;
+  }
 
   void close() {
     _httpClient.close();
@@ -174,5 +182,58 @@ class ApiClient {
         statusCode: response.statusCode,
       );
     }
+  }
+
+  Future<Map<String, dynamic>> createPost({
+    required String type,
+    required String cfUid,
+    String? description,
+    String visibility = 'public',
+  }) async {
+    final uri = _resolve('/api/posts');
+    final payload = <String, dynamic>{
+      'type': type,
+      'cfUid': cfUid,
+      'visibility': visibility,
+    };
+
+    final trimmedDescription = description?.trim();
+    if (trimmedDescription != null && trimmedDescription.isNotEmpty) {
+      payload['description'] = trimmedDescription;
+    }
+
+    debugPrint('[ApiClient] POST $uri');
+    debugPrint('[ApiClient] createPost payload: $payload');
+
+    final response = await _httpClient.post(
+      uri,
+      headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+      body: jsonEncode(payload),
+    );
+    final status = response.statusCode;
+    debugPrint('[ApiClient] createPost status=$status');
+
+    if (status < 200 || status >= 300) {
+      throw ApiException(
+        'createPost failed: $status ${response.body}',
+        statusCode: status,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    final rawBody = response.body;
+    debugPrint('[ApiClient] createPost raw: $rawBody');
+    recordCreatePostStatus(status);
+
+    if (rawBody.isEmpty) {
+      return <String, dynamic>{};
+    }
+
+    final decoded = jsonDecode(rawBody);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected response when creating post');
+    }
+
+    return Map<String, dynamic>.from(decoded);
   }
 }
