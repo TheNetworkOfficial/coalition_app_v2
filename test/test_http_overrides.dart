@@ -516,13 +516,7 @@ class _TestHttpClientResponse extends Stream<List<int>>
   @override
   int get contentLength => _bytes.length;
 
-  // Return the local CompressionState enum. We intentionally do not mark
-  // this with @override because different SDKs expose different types
-  // for this property (CompressionState vs HttpClientResponseCompressionState).
-  // The analyzer may report an `invalid_override` on some SDKs where the
-  // SDK's `HttpClientResponseCompressionState` is a different type. Ignore
-  // that diagnostic here so tests remain compatible across SDK versions.
-  // ignore: invalid_override
+  @override
   HttpClientResponseCompressionState get compressionState =>
       HttpClientResponseCompressionState.notCompressed;
 
@@ -580,20 +574,6 @@ Future<void> runWithHttpOverrides(
     createHttpClient: (_) => TestHttpOverridesClient(),
   );
 }
-
-// Minimal CompressionState fallback for SDKs that expose this enum on
-// HttpClientResponse. Using a local definition keeps this test file
-// independent of SDK changes and is sufficient for the fake responses.
-enum CompressionState { notCompressed, compressed }
-
-// Some SDK versions call the type `HttpClientResponseCompressionState`.
-// Provide a local alias so we match the SDK's expected return type when
-// implementing HttpClientResponse. If the SDK already defines this type,
-// this alias will be ignored at compile time (no conflict) because type
-// aliases of the same name are not allowed; however in practice the SDK
-// will already provide the symbol and Dart will use that one. This
-// approach is safe across SDK versions used in tests.
-typedef HttpClientResponseCompressionState = CompressionState;
 
 // A very small concrete HttpHeaders implementation used only in tests.
 // It implements the minimal members used by this file: contentLength and
