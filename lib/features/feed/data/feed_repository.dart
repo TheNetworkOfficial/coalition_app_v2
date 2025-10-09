@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+
 import '../../../services/api_client.dart';
 import '../models/post.dart';
 
@@ -12,37 +13,69 @@ class FeedRepository {
   Future<List<Post>> getFeed() async {
     try {
       final response = await _apiClient.get('/api/feed');
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final dynamic body =
-            response.body.isEmpty ? null : jsonDecode(response.body);
-        final rawItems = _extractItems(body);
-        final posts = <Post>[];
-        for (var i = 0; i < rawItems.length; i++) {
-          final raw = rawItems[i];
-          if (raw is Map<String, dynamic>) {
-            try {
-              posts.add(Post.fromJson(raw, fallbackId: 'remote-$i'));
-            } catch (error, stackTrace) {
-              debugPrint(
-                '[FeedRepository] Skipping malformed feed item: $error\n$stackTrace',
-              );
-            }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _logFallback(
+          'GET /api/feed failed with status ${response.statusCode}',
+        );
+        return _fallbackPostsShuffled();
+      }
+
+      final dynamic body;
+      try {
+        body = response.body.isEmpty ? null : jsonDecode(response.body);
+      } on FormatException catch (error) {
+        _logFallback('Failed to decode feed response: $error');
+        return _fallbackPostsShuffled();
+      }
+
+      final rawItems = _extractItems(body);
+      final posts = <Post>[];
+      for (var i = 0; i < rawItems.length; i++) {
+        final raw = rawItems[i];
+        if (raw is Map<String, dynamic>) {
+          try {
+            posts.add(Post.fromJson(raw, fallbackId: 'remote-$i'));
+          } catch (error, stackTrace) {
+            debugPrint(
+              '[FeedRepository] Skipping malformed feed item: $error\n$stackTrace',
+            );
           }
         }
-        if (posts.isNotEmpty) {
-          final shuffled = List<Post>.of(posts)..shuffle();
-          return shuffled;
-        }
-      } else {
-        debugPrint(
-          '[FeedRepository] GET /api/feed failed: ${response.statusCode}',
-        );
       }
+
+      if (posts.isNotEmpty) {
+        final shuffled = List<Post>.of(posts)..shuffle();
+        return shuffled;
+      }
+
+      _logFallback('GET /api/feed returned no usable items');
     } catch (error, stackTrace) {
-      debugPrint('[FeedRepository] Error loading feed: $error\n$stackTrace');
+      _logFallback('Error loading feed: $error', stackTrace);
     }
 
     return _fallbackPostsShuffled();
+  }
+
+  static const bool _fallbackEnabled = bool.fromEnvironment(
+    'FEED_REPOSITORY_ENABLE_FALLBACK',
+    defaultValue: true,
+  );
+
+  static bool _hasLoggedFallback = false;
+
+  static void _logFallback(String message, [StackTrace? stackTrace]) {
+    if (_hasLoggedFallback) {
+      return;
+    }
+    _hasLoggedFallback = true;
+
+    final buffer = StringBuffer('[FeedRepository] $message');
+    if (stackTrace != null) {
+      buffer
+        ..write('\n')
+        ..write(stackTrace);
+    }
+    debugPrint(buffer.toString());
   }
 
   static List<dynamic> _extractItems(dynamic body) {
@@ -62,6 +95,10 @@ class FeedRepository {
   }
 
   static List<Post> _fallbackPostsShuffled() {
+    if (!_fallbackEnabled) {
+      return const [];
+    }
+
     final posts = List<Post>.of(_fallbackPosts);
     posts.shuffle();
     return posts;
@@ -74,8 +111,7 @@ class FeedRepository {
       userDisplayName: 'Jordan Miles',
       userAvatarUrl: 'https://i.pravatar.cc/150?img=47',
       description: 'Exploring downtown at night. Lights for days!',
-      mediaUrl:
-          'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
+      mediaUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
       thumbUrl:
           'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=800',
       isVideo: true,
@@ -110,8 +146,7 @@ class FeedRepository {
       userDisplayName: 'RunWithMe',
       userAvatarUrl: 'https://i.pravatar.cc/150?img=20',
       description: 'Training montage – day 42. Keep pushing!',
-      mediaUrl:
-          'https://samplelib.com/lib/preview/mp4/sample-10s.mp4',
+      mediaUrl: 'https://samplelib.com/lib/preview/mp4/sample-10s.mp4',
       thumbUrl:
           'https://images.unsplash.com/photo-1517964106626-460c6a3b8964?w=800',
       isVideo: true,
