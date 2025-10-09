@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
+import 'package:uuid/uuid.dart';
 
 import 'package:coalition_app_v2/models/create_upload_response.dart';
 import 'package:coalition_app_v2/models/post_draft.dart';
@@ -56,6 +57,7 @@ void main() {
       final service = UploadService(
         apiClient: apiClient,
         tusUploader: tusUploader,
+        userIdResolver: () => 'test-user',
       );
 
       bool feedRefreshed = false;
@@ -75,22 +77,19 @@ void main() {
       );
 
       expect(outcome.ok, isTrue);
-      expect(outcome.cfUid, 'cf-upload-123');
+      expect(outcome.uploadId, 'cf-upload-123');
       expect(outcome.postId, 'post-abc');
       expect(feedRefreshed, isTrue);
 
       expect(apiClient.createPostCalls, 1);
-      expect(
-        apiClient.lastCreatePostArgs,
-        equals(
-          const _CreatePostArgs(
-            type: 'video',
-            cfUid: 'cf-upload-123',
-            description: 'Final caption',
-            visibility: 'public',
-          ),
-        ),
-      );
+      final args = apiClient.lastCreatePostArgs;
+      expect(args, isNotNull);
+      expect(args!.type, 'video');
+      expect(args.uploadId, 'cf-upload-123');
+      expect(args.userId, 'test-user');
+      expect(args.description, 'Final caption');
+      expect(args.postId, isNotEmpty);
+      expect(Uuid.isValidUUID(fromString: args.postId), isTrue);
       expect(apiClient.lastPostedMetadataDescription, 'Final caption');
 
       service.dispose();
@@ -130,6 +129,7 @@ void main() {
       final service = UploadService(
         apiClient: apiClient,
         tusUploader: tusUploader,
+        userIdResolver: () => 'test-user',
       );
 
       bool feedRefreshed = false;
@@ -185,6 +185,7 @@ void main() {
       final service = UploadService(
         apiClient: apiClient,
         tusUploader: tusUploader,
+        userIdResolver: () => 'test-user',
       );
 
       bool feedRefreshed = false;
@@ -255,17 +256,19 @@ class _StubbedApiClient extends ApiClient {
 
   @override
   Future<Map<String, dynamic>> createPost({
+    required String postId,
+    required String userId,
     required String type,
-    required String cfUid,
+    required String uploadId,
     String? description,
-    String visibility = 'public',
   }) async {
     createPostCalls += 1;
     lastCreatePostArgs = _CreatePostArgs(
+      postId: postId,
+      userId: userId,
       type: type,
-      cfUid: cfUid,
+      uploadId: uploadId,
       description: description,
-      visibility: visibility,
     );
 
     Object? behavior;
@@ -325,26 +328,29 @@ class _NoopHttpClient extends http.BaseClient {
 
 class _CreatePostArgs {
   const _CreatePostArgs({
+    required this.postId,
+    required this.userId,
     required this.type,
-    required this.cfUid,
+    required this.uploadId,
     this.description,
-    required this.visibility,
   });
 
+  final String postId;
+  final String userId;
   final String type;
-  final String cfUid;
+  final String uploadId;
   final String? description;
-  final String visibility;
 
   @override
   bool operator ==(Object other) {
     return other is _CreatePostArgs &&
+        other.postId == postId &&
+        other.userId == userId &&
         other.type == type &&
-        other.cfUid == cfUid &&
-        other.description == description &&
-        other.visibility == visibility;
+        other.uploadId == uploadId &&
+        other.description == description;
   }
 
   @override
-  int get hashCode => Object.hash(type, cfUid, description, visibility);
+  int get hashCode => Object.hash(postId, userId, type, uploadId, description);
 }

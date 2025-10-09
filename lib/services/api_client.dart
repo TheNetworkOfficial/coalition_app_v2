@@ -185,16 +185,18 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> createPost({
+    required String postId,
+    required String userId,
     required String type,
-    required String cfUid,
+    required String uploadId,
     String? description,
-    String visibility = 'public',
   }) async {
     final uri = _resolve('/api/posts');
     final payload = <String, dynamic>{
+      'postId': postId,
+      'userId': userId,
       'type': type,
-      'cfUid': cfUid,
-      'visibility': visibility,
+      'uploadId': uploadId,
     };
 
     final trimmedDescription = description?.trim();
