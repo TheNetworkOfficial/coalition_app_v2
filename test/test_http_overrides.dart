@@ -524,7 +524,7 @@ class _TestHttpClientResponse extends Stream<List<int>>
   // that diagnostic here so tests remain compatible across SDK versions.
   // ignore: invalid_override
   HttpClientResponseCompressionState get compressionState =>
-      CompressionState.notCompressed;
+      HttpClientResponseCompressionState.notCompressed;
 
   @override
   List<Cookie> get cookies => const <Cookie>[];
