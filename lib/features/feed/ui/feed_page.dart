@@ -73,6 +73,8 @@ class _FeedPageState extends ConsumerState<FeedPage> {
         PageView.builder(
           controller: _pageController,
           scrollDirection: Axis.vertical,
+          allowImplicitScrolling: false,
+          padEnds: false,
           pageSnapping: true,
           itemCount: posts.length,
           onPageChanged: _handlePageChanged,

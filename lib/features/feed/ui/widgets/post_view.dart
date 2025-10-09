@@ -36,7 +36,7 @@ class PostViewState extends State<PostView>
   void initState() {
     super.initState();
     _isActive = widget.initiallyActive;
-    _initializeVideoIfNeeded();
+    _updatePlayback();
   }
 
   @override
@@ -47,7 +47,7 @@ class PostViewState extends State<PostView>
             widget.post.isVideo != oldWidget.post.isVideo;
     if (mediaChanged) {
       _disposeVideo();
-      _initializeVideoIfNeeded();
+      _updatePlayback();
     }
     if (widget.post.id != oldWidget.post.id) {
       _isActive = widget.initiallyActive;
@@ -62,6 +62,12 @@ class PostViewState extends State<PostView>
   }
 
   void _initializeVideoIfNeeded() {
+    if (!_isActive) {
+      return;
+    }
+    if (_videoController != null) {
+      return;
+    }
     if (!widget.post.isVideo || widget.post.mediaUrl.isEmpty) {
       return;
     }
@@ -86,13 +92,28 @@ class PostViewState extends State<PostView>
   }
 
   void _updatePlayback() {
-    final controller = _videoController;
-    if (controller == null || !controller.value.isInitialized) {
+    if (!widget.post.isVideo || widget.post.mediaUrl.isEmpty) {
       return;
     }
+
+    final controller = _videoController;
     if (_isActive) {
+      if (controller == null) {
+        _initializeVideoIfNeeded();
+        return;
+      }
+      if (!controller.value.isInitialized) {
+        return;
+      }
       controller.play();
-    } else {
+      return;
+    }
+
+    if (controller == null) {
+      return;
+    }
+
+    if (controller.value.isInitialized) {
       controller
         ..pause()
         ..seekTo(Duration.zero);
@@ -258,10 +279,9 @@ class PostViewState extends State<PostView>
   }
 
   void onActiveChanged(bool isActive) {
-    if (_isActive == isActive) {
-      return;
+    if (_isActive != isActive) {
+      _isActive = isActive;
     }
-    _isActive = isActive;
     _updatePlayback();
   }
 }
