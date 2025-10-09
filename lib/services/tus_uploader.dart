@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:dio/dio.dart';
 
 /// Minimal TUS 1.0.0 uploader (Cloudflare Stream compatible) using Dio.
@@ -22,8 +23,8 @@ class TusUploader {
             Dio(BaseOptions(
               followRedirects: true,
               validateStatus: (code) =>
-                  code != null && code < 400 || code == 409,
-              // 409 can occur for some TUS conflict responses; we’ll handle explicitly.
+                  code != null && (code < 400 || code == 409 || code == 412),
+              // 409/412 can occur for TUS conflict responses; we’ll handle explicitly.
             ));
 
   /// Upload in chunks to an existing TUS upload URL.
@@ -48,64 +49,70 @@ class TusUploader {
           'Server offset ($offset) exceeds local file length ($length).');
     }
 
-    final raf = await file.open(mode: FileMode.read);
-    try {
-      while (offset < length) {
-        final remaining = length - offset;
-        final send = remaining < chunkSize ? remaining : chunkSize;
-
-        // Read next chunk.
-        await raf.setPosition(offset);
-        final bytes = await raf.read(send);
-
-        // 2) PATCH chunk to the TUS upload URL.
-        final patchHeaders = <String, dynamic>{
-          ...baseHeaders,
-          'Content-Type': 'application/offset+octet-stream',
-          'Upload-Offset': offset.toString(),
-        };
-
-        final resp = await _dio.patch<List<int>>(
-          tusUploadUrl,
-          data: Stream.fromIterable(<List<int>>[bytes]),
-          options: Options(headers: patchHeaders, responseType: ResponseType.bytes),
-          onSendProgress: (sent, total) {
-            // sent here is bytes of THIS chunk; translate to global progress:
-            onProgress?.call(offset + sent, length);
-          },
-          cancelToken: cancelToken,
-        );
-
-        // Cloudflare Stream typically returns 204 No Content on PATCH with updated Upload-Offset
-        if (resp.statusCode == 204) {
-          final newOffsetHeader = resp.headers.value('Upload-Offset');
-          if (newOffsetHeader == null) {
-            // If no header, assume success and advance by chunk size
-            offset += bytes.length;
-          } else {
-            final newOffset =
-                int.tryParse(newOffsetHeader) ?? (offset + bytes.length);
-            if (newOffset < offset) {
-              throw Exception(
-                  'Server returned decreasing offset: $newOffset < $offset');
-            }
-            offset = newOffset;
-          }
-        } else if (resp.statusCode == 409) {
-          // Conflict — typically means our Upload-Offset didn’t match server’s.
-          // Refresh offset via HEAD and retry this iteration.
-          offset = await _getOffset(tusUploadUrl, baseHeaders);
-        } else {
-          throw Exception(
-              'TUS PATCH failed: ${resp.statusCode} ${resp.statusMessage}');
-        }
+    while (offset < length) {
+      final start = offset;
+      final proposedEnd = start + chunkSize;
+      final end = proposedEnd > length ? length : proposedEnd;
+      final chunkLen = end - start;
+      if (chunkLen <= 0) {
+        break;
       }
 
-      // Completed
-      onProgress?.call(length, length);
-    } finally {
-      await raf.close();
+      final stream = file.openRead(start, end);
+
+      // 2) PATCH chunk to the TUS upload URL.
+      final patchHeaders = <String, dynamic>{
+        ...baseHeaders,
+        'Content-Type': 'application/offset+octet-stream',
+        'Upload-Offset': start.toString(),
+        'Content-Length': chunkLen.toString(),
+      };
+
+      final resp = await _dio.patch<Object?>(
+        tusUploadUrl,
+        data: stream,
+        options: Options(
+          headers: patchHeaders,
+          responseType: ResponseType.stream,
+        ),
+        onSendProgress: (sent, total) {
+          final overallSent = start + sent;
+          final clampedSent =
+              overallSent > length ? length : overallSent;
+          onProgress?.call(clampedSent, length);
+        },
+        cancelToken: cancelToken,
+      );
+
+      final statusCode = resp.statusCode;
+
+      // Cloudflare Stream typically returns 204 No Content on PATCH with updated Upload-Offset
+      if (statusCode == 204 || statusCode == 200) {
+        final newOffsetHeader = resp.headers.value('Upload-Offset');
+        if (newOffsetHeader == null) {
+          // If no header, assume success and advance by chunk size
+          offset = end;
+        } else {
+          final newOffset =
+              int.tryParse(newOffsetHeader) ?? (start + chunkLen);
+          if (newOffset < start) {
+            throw Exception(
+                'Server returned decreasing offset: $newOffset < $start');
+          }
+          offset = newOffset;
+        }
+      } else if (statusCode == 409 || statusCode == 412) {
+        // Conflict — typically means our Upload-Offset didn’t match server’s.
+        // Refresh offset via HEAD and retry this iteration.
+        offset = await _getOffset(tusUploadUrl, baseHeaders);
+      } else {
+        throw Exception(
+            'TUS PATCH failed: ${resp.statusCode} ${resp.statusMessage}');
+      }
     }
+
+    // Completed
+    onProgress?.call(length, length);
   }
 
   Map<String, String> _normalizeBaseHeaders(Map<String, String>? headers) {
