@@ -1,3 +1,4 @@
+import 'package:coalition_app_v2/widgets/user_avatar.dart';
 import 'package:flutter/material.dart';
 
 class OverlayActions extends StatelessWidget {
@@ -29,14 +30,11 @@ class OverlayActions extends StatelessWidget {
           child: InkWell(
             onTap: onProfileTap,
             customBorder: const CircleBorder(),
-            child: CircleAvatar(
-              radius: 26,
-              backgroundImage:
-                  avatarUrl != null ? NetworkImage(avatarUrl!) : null,
-              backgroundColor: avatarUrl == null ? Colors.white24 : null,
-              child: avatarUrl == null
-                  ? const Icon(Icons.person, color: Colors.white)
-                  : null,
+            child: UserAvatar(
+              url: avatarUrl,
+              size: 52,
+              backgroundColor: Colors.white24,
+              iconColor: Colors.white,
             ),
           ),
         ),
