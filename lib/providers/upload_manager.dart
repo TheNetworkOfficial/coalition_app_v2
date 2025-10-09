@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../models/post_draft.dart';
+import '../models/upload_outcome.dart';
 import '../services/upload_service.dart';
 
 final uploadManagerProvider = ChangeNotifierProvider<UploadManager>((ref) {
@@ -32,19 +33,22 @@ class UploadManager extends ChangeNotifier {
   TaskStatus? get status => _status;
   String? get currentTaskId => _currentTaskId;
 
-  Future<UploadStartResult> startUpload({
+  Future<UploadOutcome> startUpload({
     required PostDraft draft,
     required String description,
   }) async {
-    final result = await _uploadService.startUpload(
+    final future = _uploadService.startUpload(
       draft: draft,
       description: description,
     );
-    _currentTaskId = result.taskId;
-    _progress = 0;
-    _status = null;
-    notifyListeners();
-    return result;
+    _currentTaskId = _uploadService.lastStartedTaskId;
+    if (_currentTaskId != null) {
+      _progress = 0;
+      _status = null;
+      notifyListeners();
+    }
+    final outcome = await future;
+    return outcome;
   }
 
   void _handleUpdate(TaskUpdate update) {

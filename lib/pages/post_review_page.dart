@@ -86,10 +86,21 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
         imageCrop: widget.draft.imageCrop,
       );
 
-      await uploadManager.startUpload(
+      final outcome = await uploadManager.startUpload(
         draft: updatedDraft,
         description: _descriptionController.text,
       );
+
+      if (!outcome.ok) {
+        if (!mounted) {
+          return;
+        }
+        final friendlyMessage = outcome.message ?? 'Failed to finalize upload.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyMessage)),
+        );
+        return;
+      }
 
       navigator.popUntil((route) => route.isFirst);
       router.go('/feed');

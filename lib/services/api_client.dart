@@ -213,6 +213,8 @@ class ApiClient {
     final status = response.statusCode;
     debugPrint('[ApiClient] createPost status=$status');
 
+    recordCreatePostStatus(status);
+
     if (status < 200 || status >= 300) {
       throw ApiException(
         'createPost failed: $status ${response.body}',
@@ -223,7 +225,6 @@ class ApiClient {
 
     final rawBody = response.body;
     debugPrint('[ApiClient] createPost raw: $rawBody');
-    recordCreatePostStatus(status);
 
     if (rawBody.isEmpty) {
       return <String, dynamic>{};

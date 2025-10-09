@@ -20,12 +20,17 @@ class TusUploader {
 
   TusUploader({Dio? dio})
       : _dio = dio ??
-            Dio(BaseOptions(
-              followRedirects: true,
-              validateStatus: (code) =>
-                  code != null && (code < 400 || code == 409 || code == 412),
-              // 409/412 can occur for TUS conflict responses; we’ll handle explicitly.
-            ));
+            Dio(
+              BaseOptions(
+                connectTimeout: const Duration(seconds: 30),
+                receiveTimeout: const Duration(seconds: 30),
+                sendTimeout: const Duration(seconds: 30),
+                followRedirects: true,
+                validateStatus: (code) =>
+                    code != null && (code < 400 || code == 409 || code == 412),
+                // 409/412 can occur for TUS conflict responses; we’ll handle explicitly.
+              ),
+            );
 
   /// Upload in chunks to an existing TUS upload URL.
   /// If the upload was previously started, this method will resume from server offset.
