@@ -1,3 +1,4 @@
+import 'package:coalition_app_v2/widgets/user_avatar.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
@@ -236,11 +237,10 @@ class _FeedItemState extends State<FeedItem> {
         children: [
           if (item.authorName != null || item.authorAvatarUrl != null)
             ListTile(
-              leading: item.authorAvatarUrl == null
-                  ? const CircleAvatar(child: Icon(Icons.person))
-                  : CircleAvatar(
-                      backgroundImage: NetworkImage(item.authorAvatarUrl!),
-                    ),
+              leading: UserAvatar(
+                url: item.authorAvatarUrl,
+                size: 40,
+              ),
               title: Text(item.authorName ?? 'Unknown'),
             ),
           _MediaContent(
