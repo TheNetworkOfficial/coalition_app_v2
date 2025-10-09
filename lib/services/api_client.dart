@@ -56,6 +56,22 @@ class ApiClient {
     return Uri.parse('$base$path');
   }
 
+  Uri resolvePath(String path) => _resolve(path);
+
+  Future<http.Response> get(
+    String path, {
+    Map<String, String>? headers,
+  }) {
+    final uri = _resolve(path);
+    return _httpClient.get(uri, headers: headers);
+  }
+
+  http.Client get httpClient => _httpClient;
+
+  void close() {
+    _httpClient.close();
+  }
+
   Future<CreateUploadResult> createUpload({
     required String type,
     required String fileName,

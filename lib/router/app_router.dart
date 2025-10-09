@@ -1,18 +1,19 @@
+import 'package:coalition_app_v2/features/feed/ui/feed_page.dart';
 import 'package:go_router/go_router.dart';
 
 import '../app_shell.dart';
 import '../pages/candidates_page.dart';
 import '../pages/create_entry_page.dart';
 import '../pages/events_page.dart';
-import '../pages/feed_page.dart';
 import '../pages/profile_page.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/feed',
   routes: [
-    StatefulShellRoute.indexedStack(
+    StatefulShellRoute(
       builder: (context, state, navigationShell) =>
           AppShell(navigationShell: navigationShell),
+      navigatorContainerBuilder: lazyNavigationContainerBuilder,
       branches: [
         StatefulShellBranch(
           routes: [

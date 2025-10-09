@@ -4,20 +4,22 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:infinite_scroll_pagination/infinite_scroll_pagination.dart';
 
 import '../env.dart';
+import '../providers/upload_manager.dart';
 import '../widgets/feed_item.dart';
 
-class FeedPage extends StatefulWidget {
+class FeedPage extends ConsumerStatefulWidget {
   const FeedPage({super.key});
 
   @override
-  State<FeedPage> createState() => _FeedPageState();
+  ConsumerState<FeedPage> createState() => _FeedPageState();
 }
 
-class _FeedPageState extends State<FeedPage> {
+class _FeedPageState extends ConsumerState<FeedPage> {
   static const _pageSize = 10;
 
   late final PagingController<int, FeedEntry> _pagingController;
@@ -244,62 +246,98 @@ class _FeedPageState extends State<FeedPage> {
 
   @override
   Widget build(BuildContext context) {
+    final uploadManager = ref.watch(uploadManagerProvider);
+    final showUploadBar = uploadManager.hasActiveUpload;
+    double? indicatorValue;
+    final progress = uploadManager.progress;
+    if (progress != null) {
+      final clamped = progress.clamp(0.0, 1.0);
+      if (clamped > 0 && clamped < 1) {
+        indicatorValue = clamped;
+      } else if (clamped >= 1) {
+        indicatorValue = 1.0;
+      } else {
+        indicatorValue = null;
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Feed'),
       ),
-      body: NotificationListener<ScrollNotification>(
-        onNotification: _onScrollNotification,
-        child: RefreshIndicator(
-          onRefresh: _handleRefresh,
-          child: ValueListenableBuilder<PagingState<int, FeedEntry>>(
-            valueListenable: _pagingController,
-            builder: (context, state, _) {
-              return PagedListView<int, FeedEntry>.separated(
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-                state: state,
-                fetchNextPage: _pagingController.fetchNextPage,
-                scrollController: _scrollController,
-                separatorBuilder: (context, index) => const SizedBox(height: 12),
-                builderDelegate: PagedChildBuilderDelegate<FeedEntry>(
-                  itemBuilder: (context, item, index) {
-                    final key = _itemKeys[index] ??
-                        GlobalKey<_FeedListItemContainerState>();
-                    _itemKeys[index] = key;
+      body: Column(
+        children: [
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            child: showUploadBar
+                ? SizedBox(
+                    key: const ValueKey('upload-progress'),
+                    height: 4,
+                    child: LinearProgressIndicator(
+                      value: indicatorValue,
+                    ),
+                  )
+                : const SizedBox(
+                    key: ValueKey('upload-progress-empty'),
+                    height: 0,
+                  ),
+          ),
+          Expanded(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: _onScrollNotification,
+              child: RefreshIndicator(
+                onRefresh: _handleRefresh,
+                child: ValueListenableBuilder<PagingState<int, FeedEntry>>(
+                  valueListenable: _pagingController,
+                  builder: (context, state, _) {
+                    return PagedListView<int, FeedEntry>.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                      state: state,
+                      fetchNextPage: _pagingController.fetchNextPage,
+                      scrollController: _scrollController,
+                      separatorBuilder: (context, index) => const SizedBox(height: 12),
+                      builderDelegate: PagedChildBuilderDelegate<FeedEntry>(
+                        itemBuilder: (context, item, index) {
+                          final key = _itemKeys[index] ??
+                              GlobalKey<_FeedListItemContainerState>();
+                          _itemKeys[index] = key;
 
-                    _scheduleVisibilityUpdate();
+                          _scheduleVisibilityUpdate();
 
-                    return _FeedListItemContainer(
-                      key: key,
-                      index: index,
-                      onRemoved: _handleItemRemoved,
-                      onMetricsChanged: _scheduleVisibilityUpdate,
-                      child: FeedItem(
-                        item: item,
-                        isActive: _activeVideoIndex == index,
+                          return _FeedListItemContainer(
+                            key: key,
+                            index: index,
+                            onRemoved: _handleItemRemoved,
+                            onMetricsChanged: _scheduleVisibilityUpdate,
+                            child: FeedItem(
+                              item: item,
+                              isActive: _activeVideoIndex == index,
+                            ),
+                          );
+                        },
+                        firstPageProgressIndicatorBuilder: (context) => const Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                        newPageProgressIndicatorBuilder: (context) => const Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                        firstPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
+                          onRetry: _pagingController.refresh,
+                          error: _pagingController.error,
+                        ),
+                        newPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
+                          onRetry: _pagingController.fetchNextPage,
+                          error: _pagingController.error,
+                        ),
+                        noItemsFoundIndicatorBuilder: (context) => const _FeedEmptyIndicator(),
                       ),
                     );
                   },
-                  firstPageProgressIndicatorBuilder: (context) => const Center(
-                    child: CircularProgressIndicator(),
-                  ),
-                  newPageProgressIndicatorBuilder: (context) => const Center(
-                    child: CircularProgressIndicator(),
-                  ),
-                  firstPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
-                    onRetry: _pagingController.refresh,
-                    error: _pagingController.error,
-                  ),
-                  newPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
-                    onRetry: _pagingController.fetchNextPage,
-                    error: _pagingController.error,
-                  ),
-                  noItemsFoundIndicatorBuilder: (context) => const _FeedEmptyIndicator(),
                 ),
-              );
-            },
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

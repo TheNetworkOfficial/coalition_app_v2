@@ -1,33 +1,28 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_thumbnail_video/index.dart' show ImageFormat;
 import 'package:get_thumbnail_video/video_thumbnail.dart';
+import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
 import '../models/post_draft.dart';
-import '../services/upload_service.dart';
+import '../providers/upload_manager.dart';
 
-class PostReviewPage extends StatefulWidget {
+class PostReviewPage extends ConsumerStatefulWidget {
   const PostReviewPage({super.key, required this.draft});
 
   final PostDraft draft;
 
   @override
-  State<PostReviewPage> createState() => _PostReviewPageState();
+  ConsumerState<PostReviewPage> createState() => _PostReviewPageState();
 }
 
-class _PostReviewPageState extends State<PostReviewPage> {
+class _PostReviewPageState extends ConsumerState<PostReviewPage> {
   late final TextEditingController _descriptionController;
-  late final UploadService _uploadService;
-  StreamSubscription<TaskUpdate>? _updateSubscription;
-  TaskStatus? _latestStatus;
-  double? _latestProgress;
-  String? _currentTaskId;
-  String? _postId;
   bool _isPosting = false;
   VideoPlayerController? _videoController;
   Future<void>? _videoInitFuture;
@@ -43,27 +38,6 @@ class _PostReviewPageState extends State<PostReviewPage> {
   void initState() {
     super.initState();
     _descriptionController = TextEditingController(text: widget.draft.description);
-    _uploadService = UploadService();
-    _updateSubscription = _uploadService.updates.listen((update) {
-      if (update.task.taskId != _currentTaskId) {
-        return;
-      }
-
-      if (update is TaskStatusUpdate) {
-        setState(() {
-          _latestStatus = update.status;
-          if (update.status == TaskStatus.complete) {
-            _latestProgress = 1.0;
-          } else if (update.status.isFinalState) {
-            _latestProgress ??= 0.0;
-          }
-        });
-      } else if (update is TaskProgressUpdate) {
-        setState(() {
-          _latestProgress = update.progress;
-        });
-      }
-    });
 
     if (widget.draft.type == 'video') {
       final initialCover = widget.draft.coverFrameMs ??
@@ -81,8 +55,6 @@ class _PostReviewPageState extends State<PostReviewPage> {
 
   @override
   void dispose() {
-    _updateSubscription?.cancel();
-    _uploadService.dispose();
     _descriptionController.dispose();
     _videoController?.removeListener(_handleVideoLoop);
     _videoController?.dispose();
@@ -98,6 +70,10 @@ class _PostReviewPageState extends State<PostReviewPage> {
       _isPosting = true;
     });
 
+    final uploadManager = ref.read(uploadManagerProvider);
+    final router = GoRouter.of(context);
+    final navigator = Navigator.of(context);
+
     try {
       final updatedDraft = PostDraft(
         originalFilePath: widget.draft.originalFilePath,
@@ -110,22 +86,13 @@ class _PostReviewPageState extends State<PostReviewPage> {
         imageCrop: widget.draft.imageCrop,
       );
 
-      final result = await _uploadService.startUpload(
+      await uploadManager.startUpload(
         draft: updatedDraft,
         description: _descriptionController.text,
       );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _currentTaskId = result.taskId;
-        _postId = result.postId;
-        _latestStatus = null;
-        _latestProgress = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Upload started in background')),
-      );
+
+      navigator.popUntil((route) => route.isFirst);
+      router.go('/feed');
     } catch (error) {
       if (!mounted) {
         return;
@@ -138,27 +105,6 @@ class _PostReviewPageState extends State<PostReviewPage> {
         setState(() {
           _isPosting = false;
         });
-      }
-    }
-  }
-
-  Future<void> _retryUpload() async {
-    final taskId = _currentTaskId;
-    if (taskId == null) {
-      return;
-    }
-    try {
-      await _uploadService.retryTask(taskId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Retrying upload...')),
-        );
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to retry upload: $error')),
-        );
       }
     }
   }
@@ -671,107 +617,6 @@ class _PostReviewPageState extends State<PostReviewPage> {
     );
   }
 
-  Widget _buildStatusChip() {
-    if (_currentTaskId == null) {
-      return const SizedBox.shrink();
-    }
-
-    final status = _latestStatus;
-    final rawProgress = _latestProgress ??
-        (status == TaskStatus.complete ? 1.0 : 0.0);
-    final progressValue = rawProgress.clamp(0.0, 1.0).toDouble();
-
-    String label;
-    Color background;
-    IconData icon;
-
-    switch (status) {
-      case TaskStatus.complete:
-        label = 'Upload complete';
-        background = Colors.green.shade600;
-        icon = Icons.check_circle_outline;
-        break;
-      case TaskStatus.running:
-        label = 'Uploading ${(progressValue * 100).clamp(0, 100).toStringAsFixed(0)}%';
-        background = Theme.of(context).colorScheme.primary;
-        icon = Icons.cloud_upload_outlined;
-        break;
-      case TaskStatus.failed:
-        label = 'Upload failed';
-        background = Colors.red.shade600;
-        icon = Icons.error_outline;
-        break;
-      case TaskStatus.enqueued:
-      case TaskStatus.waitingToRetry:
-      case TaskStatus.paused:
-        label = 'Waiting to upload';
-        background = Theme.of(context).colorScheme.secondary;
-        icon = Icons.schedule_outlined;
-        break;
-      case TaskStatus.canceled:
-        label = 'Upload canceled';
-        background = Colors.grey.shade600;
-        icon = Icons.cancel_outlined;
-        break;
-      case TaskStatus.notFound:
-        label = 'Upload missing';
-        background = Colors.orange.shade700;
-        icon = Icons.help_outline;
-        break;
-      default:
-        label = 'Uploading';
-        background = Theme.of(context).colorScheme.primary;
-        icon = Icons.cloud_upload_outlined;
-        break;
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 18, color: Colors.white),
-                const SizedBox(width: 8),
-                Text(
-                  label,
-                  style: const TextStyle(color: Colors.white),
-                ),
-                if (status == TaskStatus.failed) ...[
-                  const SizedBox(width: 12),
-                  TextButton(
-                    onPressed: _retryUpload,
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Retry'),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-        if (status == TaskStatus.running)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: LinearProgressIndicator(
-              value: progressValue <= 0 || progressValue >= 1 ? null : progressValue,
-            ),
-          ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -792,11 +637,6 @@ class _PostReviewPageState extends State<PostReviewPage> {
                     widget.draft.type.toUpperCase(),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  const SizedBox(height: 8),
-                  if (_postId != null) ...[
-                    const SizedBox(height: 8),
-                    Text('Post ID: $_postId', style: Theme.of(context).textTheme.bodySmall),
-                  ],
                   const SizedBox(height: 16),
                   TextField(
                     controller: _descriptionController,
@@ -807,10 +647,6 @@ class _PostReviewPageState extends State<PostReviewPage> {
                       border: OutlineInputBorder(),
                     ),
                   ),
-                  if (_currentTaskId != null) ...[
-                    const SizedBox(height: 16),
-                    _buildStatusChip(),
-                  ],
                 ],
               ),
             ),
