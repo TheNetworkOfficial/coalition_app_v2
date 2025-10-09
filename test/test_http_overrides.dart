@@ -6,11 +6,14 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
 class TestHttpOverrides extends HttpOverrides {
-  TestHttpOverrides({HttpOverrides? previous}) : _previous = previous;
+  @override
+  HttpClient createHttpClient(SecurityContext? context) => TestHttpOverridesClient();
+}
 
-  final HttpOverrides? _previous;
+class TestHttpOverridesClient implements HttpClient {
+  TestHttpOverridesClient();
 
-  static const _pngBytes = <int>[
+  static final Uint8List _transparentPng = Uint8List.fromList(const <int>[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
     0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
@@ -20,56 +23,57 @@ class TestHttpOverrides extends HttpOverrides {
     0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
     0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
     0x42, 0x60, 0x82,
-  ];
+  ]);
 
-  static final Uint8List _png = Uint8List.fromList(_pngBytes);
+  static final Uint8List _feedPayload = Uint8List.fromList(
+    utf8.encode(
+      jsonEncode(
+        <String, dynamic>{
+          'items': <Map<String, dynamic>>[
+            <String, dynamic>{
+              'id': 'test-1',
+              'userId': 'user-1',
+              'userDisplayName': 'Test User 1',
+              'userAvatarUrl': 'https://i.pravatar.cc/150?img=1',
+              'description': 'Test description 1',
+              'mediaUrl': 'https://example.com/video1.mp4',
+              'thumbUrl': 'https://i.pravatar.cc/150?img=11',
+              'isVideo': true,
+            },
+            <String, dynamic>{
+              'id': 'test-2',
+              'userId': 'user-2',
+              'userDisplayName': 'Test User 2',
+              'userAvatarUrl': 'https://i.pravatar.cc/150?img=2',
+              'description': 'Test description 2',
+              'mediaUrl': 'https://example.com/image1.jpg',
+              'thumbUrl': 'https://i.pravatar.cc/150?img=12',
+              'isVideo': false,
+            },
+            <String, dynamic>{
+              'id': 'test-3',
+              'userId': 'user-3',
+              'userDisplayName': 'Test User 3',
+              'userAvatarUrl': 'https://i.pravatar.cc/150?img=3',
+              'description': 'Test description 3',
+              'mediaUrl': 'https://example.com/video2.mp4',
+              'thumbUrl': 'https://i.pravatar.cc/150?img=13',
+              'isVideo': true,
+            },
+          ],
+        },
+      ),
+    ),
+  );
 
-  static const _feedResponse = {
-    'items': [
-      {
-        'id': 'test-1',
-        'userId': 'user-1',
-        'userDisplayName': 'Test User 1',
-        'userAvatarUrl': 'https://i.pravatar.cc/150?img=1',
-        'description': 'Test description 1',
-        'mediaUrl': 'https://example.com/video1.mp4',
-        'thumbUrl': 'https://i.pravatar.cc/150?img=11',
-        'isVideo': true,
-      },
-      {
-        'id': 'test-2',
-        'userId': 'user-2',
-        'userDisplayName': 'Test User 2',
-        'userAvatarUrl': 'https://i.pravatar.cc/150?img=2',
-        'description': 'Test description 2',
-        'mediaUrl': 'https://example.com/image1.jpg',
-        'thumbUrl': 'https://i.pravatar.cc/150?img=12',
-        'isVideo': false,
-      },
-      {
-        'id': 'test-3',
-        'userId': 'user-3',
-        'userDisplayName': 'Test User 3',
-        'userAvatarUrl': 'https://i.pravatar.cc/150?img=3',
-        'description': 'Test description 3',
-        'mediaUrl': 'https://example.com/video2.mp4',
-        'thumbUrl': 'https://i.pravatar.cc/150?img=13',
-        'isVideo': true,
-      },
-    ],
-  };
-
-  @override
-  HttpClient createHttpClient(SecurityContext? context) {
-    final client = _TestHttpClient(_previous?.createHttpClient(context));
-    return client;
-  }
-}
-
-class _TestHttpClient implements HttpClient {
-  _TestHttpClient(this._fallback);
-
-  final HttpClient? _fallback;
+  bool _autoUncompress = true;
+  Duration? _connectionTimeout;
+  Duration _idleTimeout = const Duration(seconds: 15);
+  int? _maxConnectionsPerHost;
+  String? _userAgent;
+  Future<bool> Function(Uri url, String scheme, String realm)? _authenticate;
+  Future<bool> Function(String host, int port, String scheme, String realm)? _authenticateProxy;
+  bool Function(X509Certificate cert, String host, int port)? _badCertificateCallback;
 
   @override
   void addCredentials(Uri url, String realm, HttpClientCredentials credentials) {}
@@ -78,118 +82,245 @@ class _TestHttpClient implements HttpClient {
   void addProxyCredentials(String host, int port, String realm, HttpClientCredentials credentials) {}
 
   @override
-  Future<bool> Function(Uri url, String scheme, String realm)? authenticate;
+  Future<bool> Function(Uri url, String scheme, String realm)? get authenticate => _authenticate;
 
   @override
-  Future<bool> Function(String host, int port, String scheme, String realm)? authenticateProxy;
+  set authenticate(Future<bool> Function(Uri url, String scheme, String realm)? f) {
+    _authenticate = f;
+  }
 
   @override
-  void Function(String line)? badCertificateCallback;
+  Future<bool> Function(String host, int port, String scheme, String realm)? get authenticateProxy => _authenticateProxy;
+
+  @override
+  set authenticateProxy(Future<bool> Function(String host, int port, String scheme, String realm)? f) {
+    _authenticateProxy = f;
+  }
+
+  @override
+  bool get autoUncompress => _autoUncompress;
+
+  @override
+  set autoUncompress(bool value) {
+    _autoUncompress = value;
+  }
+
+  @override
+  bool Function(X509Certificate cert, String host, int port)? get badCertificateCallback => _badCertificateCallback;
+
+  @override
+  set badCertificateCallback(bool Function(X509Certificate cert, String host, int port)? callback) {
+    _badCertificateCallback = callback;
+  }
 
   @override
   void close({bool force = false}) {}
 
   @override
-  set connectionFactory(Future<ConnectionTask<Socket>> Function(Uri url, String proxyHost, int proxyPort)? f) {}
+  set connectionFactory(Future<ConnectionTask<Socket>> Function(Uri url, String proxyHost, int proxyPort)? factory) {}
 
   @override
-  set keyLog(Function(String line)? callback) {}
+  Duration? get connectionTimeout => _connectionTimeout;
 
   @override
-  Duration? idleTimeout;
-
-  @override
-  int? maxConnectionsPerHost;
-
-  @override
-  Future<HttpClientRequest> delete(String host, int port, String path) => _notSupported('DELETE');
-
-  @override
-  Future<HttpClientRequest> deleteUrl(Uri url) => _notSupported('DELETE');
-
-  @override
-  Future<HttpClientRequest> get(String host, int port, String path) => _handle(Uri(scheme: 'https', host: host, port: port, path: path));
-
-  @override
-  Future<HttpClientRequest> getUrl(Uri url) => _handle(url);
-
-  @override
-  Future<HttpClientRequest> head(String host, int port, String path) => _notSupported('HEAD');
-
-  @override
-  Future<HttpClientRequest> headUrl(Uri url) => _notSupported('HEAD');
-
-  @override
-  Future<HttpClientRequest> open(String method, String host, int port, String path) => _handle(Uri(scheme: 'https', host: host, port: port, path: path));
-
-  @override
-  Future<HttpClientRequest> openUrl(String method, Uri url) => _handle(url);
-
-  @override
-  Future<HttpClientRequest> patch(String host, int port, String path) => _notSupported('PATCH');
-
-  @override
-  Future<HttpClientRequest> patchUrl(Uri url) => _notSupported('PATCH');
-
-  @override
-  Future<HttpClientRequest> post(String host, int port, String path) => _notSupported('POST');
-
-  @override
-  Future<HttpClientRequest> postUrl(Uri url) => _notSupported('POST');
-
-  @override
-  Future<HttpClientRequest> put(String host, int port, String path) => _notSupported('PUT');
-
-  @override
-  Future<HttpClientRequest> putUrl(Uri url) => _notSupported('PUT');
-
-  @override
-  set userAgent(String? userAgent) {}
-
-  Future<HttpClientRequest> _handle(Uri url) async {
-    final handler = _handlerFor(url);
-    if (handler != null) {
-      final request = _TestHttpClientRequest(url, handler);
-      return request;
-    }
-    if (_fallback != null) {
-      return _fallback!.getUrl(url);
-    }
-    throw StateError('Unhandled URL: $url');
+  set connectionTimeout(Duration? value) {
+    _connectionTimeout = value;
   }
 
-  _ResponseHandler? _handlerFor(Uri url) {
+  @override
+  void set keyLog(Function(String line)? callback) {}
+
+  @override
+  Duration get idleTimeout => _idleTimeout;
+
+  @override
+  set idleTimeout(Duration value) {
+    _idleTimeout = value;
+  }
+
+  @override
+  int? get maxConnectionsPerHost => _maxConnectionsPerHost;
+
+  @override
+  set maxConnectionsPerHost(int? value) {
+    _maxConnectionsPerHost = value;
+  }
+
+  @override
+  String? get userAgent => _userAgent;
+
+  @override
+  set userAgent(String? value) {
+    _userAgent = value;
+  }
+
+  Future<HttpClientRequest> _requestFor(Uri url) {
+    final responseFactory = _responseFactoryFor(url);
+    return Future<HttpClientRequest>.value(
+      _TestHttpClientRequest(url, responseFactory),
+    );
+  }
+
+  _ResponseFactory _responseFactoryFor(Uri url) {
     if (url.host.contains('i.pravatar.cc')) {
-      return () async => _TestHttpClientResponse.bytes(TestHttpOverrides._png, contentType: 'image/png');
+      return () => Future<HttpClientResponse>.value(
+            _TestHttpClientResponse.bytes(
+              Uint8List.fromList(_transparentPng),
+              contentType: 'image/png',
+            ),
+          );
     }
 
     if (url.path == '/api/feed') {
-      final bytes = utf8.encode(jsonEncode(TestHttpOverrides._feedResponse));
-      return () async => _TestHttpClientResponse.bytes(Uint8List.fromList(bytes), contentType: 'application/json');
+      return () => Future<HttpClientResponse>.value(
+            _TestHttpClientResponse.bytes(
+              Uint8List.fromList(_feedPayload),
+              contentType: 'application/json',
+            ),
+          );
     }
 
-    return () async => _TestHttpClientResponse.bytes(Uint8List.fromList(utf8.encode('Not Found')), statusCode: HttpStatus.notFound);
+    return () => Future<HttpClientResponse>.value(
+          _TestHttpClientResponse.notFound(),
+        );
   }
 
-  Future<HttpClientRequest> _notSupported(String method) => Future.error(UnsupportedError('$method not supported in TestHttpClient'));
+  Future<HttpClientRequest> _unsupported(String method) {
+    return Future<HttpClientRequest>.error(
+      UnsupportedError('$method is not supported by TestHttpOverridesClient'),
+    );
+  }
+
+  @override
+  Future<HttpClientRequest> delete(String host, int port, String path) => _unsupported('DELETE');
+
+  @override
+  Future<HttpClientRequest> deleteUrl(Uri url) => _unsupported('DELETE');
+
+  @override
+  Future<HttpClientRequest> get(String host, int port, String path) =>
+      _requestFor(Uri(scheme: 'https', host: host, port: port == 0 ? null : port, path: path));
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) => _requestFor(url);
+
+  @override
+  Future<HttpClientRequest> head(String host, int port, String path) => _unsupported('HEAD');
+
+  @override
+  Future<HttpClientRequest> headUrl(Uri url) => _unsupported('HEAD');
+
+  @override
+  Future<HttpClientRequest> open(String method, String host, int port, String path) {
+    if (method.toUpperCase() == 'GET') {
+      return get(host, port, path);
+    }
+    return _unsupported(method);
+  }
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) {
+    if (method.toUpperCase() == 'GET') {
+      return _requestFor(url);
+    }
+    return _unsupported(method);
+  }
+
+  @override
+  Future<HttpClientRequest> patch(String host, int port, String path) => _unsupported('PATCH');
+
+  @override
+  Future<HttpClientRequest> patchUrl(Uri url) => _unsupported('PATCH');
+
+  @override
+  Future<HttpClientRequest> post(String host, int port, String path) => _unsupported('POST');
+
+  @override
+  Future<HttpClientRequest> postUrl(Uri url) => _unsupported('POST');
+
+  @override
+  Future<HttpClientRequest> put(String host, int port, String path) => _unsupported('PUT');
+
+  @override
+  Future<HttpClientRequest> putUrl(Uri url) => _unsupported('PUT');
+
+  @override
+  String findProxyFromEnvironment(Uri url, [Map<String, String>? environment]) => 'DIRECT';
+
 }
 
-typedef _ResponseHandler = Future<_TestHttpClientResponse> Function();
+typedef _ResponseFactory = Future<HttpClientResponse> Function();
 
 class _TestHttpClientRequest implements HttpClientRequest {
-  _TestHttpClientRequest(this.uri, this._handler);
+  _TestHttpClientRequest(this.uri, this._responseFactory);
 
   @override
   final Uri uri;
-  final _ResponseHandler _handler;
+  final _ResponseFactory _responseFactory;
+
+  Encoding _encoding = utf8;
+  int _contentLength = 0;
+  bool _bufferOutput = false;
+  bool _followRedirects = true;
+  int _maxRedirects = 5;
+  bool _persistentConnection = true;
 
   @override
-  final Encoding encoding = utf8;
-
-  final HttpHeaders _headers = _TestHttpHeaders();
+  final HttpHeaders headers = HttpHeaders();
 
   @override
-  HttpHeaders get headers => _headers;
+  int get contentLength => _contentLength;
+
+  @override
+  set contentLength(int value) {
+    _contentLength = value;
+  }
+
+  @override
+  Encoding get encoding => _encoding;
+
+  @override
+  set encoding(Encoding value) {
+    _encoding = value;
+  }
+
+  @override
+  bool get bufferOutput => _bufferOutput;
+
+  @override
+  set bufferOutput(bool value) {
+    _bufferOutput = value;
+  }
+
+  @override
+  bool get followRedirects => _followRedirects;
+
+  @override
+  set followRedirects(bool value) {
+    _followRedirects = value;
+  }
+
+  @override
+  int get maxRedirects => _maxRedirects;
+
+  @override
+  set maxRedirects(int value) {
+    _maxRedirects = value;
+  }
+
+  @override
+  bool get persistentConnection => _persistentConnection;
+
+  @override
+  set persistentConnection(bool value) {
+    _persistentConnection = value;
+  }
+
+  @override
+  String get method => 'GET';
+
+  @override
+  void abort([Object? exception, StackTrace? stackTrace]) {}
 
   @override
   void add(List<int> data) {}
@@ -198,13 +329,13 @@ class _TestHttpClientRequest implements HttpClientRequest {
   void addError(Object error, [StackTrace? stackTrace]) {}
 
   @override
-  Future addStream(Stream<List<int>> stream) => stream.drain();
+  Future<void> addStream(Stream<List<int>> stream) => stream.drain<void>();
 
   @override
-  Future<HttpClientResponse> close() async => _handler();
+  Future<HttpClientResponse> close() => _responseFactory();
 
   @override
-  Future<HttpClientResponse> get done async => _handler();
+  Future<HttpClientResponse> get done => close();
 
   @override
   void write(Object? object) {}
@@ -219,79 +350,70 @@ class _TestHttpClientRequest implements HttpClientRequest {
   void writeln([Object? object = '']) {}
 
   @override
-  void abort([Object? exception, StackTrace? stackTrace]) {}
-
-  @override
   void addUtf8Text(List<int> bytes) {}
-
-  @override
-  void bufferOutput(bool state) {}
-
-  @override
-  bool get bufferOutput => false;
-
-  @override
-  void flush() {}
-
-  @override
-  bool get followRedirects => false;
-
-  @override
-  set followRedirects(bool value) {}
-
-  @override
-  int get maxRedirects => 5;
-
-  @override
-  set maxRedirects(int value) {}
-
-  @override
-  String get method => 'GET';
-
-  @override
-  bool get persistentConnection => false;
-
-  @override
-  set persistentConnection(bool value) {}
 
   @override
   void addCredentials(HttpClientCredentials credentials, [bool invalid = false]) {}
 
   @override
-  Future<HttpClientResponse> redirect([String? method, Uri? url, bool? followLoops]) async => _handler();
+  void addCookies(List<Cookie> cookies) {}
+
+  @override
+  Future<void> flush() async {}
 
   @override
   void setProxy(String host, int port) {}
 
   @override
   void setProxyCredentials(String host, int port, String realm, HttpClientCredentials credentials) {}
+
+  @override
+  Future<HttpClientResponse> redirect([String? method, Uri? url, bool? followLoops]) => _responseFactory();
 }
 
 class _TestHttpClientResponse extends Stream<List<int>> implements HttpClientResponse {
-  _TestHttpClientResponse.bytes(this._bytes, {required this.contentType, this.statusCode = HttpStatus.ok})
-      : headers = _TestHttpHeaders()..contentType = ContentType.parse(contentType);
+  _TestHttpClientResponse._(this.statusCode, this._bytes, this._headers);
+
+  factory _TestHttpClientResponse.bytes(Uint8List bytes, {int statusCode = HttpStatus.ok, required String contentType}) {
+    final headers = HttpHeaders();
+    headers.contentLength = bytes.length;
+    headers.contentType = ContentType.parse(contentType);
+    return _TestHttpClientResponse._(statusCode, bytes, headers);
+  }
+
+  factory _TestHttpClientResponse.notFound() => _TestHttpClientResponse.bytes(
+        Uint8List.fromList(utf8.encode('Not Found')),
+        statusCode: HttpStatus.notFound,
+        contentType: 'text/plain',
+      );
 
   final Uint8List _bytes;
+
   @override
   final int statusCode;
+
+  final HttpHeaders _headers;
+
   @override
-  final HttpHeaders headers;
-  final String contentType;
+  HttpHeaders get headers => _headers;
 
   @override
   int get contentLength => _bytes.length;
 
   @override
-  String get reasonPhrase => statusCode == HttpStatus.ok ? 'OK' : 'Not Found';
+  CompressionState get compressionState => CompressionState.notCompressed;
 
   @override
-  Future<void> cancel() async {}
+  List<Cookie> get cookies => const <Cookie>[];
 
   @override
-  X509Certificate? get certificate => null;
+  Future<Socket> detachSocket() => Future<Socket>.error(UnsupportedError('Socket detachment is not supported'));
 
   @override
   HttpConnectionInfo? get connectionInfo => null;
+
+  @override
+  X509Certificate? get certificate => null;
 
   @override
   bool get isRedirect => false;
@@ -300,81 +422,34 @@ class _TestHttpClientResponse extends Stream<List<int>> implements HttpClientRes
   bool get persistentConnection => false;
 
   @override
-  List<RedirectInfo> get redirects => const [];
+  String get reasonPhrase => statusCode == HttpStatus.ok ? 'OK' : 'Not Found';
 
   @override
-  BrowserHttpClientResponse? get webSocketUpgrade => null;
+  List<RedirectInfo> get redirects => const <RedirectInfo>[];
 
   @override
-  Future<Uint8List> fold<Uint8List>(Uint8List initialValue, Uint8List Function(Uint8List previous, List<int> element) combine) => Future.value(_bytes);
+  Future<HttpClientResponse> redirect([String? method, Uri? url, bool? followLoops]) =>
+      Future<HttpClientResponse>.error(UnsupportedError('Redirects are not supported'));
 
   @override
-  int get statusCode => _statusCode;
-  int _statusCode;
-
-  @override
-  Future<dynamic> drain([dynamic futureValue]) => Future.value(futureValue);
-
-  @override
-  void setRedirectInfo(List<RedirectInfo> redirects) {}
-
-  @override
-  StreamSubscription<List<int>> listen(void Function(List<int> event)? onData, {Function? onError, void Function()? onDone, bool? cancelOnError}) => Stream<List<int>>.value(_bytes).listen(onData, onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+  StreamSubscription<List<int>> listen(
+    void Function(List<int> event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return Stream<List<int>>.value(_bytes).listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+  }
 }
 
-class _TestHttpHeaders extends HttpHeaders {
-  _TestHttpHeaders() : super();
-
-  final Map<String, List<String>> _headers = {};
-
-  @override
-  void add(String name, Object value, {bool preserveHeaderCase = false}) {
-    _headers.putIfAbsent(name, () => []).add(value.toString());
-  }
-
-  @override
-  void clear() {
-    _headers.clear();
-  }
-
-  @override
-  void forEach(void Function(String name, List<String> values) action) {
-    _headers.forEach(action);
-  }
-
-  @override
-  void noFolding(String name) {}
-
-  @override
-  void remove(String name, Object value) {
-    final values = _headers[name];
-    values?.remove(value.toString());
-    if (values != null && values.isEmpty) {
-      _headers.remove(name);
-    }
-  }
-
-  @override
-  void removeAll(String name) {
-    _headers.remove(name);
-  }
-
-  @override
-  void set(String name, Object value, {bool preserveHeaderCase = false}) {
-    _headers[name] = [value.toString()];
-  }
-
-  @override
-  List<String>? operator [](String name) => _headers[name];
-
-  @override
-  int get length => _headers.length;
-}
-
-Future<void> runWithHttpOverrides(WidgetTester tester, Future<void> Function() body) async {
-  final overrides = TestHttpOverrides(previous: HttpOverrides.current);
-  return HttpOverrides.runWithHttpOverrides(
-    () => runZoned(body),
-    overrides,
+Future<void> runWithHttpOverrides(WidgetTester tester, Future<void> Function() body) {
+  return HttpOverrides.runZoned(
+    body,
+    createHttpClient: (_) => TestHttpOverridesClient(),
   );
 }
