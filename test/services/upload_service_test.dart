@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
-import 'package:uuid/uuid.dart';
 
 import 'package:coalition_app_v2/models/create_upload_response.dart';
 import 'package:coalition_app_v2/models/post_draft.dart';
@@ -57,7 +56,6 @@ void main() {
       final service = UploadService(
         apiClient: apiClient,
         tusUploader: tusUploader,
-        userIdResolver: () => 'test-user',
       );
 
       bool feedRefreshed = false;
@@ -71,6 +69,11 @@ void main() {
         description: 'example',
       );
 
+      bool tusCompleteBeforeCreatePost = false;
+      apiClient.onCreatePost = () {
+        tusCompleteBeforeCreatePost = tusUploader.uploadCompleted;
+      };
+
       final outcome = await service.startUpload(
         draft: draft,
         description: '  Final caption  ',
@@ -80,16 +83,16 @@ void main() {
       expect(outcome.uploadId, 'cf-upload-123');
       expect(outcome.postId, 'post-abc');
       expect(feedRefreshed, isTrue);
+      expect(tusUploader.uploadCompleted, isTrue);
+      expect(tusCompleteBeforeCreatePost, isTrue);
 
       expect(apiClient.createPostCalls, 1);
       final args = apiClient.lastCreatePostArgs;
       expect(args, isNotNull);
       expect(args!.type, 'video');
-      expect(args.uploadId, 'cf-upload-123');
-      expect(args.userId, 'test-user');
+      expect(args.cfUid, 'cf-upload-123');
+      expect(args.visibility, 'public');
       expect(args.description, 'Final caption');
-      expect(args.postId, isNotEmpty);
-      expect(Uuid.isValidUUID(fromString: args.postId), isTrue);
       expect(apiClient.lastPostedMetadataDescription, 'Final caption');
 
       service.dispose();
@@ -129,7 +132,6 @@ void main() {
       final service = UploadService(
         apiClient: apiClient,
         tusUploader: tusUploader,
-        userIdResolver: () => 'test-user',
       );
 
       bool feedRefreshed = false;
@@ -185,7 +187,6 @@ void main() {
       final service = UploadService(
         apiClient: apiClient,
         tusUploader: tusUploader,
-        userIdResolver: () => 'test-user',
       );
 
       bool feedRefreshed = false;
@@ -227,6 +228,7 @@ class _StubbedApiClient extends ApiClient {
   int createPostCalls = 0;
   _CreatePostArgs? lastCreatePostArgs;
   String? lastPostedMetadataDescription;
+  void Function()? onCreatePost;
 
   @override
   Future<CreateUploadResult> createUpload({
@@ -256,19 +258,18 @@ class _StubbedApiClient extends ApiClient {
 
   @override
   Future<Map<String, dynamic>> createPost({
-    required String postId,
-    required String userId,
     required String type,
-    required String uploadId,
+    required String cfUid,
     String? description,
+    String visibility = 'public',
   }) async {
     createPostCalls += 1;
+    onCreatePost?.call();
     lastCreatePostArgs = _CreatePostArgs(
-      postId: postId,
-      userId: userId,
       type: type,
-      uploadId: uploadId,
+      cfUid: cfUid,
       description: description,
+      visibility: visibility,
     );
 
     Object? behavior;
@@ -305,6 +306,8 @@ class _CreatePostError {
 class _FakeTusUploader extends TusUploader {
   _FakeTusUploader() : super();
 
+  bool uploadCompleted = false;
+
   @override
   Future<void> uploadFile({
     required File file,
@@ -316,6 +319,7 @@ class _FakeTusUploader extends TusUploader {
   }) async {
     final total = await file.length();
     onProgress?.call(total, total);
+    uploadCompleted = true;
   }
 }
 
@@ -328,29 +332,26 @@ class _NoopHttpClient extends http.BaseClient {
 
 class _CreatePostArgs {
   const _CreatePostArgs({
-    required this.postId,
-    required this.userId,
     required this.type,
-    required this.uploadId,
+    required this.cfUid,
     this.description,
+    this.visibility = 'public',
   });
 
-  final String postId;
-  final String userId;
   final String type;
-  final String uploadId;
+  final String cfUid;
   final String? description;
+  final String visibility;
 
   @override
   bool operator ==(Object other) {
     return other is _CreatePostArgs &&
-        other.postId == postId &&
-        other.userId == userId &&
         other.type == type &&
-        other.uploadId == uploadId &&
-        other.description == description;
+        other.cfUid == cfUid &&
+        other.description == description &&
+        other.visibility == visibility;
   }
 
   @override
-  int get hashCode => Object.hash(postId, userId, type, uploadId, description);
+  int get hashCode => Object.hash(type, cfUid, description, visibility);
 }

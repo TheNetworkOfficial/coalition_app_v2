@@ -185,24 +185,20 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> createPost({
-    required String postId,
-    required String userId,
     required String type,
-    required String uploadId,
+    required String cfUid,
     String? description,
+    String visibility = 'public',
   }) async {
     final uri = _resolve('/api/posts');
-    final payload = <String, dynamic>{
-      'postId': postId,
-      'userId': userId,
-      'type': type,
-      'uploadId': uploadId,
-    };
-
     final trimmedDescription = description?.trim();
-    if (trimmedDescription != null && trimmedDescription.isNotEmpty) {
-      payload['description'] = trimmedDescription;
-    }
+    final payload = <String, dynamic>{
+      'type': type,
+      'cfUid': cfUid,
+      'visibility': visibility,
+      if (trimmedDescription != null && trimmedDescription.isNotEmpty)
+        'description': trimmedDescription,
+    };
 
     debugPrint('[ApiClient] POST $uri');
     debugPrint('[ApiClient] createPost payload: $payload');
