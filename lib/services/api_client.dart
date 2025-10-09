@@ -1,93 +1,50 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../env.dart';
+import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
 
 class ApiException implements IOException {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.details});
 
   final String message;
   final int? statusCode;
+  final String? details;
 
   @override
-  String toString() =>
-      'ApiException(statusCode: ${statusCode ?? 'unknown'}, message: $message)';
-}
-
-class CreateUploadResponse {
-  CreateUploadResponse({
-    required this.postId,
-    required this.uploadUrl,
-    this.requiresMultipart = false,
-    Map<String, String>? headers,
-    Map<String, String>? fields,
-    this.method = 'PUT',
-    this.taskId,
-    this.fileFieldName,
-    this.contentType,
-  })  : headers = headers ?? const {},
-        fields = fields ?? const {};
-
-  factory CreateUploadResponse.fromJson(Map<String, dynamic> json) {
-    final headers = <String, String>{};
-    if (json['headers'] is Map) {
-      (json['headers'] as Map).forEach((key, value) {
-        if (key is String && value != null) {
-          headers[key] = value.toString();
-        }
-      });
-    }
-    final fields = <String, String>{};
-    if (json['fields'] is Map) {
-      (json['fields'] as Map).forEach((key, value) {
-        if (key is String && value != null) {
-          fields[key] = value.toString();
-        }
-      });
-    }
-
-    final postId = json['postId'];
-    final uploadUrl = json['uploadUrl'] ?? json['url'];
-    if (postId is! String || uploadUrl is! String) {
-      throw ApiException('Upload response missing required fields');
-    }
-
-    return CreateUploadResponse(
-      postId: postId,
-      uploadUrl: uploadUrl,
-      requiresMultipart: json['requiresMultipart'] as bool? ?? false,
-      headers: headers,
-      fields: fields,
-      method: json['method'] as String? ?? 'PUT',
-      taskId: json['taskId'] as String?,
-      fileFieldName: json['fileFieldName'] as String?,
-      contentType: json['contentType'] as String?,
-    );
+  String toString() {
+    final extras = details == null || details!.isEmpty ? '' : ', details: $details';
+    return 'ApiException(statusCode: ${statusCode ?? 'unknown'}, message: $message$extras)';
   }
-
-  final String postId;
-  final String uploadUrl;
-  final bool requiresMultipart;
-  final Map<String, String> headers;
-  final Map<String, String> fields;
-  final String method;
-  final String? taskId;
-  final String? fileFieldName;
-  final String? contentType;
 }
 
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl})
       : _httpClient = httpClient ?? http.Client(),
-        _baseUri = Uri.parse(baseUrl ?? API_BASE_URL);
+        _baseUrlOverride = baseUrl == null || baseUrl.isEmpty
+            ? null
+            : normalizeApiBaseUrl(baseUrl) {
+    if (_baseUrlOverride == null) {
+      assertApiBaseConfigured();
+    }
+  }
 
   final http.Client _httpClient;
-  final Uri _baseUri;
+  final String? _baseUrlOverride;
 
-  Uri _resolve(String path) => _baseUri.resolve(path);
+  Uri _resolve(String path) {
+    assert(path.startsWith('/'), 'path must start with "/"');
+    final override = _baseUrlOverride;
+    final base = override ?? normalizedApiBaseUrl;
+    if (base.isEmpty) {
+      throw ApiException('API_BASE_URL dart-define is required');
+    }
+    return Uri.parse('$base$path');
+  }
 
   Future<CreateUploadResponse> createUpload({
     required String type,
@@ -95,31 +52,35 @@ class ApiClient {
     required int fileSize,
     String? contentType,
   }) async {
-    final uri = _resolve('/api/uploads/create');
-    final response = await _httpClient.post(
-      uri,
-      headers: {HttpHeaders.contentTypeHeader: 'application/json'},
-      body: jsonEncode({
-        'type': type,
-        'fileName': fileName,
-        'fileSize': fileSize,
-        if (contentType != null) 'contentType': contentType,
-      }),
+    final url = _resolve('/api/uploads/create');
+    debugPrint('[ApiClient] POST $url');
+    debugPrint(
+      '[ApiClient] createUpload payload type=$type fileName=$fileName fileSize=$fileSize contentType=$contentType',
     );
+    final response = await _httpClient.post(
+      url,
+      headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+      body: jsonEncode({}),
+    );
+    debugPrint('[ApiClient] createUpload status=${response.statusCode}');
 
-    if (response.statusCode < 200 || response.statusCode >= 300) {
+    if (response.statusCode != 200) {
       throw ApiException(
-        'Failed to create upload: ${response.body}',
+        'createUpload failed: ${response.statusCode} ${response.body}',
         statusCode: response.statusCode,
       );
     }
 
-    final data = jsonDecode(response.body);
-    if (data is! Map<String, dynamic>) {
+    final rawBody = response.body;
+    debugPrint('[ApiClient] createUpload raw: $rawBody');
+
+    final decoded = jsonDecode(rawBody);
+    if (decoded is! Map<String, dynamic>) {
       throw ApiException('Unexpected response when creating upload');
     }
 
-    return CreateUploadResponse.fromJson(data);
+    final create = CreateUploadResponse.fromJson(decoded, rawJson: rawBody);
+    return create;
   }
 
   Future<void> postMetadata({

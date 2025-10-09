@@ -1,4 +1,26 @@
-const String API_BASE_URL = String.fromEnvironment(
-  'API_BASE_URL',
-  defaultValue: 'http://localhost:54321',
-);
+import 'package:flutter/foundation.dart';
+
+const String kApiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+
+String normalizeApiBaseUrl(String base) {
+  if (base.isEmpty) {
+    return base;
+  }
+  return base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+}
+
+String get normalizedApiBaseUrl => normalizeApiBaseUrl(kApiBaseUrl);
+
+Uri resolveApiUri(String path, {String? baseOverride}) {
+  assert(path.startsWith('/'), 'path must start with "/"');
+  final base = normalizeApiBaseUrl(baseOverride ?? kApiBaseUrl);
+  if (base.isEmpty) {
+    return Uri.parse(path);
+  }
+  return Uri.parse('$base$path');
+}
+
+void assertApiBaseConfigured() {
+  assert(kApiBaseUrl.isNotEmpty, 'API_BASE_URL dart-define is required');
+  debugPrint('[Env] API_BASE_URL = $kApiBaseUrl');
+}

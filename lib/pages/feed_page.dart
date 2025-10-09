@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:http/http.dart' as http;
 import 'package:infinite_scroll_pagination/infinite_scroll_pagination.dart';
 
+import '../env.dart';
 import '../widgets/feed_item.dart';
 
 class FeedPage extends StatefulWidget {
@@ -18,7 +19,6 @@ class FeedPage extends StatefulWidget {
 
 class _FeedPageState extends State<FeedPage> {
   static const _pageSize = 10;
-  static const _baseUrl = 'http://localhost:54321';
 
   late final PagingController<int, FeedEntry> _pagingController;
   final ScrollController _scrollController = ScrollController();
@@ -48,7 +48,7 @@ class _FeedPageState extends State<FeedPage> {
 
   Future<List<FeedEntry>> _fetchPage(int pageKey) async {
     try {
-      final uri = Uri.parse('$_baseUrl/api/feed').replace(
+      final uri = resolveApiUri('/api/feed').replace(
         queryParameters: {
           'page': '$pageKey',
         },

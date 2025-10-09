@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../env.dart';
+
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
 
@@ -122,7 +124,6 @@ class UserPost {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  static const _baseUrl = 'http://localhost:54321';
   static const _defaultPageSize = 10;
 
   final ScrollController _scrollController = ScrollController();
@@ -173,7 +174,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     final pageToLoad = _nextPage;
     try {
-      final uri = Uri.parse('$_baseUrl/api/me/posts').replace(
+      final uri = resolveApiUri('/api/me/posts').replace(
         queryParameters: {'page': '$pageToLoad'},
       );
       final response = await http.get(uri);
