@@ -1,710 +1,571 @@
-import 'dart:convert';
 import 'dart:io';
 
+import 'package:background_downloader/background_downloader.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import '../env.dart';
+import '../features/auth/providers/auth_state.dart';
+import '../features/feed/models/post.dart';
+import '../features/feed/ui/widgets/post_view.dart';
+import '../models/profile.dart';
+import '../providers/app_providers.dart';
+import '../providers/upload_manager.dart';
+import '../services/api_client.dart';
+import 'edit_profile_page.dart';
 
-class ProfilePage extends StatefulWidget {
+class ProfilePage extends ConsumerStatefulWidget {
   const ProfilePage({super.key});
 
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  ConsumerState<ProfilePage> createState() => _ProfilePageState();
 }
 
-enum UserPostStatus { processing, ready, failed }
-
-class UserPost {
-  UserPost({
-    required this.id,
-    required this.title,
-    this.description,
-    this.previewImageUrl,
-    this.type,
-    required this.status,
-    this.createdAt,
-  });
-
-  factory UserPost.fromJson(
-    Map<String, dynamic> json, {
-    required String fallbackId,
-  }) {
-    String? asString(dynamic value) {
-      if (value is String && value.trim().isNotEmpty) {
-        return value.trim();
-      }
-      if (value is num) {
-        return value.toString();
-      }
-      return null;
-    }
-
-    DateTime? parseDate(String? value) {
-      if (value == null) {
-        return null;
-      }
-      try {
-        return DateTime.parse(value).toLocal();
-      } catch (_) {
-        return null;
-      }
-    }
-
-    UserPostStatus parseStatus(dynamic value) {
-      final normalized = asString(value)?.toLowerCase();
-      switch (normalized) {
-        case 'ready':
-        case 'completed':
-        case 'complete':
-        case 'success':
-        case 'published':
-          return UserPostStatus.ready;
-        case 'failed':
-        case 'error':
-        case 'errored':
-        case 'cancelled':
-        case 'canceled':
-          return UserPostStatus.failed;
-        default:
-          return UserPostStatus.processing;
-      }
-    }
-
-    final id = asString(json['id']) ??
-        asString(json['postId']) ??
-        asString(json['uuid']) ??
-        fallbackId;
-
-    final description = asString(json['description']) ??
-        asString(json['caption']) ??
-        asString(json['text']);
-
-    final title = asString(json['title']) ??
-        asString(json['name']) ??
-        description ??
-        'Untitled post';
-
-    final previewImageUrl = asString(json['thumbnailUrl']) ??
-        asString(json['previewImageUrl']) ??
-        asString(json['coverUrl']) ??
-        asString(json['posterUrl']) ??
-        asString(json['imageUrl']);
-
-    final type = asString(json['type']) ?? asString(json['mediaType']);
-
-    final status = parseStatus(json['status'] ?? json['state']);
-
-    final createdAt = parseDate(
-          asString(json['createdAt']) ??
-              asString(json['created_at']) ??
-              asString(json['createdOn']) ??
-              asString(json['created_on']),
-        ) ??
-        parseDate(asString(json['updatedAt']) ?? asString(json['updated_at']));
-
-    return UserPost(
-      id: id,
-      title: title,
-      description: description,
-      previewImageUrl: previewImageUrl,
-      type: type,
-      status: status,
-      createdAt: createdAt,
-    );
-  }
-
-  final String id;
-  final String title;
-  final String? description;
-  final String? previewImageUrl;
-  final String? type;
-  final UserPostStatus status;
-  final DateTime? createdAt;
-}
-
-class _ProfilePageState extends State<ProfilePage> {
-  static const _defaultPageSize = 10;
-
-  final ScrollController _scrollController = ScrollController();
-  final List<UserPost> _posts = [];
-
-  bool _isInitialLoading = false;
-  bool _isLoadingMore = false;
-  bool _hasMore = true;
-  int _nextPage = 1;
-  String? _errorMessage;
+class _ProfilePageState extends ConsumerState<ProfilePage> {
+  Profile? _profile;
+  List<Post> _posts = const [];
+  bool _isLoading = true;
+  bool _hasLoaded = false;
+  bool _hasPending = false;
+  String? _error;
+  ProviderSubscription<UploadManager>? _uploadSubscription;
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_handleScroll);
-    _fetchPosts(reset: true);
+    _uploadSubscription = ref.listenManual<UploadManager>(
+      uploadManagerProvider,
+      (previous, next) {
+        final previousStatus = previous?.status;
+        final nextStatus = next.status;
+        if (previousStatus != nextStatus && nextStatus?.isFinalState == true) {
+          _refreshProfile();
+        }
+      },
+      fireImmediately: false,
+    );
+    _loadProfile();
   }
 
   @override
   void dispose() {
-    _scrollController.removeListener(_handleScroll);
-    _scrollController.dispose();
+    _uploadSubscription?.close();
     super.dispose();
   }
 
-  Future<void> _fetchPosts({bool reset = false}) async {
-    if (_isLoadingMore) {
-      return;
-    }
-    if (reset) {
-      setState(() {
-        _posts.clear();
-        _nextPage = 1;
-        _hasMore = true;
-        _errorMessage = null;
-        _isInitialLoading = true;
-        _isLoadingMore = true;
-      });
-    } else {
-      if (!_hasMore) {
-        return;
+  Future<void> _loadProfile({bool showLoader = true}) async {
+    setState(() {
+      if (showLoader) {
+        _isLoading = true;
       }
-      setState(() {
-        _errorMessage = null;
-        _isLoadingMore = true;
-      });
-    }
+      _error = null;
+    });
 
-    final pageToLoad = _nextPage;
+    final apiClient = ref.read(apiClientProvider);
     try {
-      final uri = resolveApiUri('/api/me/posts').replace(
-        queryParameters: {'page': '$pageToLoad'},
-      );
-      final response = await http.get(uri);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException('Failed to load posts (${response.statusCode})');
-      }
-
-      final data = response.body.isEmpty ? null : jsonDecode(response.body);
-      final items = _extractPosts(data, pageToLoad);
-      final hasMore = _resolveHasMore(data, items.length);
-
+      final profile = await apiClient.getMyProfile();
+      final posts = await apiClient.getMyPosts(includePending: true);
+      final readyPosts = posts
+          .where((post) => post.isVideo && post.status == PostStatus.ready)
+          .toList();
+      final hasPending = posts.any((post) => post.status != PostStatus.ready);
       if (!mounted) {
         return;
       }
-
       setState(() {
-        _posts.addAll(items);
-        _nextPage = pageToLoad + 1;
-        _hasMore = hasMore;
+        _profile = profile;
+        _posts = readyPosts;
+        _hasPending = hasPending;
+        _isLoading = false;
+        _hasLoaded = true;
+      });
+    } on ApiException catch (error) {
+      if (error.statusCode == HttpStatus.unauthorized) {
+        await ref.read(authStateProvider.notifier).signOut();
+        if (!mounted) {
+          return;
+        }
+        context.go('/auth');
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.message;
+        _isLoading = false;
+        _hasLoaded = true;
       });
     } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _errorMessage =
-            error is HttpException ? error.message : 'Failed to load posts';
-      });
-    } finally {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _isLoadingMore = false;
-        _isInitialLoading = false;
+        _error = error.toString();
+        _isLoading = false;
+        _hasLoaded = true;
       });
     }
   }
 
-  List<UserPost> _extractPosts(dynamic data, int page) {
-    final result = <UserPost>[];
-
-    Iterable<dynamic>? rawItems;
-    if (data is List) {
-      rawItems = data;
-    } else if (data is Map<String, dynamic>) {
-      const candidates = ['posts', 'items', 'data', 'results', 'entries'];
-      for (final key in candidates) {
-        final value = data[key];
-        if (value is List) {
-          rawItems = value;
-          break;
-        }
-        if (value is Map<String, dynamic>) {
-          final nested = value['items'] ?? value['data'] ?? value['posts'];
-          if (nested is List) {
-            rawItems = nested;
-            break;
-          }
-        }
-      }
-      if (rawItems == null && data['data'] is Map<String, dynamic>) {
-        final inner = data['data'] as Map<String, dynamic>;
-        for (final key in candidates) {
-          final value = inner[key];
-          if (value is List) {
-            rawItems = value;
-            break;
-          }
-        }
-      }
-    }
-
-    if (rawItems == null) {
-      return result;
-    }
-
-    var index = 0;
-    for (final item in rawItems) {
-      if (item is Map<String, dynamic>) {
-        try {
-          result.add(UserPost.fromJson(item, fallbackId: 'page$page-$index'));
-        } catch (_) {
-          // Ignore malformed entries.
-        }
-      }
-      index++;
-    }
-
-    return result;
-  }
-
-  bool _resolveHasMore(dynamic data, int itemCount) {
-    if (data is Map<String, dynamic>) {
-      bool? hasMore;
-      final meta = data['meta'] ?? data['pagination'] ?? data['pageInfo'];
-      if (meta is Map) {
-        hasMore ??= _boolFromMap(meta, ['hasMore', 'has_next', 'hasNext', 'hasNextPage']);
-        final nextPage = _valueFromMap(meta, ['nextPage', 'next_page', 'next']);
-        if (nextPage != null && nextPage != false) {
-          return true;
-        }
-        final totalPages = _intFromMap(meta, ['totalPages', 'total_pages']);
-        final currentPage =
-            _intFromMap(meta, ['currentPage', 'page', 'pageNumber']);
-        if (totalPages != null && currentPage != null) {
-          return currentPage < totalPages;
-        }
-      }
-      hasMore ??= _boolFromMap(data, ['hasMore', 'has_next', 'hasNextPage']);
-      if (hasMore != null) {
-        return hasMore;
-      }
-      final next = _valueFromMap(data, ['nextPage', 'next_page', 'next']);
-      if (next != null && next != false) {
-        return true;
-      }
-    }
-
-    if (itemCount == 0) {
-      return false;
-    }
-    return itemCount >= _defaultPageSize;
-  }
-
-  bool? _boolFromMap(Map<dynamic, dynamic> map, List<String> keys) {
-    for (final key in keys) {
-      final value = map[key];
-      if (value is bool) {
-        return value;
-      }
-      if (value is num) {
-        return value != 0;
-      }
-      if (value is String) {
-        final lower = value.toLowerCase();
-        if (lower == 'true' || lower == 'yes' || lower == '1') {
-          return true;
-        }
-        if (lower == 'false' || lower == 'no' || lower == '0') {
-          return false;
-        }
-      }
-    }
-    return null;
-  }
-
-  int? _intFromMap(Map<dynamic, dynamic> map, List<String> keys) {
-    for (final key in keys) {
-      final value = map[key];
-      if (value is int) {
-        return value;
-      }
-      if (value is num) {
-        return value.toInt();
-      }
-      if (value is String) {
-        final parsed = int.tryParse(value);
-        if (parsed != null) {
-          return parsed;
-        }
-      }
-    }
-    return null;
-  }
-
-  dynamic _valueFromMap(Map<dynamic, dynamic> map, List<String> keys) {
-    for (final key in keys) {
-      final value = map[key];
-      if (value != null) {
-        return value;
-      }
-    }
-    return null;
-  }
-
-  Future<void> _handleRefresh() {
-    return _fetchPosts(reset: true);
-  }
-
-  void _handleScroll() {
-    if (!_scrollController.hasClients || _isLoadingMore || !_hasMore) {
-      return;
-    }
-    final position = _scrollController.position;
-    if (!position.hasPixels || !position.hasContentDimensions) {
-      return;
-    }
-    const threshold = 200.0;
-    final remaining = position.maxScrollExtent - position.pixels;
-    if (remaining <= threshold) {
-      _fetchPosts();
-    }
+  Future<void> _refreshProfile() async {
+    await _loadProfile(showLoader: false);
   }
 
   @override
   Widget build(BuildContext context) {
+    final posts = _posts;
+    final profile = _profile;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: _buildBody(),
-      ),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_posts.isEmpty) {
-      if (_isInitialLoading) {
-        return _buildPlaceholder(
-          const SizedBox(
-            height: 48,
-            width: 48,
-            child: CircularProgressIndicator(),
-          ),
-        );
-      }
-      if (_errorMessage != null) {
-        return _buildPlaceholder(
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48),
-              const SizedBox(height: 12),
-              Text(
-                'Unable to load your posts.',
-                style: Theme.of(context).textTheme.titleMedium,
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: _handleMenuSelected,
+            itemBuilder: (context) => [
+              const PopupMenuItem<String>(
+                value: 'edit',
+                child: Text('Edit profile'),
               ),
-              const SizedBox(height: 8),
-              Text(
-                _errorMessage!,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: Theme.of(context).colorScheme.error),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () => _fetchPosts(reset: true),
-                child: const Text('Retry'),
+              const PopupMenuItem<String>(
+                value: 'signout',
+                child: Text('Sign out'),
               ),
             ],
           ),
-        );
-      }
-      return _buildPlaceholder(
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.person_outline,
-              size: 48,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refreshProfile,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: _ProfileHeader(
+                profile: profile,
+                isLoading: _isLoading,
+                hasError: _error != null,
+                onEditTap: _handleEditProfile,
+              ),
             ),
-            const SizedBox(height: 12),
-            Text(
-              'No posts yet',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Posts you create will show up here once they are ready.',
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
+            if (_error != null)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _ProfileErrorView(
+                  message: _error!,
+                  onRetry: () => _loadProfile(),
+                ),
+              )
+            else if (_isLoading && !_hasLoaded)
+              SliverPadding(
+                padding: const EdgeInsets.all(12),
+                sliver: SliverGrid(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => const _ShimmerTile(),
+                    childCount: 6,
+                  ),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 6,
+                    mainAxisSpacing: 6,
+                    childAspectRatio: 1,
+                  ),
+                ),
+              )
+            else if (posts.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _ProfileEmptyState(
+                  hasPending: _hasPending,
+                  onRefresh: _refreshProfile,
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.all(12),
+                sliver: SliverGrid(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      final post = posts[index];
+                      return _PostGridTile(
+                        post: post,
+                        onTap: () => _openPost(post),
+                      );
+                    },
+                    childCount: posts.length,
+                  ),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 6,
+                    mainAxisSpacing: 6,
+                    childAspectRatio: 1,
+                  ),
+                ),
+              ),
           ],
         ),
-      );
-    }
-
-    final itemCount = _posts.length +
-        ((_isLoadingMore || (_errorMessage != null)) ? 1 : 0);
-
-    return RefreshIndicator(
-      onRefresh: _handleRefresh,
-      child: ListView.separated(
-        controller: _scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        itemBuilder: (context, index) {
-          if (index >= _posts.length) {
-            return _buildFooter();
-          }
-          final post = _posts[index];
-          return _buildPostTile(post);
-        },
-        separatorBuilder: (context, index) => const SizedBox(height: 8),
-        itemCount: itemCount,
       ),
     );
   }
 
-  Widget _buildPlaceholder(Widget child) {
-    return RefreshIndicator(
-      onRefresh: _handleRefresh,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(vertical: 80, horizontal: 24),
+  Future<void> _handleEditProfile() async {
+    final currentProfile = _profile;
+    final result = await Navigator.of(context).push<Profile>(
+      MaterialPageRoute(
+        builder: (context) => EditProfilePage(initialProfile: currentProfile),
+      ),
+    );
+    if (result != null) {
+      setState(() => _profile = result);
+    }
+  }
+
+  void _handleMenuSelected(String value) {
+    switch (value) {
+      case 'edit':
+        _handleEditProfile();
+        break;
+      case 'signout':
+        _signOut();
+        break;
+    }
+  }
+
+  Future<void> _signOut() async {
+    await ref.read(authStateProvider.notifier).signOut();
+    if (!mounted) {
+      return;
+    }
+    context.go('/auth');
+  }
+
+  void _openPost(Post post) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => _PostViewerPage(post: post),
+      ),
+    );
+  }
+}
+
+class _ProfileHeader extends StatelessWidget {
+  const _ProfileHeader({
+    required this.profile,
+    required this.isLoading,
+    required this.hasError,
+    required this.onEditTap,
+  });
+
+  final Profile? profile;
+  final bool isLoading;
+  final bool hasError;
+  final VoidCallback onEditTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final displayName = profile?.displayName ?? 'Set your name';
+    final username = profile?.username != null
+        ? '@${profile!.username}'
+        : 'Add a username';
+
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(child: child),
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 36,
+                backgroundImage: profile?.avatarUrl != null
+                    ? NetworkImage(profile!.avatarUrl!)
+                    : null,
+                child: profile?.avatarUrl == null
+                    ? const Icon(Icons.person, size: 36)
+                    : null,
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      displayName,
+                      style: theme.textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      username,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!isLoading && !hasError)
+                TextButton.icon(
+                  onPressed: onEditTap,
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Edit'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            profile?.bio?.isNotEmpty == true
+                ? profile!.bio!
+                : 'Tell the community more about you.',
+            style: theme.textTheme.bodyMedium,
+          ),
         ],
       ),
     );
   }
-
-  Widget _buildFooter() {
-    if (_isLoadingMore) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: SizedBox(
-            height: 32,
-            width: 32,
-            child: CircularProgressIndicator(strokeWidth: 3),
-          ),
-        ),
-      );
-    }
-
-    if (_errorMessage != null) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Text(
-              'Something went wrong while loading more posts.',
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: () => _fetchPosts(),
-              child: const Text('Try again'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return const SizedBox.shrink();
-  }
-
-  Widget _buildPostTile(UserPost post) {
-    final theme = Theme.of(context);
-    final subtitleWidgets = <Widget>[];
-    if (post.description != null && post.description!.isNotEmpty) {
-      subtitleWidgets.add(
-        Text(
-          post.description!,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-      );
-    }
-    if (post.createdAt != null) {
-      subtitleWidgets.add(
-        Text(
-          'Created ${_formatTimestamp(post.createdAt!)}',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      );
-    }
-
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildThumbnail(post),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          post.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleMedium,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      _StatusChip(status: post.status),
-                    ],
-                  ),
-                  if (subtitleWidgets.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (var i = 0; i < subtitleWidgets.length; i++) ...[
-                          if (i > 0) const SizedBox(height: 4),
-                          subtitleWidgets[i],
-                        ],
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildThumbnail(UserPost post) {
-    final borderRadius = BorderRadius.circular(12);
-    final type = post.type?.toLowerCase();
-    final icon = type == 'video'
-        ? Icons.videocam_outlined
-        : type == 'audio'
-            ? Icons.audiotrack
-            : Icons.image_outlined;
-
-    Widget fallbackIcon(ColorScheme colorScheme) {
-      return Container(
-        color: colorScheme.surfaceContainerHighest,
-        child: Icon(
-          icon,
-          color: colorScheme.onSurfaceVariant,
-        ),
-      );
-    }
-
-    return SizedBox(
-      height: 64,
-      width: 64,
-      child: ClipRRect(
-        borderRadius: borderRadius,
-        child: Builder(
-          builder: (context) {
-            final previewUrl = post.previewImageUrl;
-            if (previewUrl == null || previewUrl.isEmpty) {
-              return fallbackIcon(Theme.of(context).colorScheme);
-            }
-            return Image.network(
-              previewUrl,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return fallbackIcon(Theme.of(context).colorScheme);
-              },
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  String _formatTimestamp(DateTime value) {
-    final date = value.toLocal();
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    final datePart =
-        '${date.year}-${twoDigits(date.month)}-${twoDigits(date.day)}';
-    final timePart = '${twoDigits(date.hour)}:${twoDigits(date.minute)}';
-    return '$datePart · $timePart';
-  }
 }
 
-extension UserPostStatusX on UserPostStatus {
-  String get label {
-    switch (this) {
-      case UserPostStatus.ready:
-        return 'Ready';
-      case UserPostStatus.failed:
-        return 'Failed';
-      case UserPostStatus.processing:
-        return 'Processing';
-    }
-  }
-}
+class _ProfileErrorView extends StatelessWidget {
+  const _ProfileErrorView({required this.message, required this.onRetry});
 
-class _StatusChipStyle {
-  const _StatusChipStyle({required this.background, required this.foreground});
-
-  final Color background;
-  final Color foreground;
-}
-
-_StatusChipStyle _statusChipStyle(UserPostStatus status) {
-  switch (status) {
-    case UserPostStatus.ready:
-      return _StatusChipStyle(
-        background: Colors.green.shade50,
-        foreground: Colors.green.shade900,
-      );
-    case UserPostStatus.failed:
-      return _StatusChipStyle(
-        background: Colors.red.shade50,
-        foreground: Colors.red.shade900,
-      );
-    case UserPostStatus.processing:
-      return _StatusChipStyle(
-        background: Colors.amber.shade50,
-        foreground: Colors.amber.shade900,
-      );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.status});
-
-  final UserPostStatus status;
+  final String message;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    final style = _statusChipStyle(status);
-    final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: style.foreground,
-          fontWeight: FontWeight.w600,
-        );
-    return Container(
-      decoration: BoxDecoration(
-        color: style.background,
-        borderRadius: BorderRadius.circular(16),
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'We couldn\'t load your profile.',
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: Theme.of(context).textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Text(status.label, style: textStyle),
+    );
+  }
+}
+
+class _ProfileEmptyState extends StatelessWidget {
+  const _ProfileEmptyState({required this.hasPending, required this.onRefresh});
+
+  final bool hasPending;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              hasPending ? Icons.hourglass_empty : Icons.video_library_outlined,
+              size: 64,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              hasPending
+                  ? 'Your video is processing—check back in a minute.'
+                  : 'You haven\'t uploaded any videos yet.',
+              style: theme.textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: hasPending
+                  ? () => onRefresh()
+                  : () => GoRouter.of(context).go('/create'),
+              child: Text(hasPending ? 'Refresh' : 'Upload a video'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PostGridTile extends StatelessWidget {
+  const _PostGridTile({required this.post, required this.onTap});
+
+  final Post post;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = post.duration;
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            CachedNetworkImage(
+              imageUrl: post.thumbUrl ?? post.mediaUrl,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => const _ShimmerTile(),
+              errorWidget: (context, url, error) => Container(
+                color: Colors.grey.shade300,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image_outlined),
+              ),
+            ),
+            if (duration != null)
+              Positioned(
+                right: 6,
+                bottom: 6,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _formatDuration(duration),
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes;
+    final seconds = duration.inSeconds % 60;
+    final minutesStr = minutes.toString().padLeft(2, '0');
+    final secondsStr = seconds.toString().padLeft(2, '0');
+    return '$minutesStr:$secondsStr';
+  }
+}
+
+class _ShimmerTile extends StatefulWidget {
+  const _ShimmerTile();
+
+  @override
+  State<_ShimmerTile> createState() => _ShimmerTileState();
+}
+
+class _ShimmerTileState extends State<_ShimmerTile>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Container(color: Colors.grey.shade300),
+            AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                final shimmerWidth = width * 0.6;
+                final dx = (width + shimmerWidth) * _controller.value - shimmerWidth;
+                return Transform.translate(
+                  offset: Offset(dx, 0),
+                  child: Container(
+                    width: shimmerWidth,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.grey.shade200.withOpacity(0.0),
+                          Colors.grey.shade100.withOpacity(0.7),
+                          Colors.grey.shade200.withOpacity(0.0),
+                        ],
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PostViewerPage extends StatefulWidget {
+  const _PostViewerPage({required this.post});
+
+  final Post post;
+
+  @override
+  State<_PostViewerPage> createState() => _PostViewerPageState();
+}
+
+class _PostViewerPageState extends State<_PostViewerPage> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: PostView(
+              post: widget.post,
+              onProfileTap: () {},
+              onCommentsTap: () {},
+              initiallyActive: true,
+            ),
+          ),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: IconButton(
+                color: Colors.white,
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

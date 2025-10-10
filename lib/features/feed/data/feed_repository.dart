@@ -115,6 +115,8 @@ class FeedRepository {
       thumbUrl:
           'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=800',
       isVideo: true,
+      type: 'video',
+      status: PostStatus.ready,
     ),
     Post(
       id: 'fallback-2',
@@ -127,6 +129,8 @@ class FeedRepository {
       thumbUrl:
           'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=600',
       isVideo: false,
+      type: 'image',
+      status: PostStatus.ready,
     ),
     Post(
       id: 'fallback-3',
@@ -139,6 +143,8 @@ class FeedRepository {
       thumbUrl:
           'https://images.unsplash.com/photo-1528712306091-ed0763094c98?w=600',
       isVideo: false,
+      type: 'image',
+      status: PostStatus.ready,
     ),
     Post(
       id: 'fallback-4',
@@ -150,6 +156,8 @@ class FeedRepository {
       thumbUrl:
           'https://images.unsplash.com/photo-1517964106626-460c6a3b8964?w=800',
       isVideo: true,
+      type: 'video',
+      status: PostStatus.ready,
     ),
     Post(
       id: 'fallback-5',
@@ -162,6 +170,8 @@ class FeedRepository {
       thumbUrl:
           'https://images.unsplash.com/photo-1485579149621-3123dd979885?w=600',
       isVideo: false,
+      type: 'image',
+      status: PostStatus.ready,
     ),
   ];
 }
