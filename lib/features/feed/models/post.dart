@@ -1,5 +1,7 @@
 import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
 
+enum PostStatus { processing, ready, failed }
+
 class Post {
   const Post({
     required this.id,
@@ -10,6 +12,10 @@ class Post {
     this.userAvatarUrl,
     this.description,
     this.thumbUrl,
+    this.type,
+    this.status = PostStatus.ready,
+    this.playbackId,
+    this.duration,
   });
 
   factory Post.fromJson(
@@ -47,6 +53,48 @@ class Post {
       return false;
     }
 
+    PostStatus _parseStatus(dynamic value) {
+      final normalized = _asString(value)?.toLowerCase();
+      switch (normalized) {
+        case 'ready':
+        case 'completed':
+        case 'published':
+        case 'success':
+          return PostStatus.ready;
+        case 'failed':
+        case 'error':
+        case 'errored':
+        case 'cancelled':
+        case 'canceled':
+          return PostStatus.failed;
+        default:
+          return PostStatus.processing;
+      }
+    }
+
+    Duration? _parseDuration(dynamic value) {
+      if (value is Duration) {
+        return value;
+      }
+      if (value is num) {
+        final seconds = value.toDouble();
+        if (seconds > 0) {
+          return Duration(milliseconds: (seconds * 1000).round());
+        }
+      }
+      if (value is String) {
+        final trimmed = value.trim();
+        if (trimmed.isEmpty) {
+          return null;
+        }
+        final parsed = double.tryParse(trimmed);
+        if (parsed != null) {
+          return Duration(milliseconds: (parsed * 1000).round());
+        }
+      }
+      return null;
+    }
+
     final id = _asString(json['id']) ?? fallbackId;
     final userId = _asString(json['userId']) ??
         _asString(json['user_id']) ??
@@ -63,9 +111,10 @@ class Post {
     final description = _asString(json['description']) ??
         _asString(json['caption']) ??
         _asString(json['text']);
+    final type = _asString(json['type']) ?? _asString(json['mediaType']);
     final isVideo = json.containsKey('isVideo')
         ? _asBool(json['isVideo'])
-        : _asBool(json['type'] == 'video');
+        : (type?.toLowerCase() == 'video');
     final fallbackMediaUrl = _asString(json['mediaUrl']) ??
         _asString(json['videoUrl']) ??
         _asString(json['imageUrl']) ??
@@ -77,6 +126,14 @@ class Post {
     final thumbUrl = _asString(json['thumbUrl']) ??
         _asString(json['thumbnailUrl']) ??
         _asString(json['previewImageUrl']);
+    final playbackId = _asString(json['playbackId']);
+    final status = _parseStatus(json['status'] ?? json['state']);
+    final duration = _parseDuration(
+      json['durationSeconds'] ??
+          json['duration'] ??
+          json['videoDurationSeconds'] ??
+          json['videoDuration'],
+    );
 
     return Post(
       id: id,
@@ -87,6 +144,10 @@ class Post {
       mediaUrl: mediaUrl,
       thumbUrl: thumbUrl,
       isVideo: isVideo,
+      type: type,
+      status: status,
+      playbackId: playbackId,
+      duration: duration,
     );
   }
 
@@ -98,4 +159,8 @@ class Post {
   final String mediaUrl;
   final String? thumbUrl;
   final bool isVideo;
+  final String? type;
+  final PostStatus status;
+  final String? playbackId;
+  final Duration? duration;
 }

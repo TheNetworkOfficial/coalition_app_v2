@@ -6,10 +6,14 @@ import 'package:flutter_riverpod/legacy.dart';
 
 import '../models/post_draft.dart';
 import '../models/upload_outcome.dart';
+import 'app_providers.dart';
 import '../services/upload_service.dart';
 
 final uploadManagerProvider = ChangeNotifierProvider<UploadManager>((ref) {
-  final manager = UploadManager();
+  final apiClient = ref.watch(apiClientProvider);
+  final manager = UploadManager(
+    uploadService: UploadService(apiClient: apiClient),
+  );
   ref.onDispose(manager.dispose);
   return manager;
 });

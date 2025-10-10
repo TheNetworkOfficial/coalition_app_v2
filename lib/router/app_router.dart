@@ -1,15 +1,31 @@
+import 'package:coalition_app_v2/features/auth/ui/auth_gate_page.dart';
 import 'package:coalition_app_v2/features/feed/ui/feed_page.dart';
 import 'package:go_router/go_router.dart';
 
 import '../app_shell.dart';
+import '../pages/bootstrap_page.dart';
 import '../pages/candidates_page.dart';
 import '../pages/create_entry_page.dart';
 import '../pages/events_page.dart';
 import '../pages/profile_page.dart';
 
 final GoRouter appRouter = GoRouter(
-  initialLocation: '/feed',
+  initialLocation: '/bootstrap',
   routes: [
+    GoRoute(
+      path: '/bootstrap',
+      name: 'bootstrap',
+      pageBuilder: (context, state) => const NoTransitionPage(
+        child: BootstrapPage(),
+      ),
+    ),
+    GoRoute(
+      path: '/auth',
+      name: 'auth',
+      pageBuilder: (context, state) => const NoTransitionPage(
+        child: AuthGatePage(),
+      ),
+    ),
     StatefulShellRoute(
       builder: (context, state, navigationShell) =>
           AppShell(navigationShell: navigationShell),

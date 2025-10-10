@@ -5,8 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../env.dart';
-import '../models/post_draft.dart';
+import '../features/feed/models/post.dart';
 import '../models/create_upload_response.dart';
+import '../models/post_draft.dart';
+import '../models/profile.dart';
+import 'auth_service.dart';
 
 class ApiException implements IOException {
   ApiException(this.message, {this.statusCode, this.details});
@@ -33,11 +36,15 @@ class CreateUploadResult {
 }
 
 class ApiClient {
-  ApiClient({http.Client? httpClient, String? baseUrl})
-      : _httpClient = httpClient ?? http.Client(),
+  ApiClient({
+    http.Client? httpClient,
+    String? baseUrl,
+    AuthService? authService,
+  })  : _httpClient = httpClient ?? http.Client(),
         _baseUrlOverride = baseUrl == null || baseUrl.isEmpty
             ? null
-            : normalizeApiBaseUrl(baseUrl) {
+            : normalizeApiBaseUrl(baseUrl),
+        _authService = authService {
     if (_baseUrlOverride == null) {
       assertApiBaseConfigured();
     }
@@ -45,7 +52,10 @@ class ApiClient {
 
   final http.Client _httpClient;
   final String? _baseUrlOverride;
+  AuthService? _authService;
   int? _lastCreatePostStatusCode;
+
+  set authService(AuthService? service) => _authService = service;
 
   Uri _resolve(String path) {
     assert(path.startsWith('/'), 'path must start with "/"');
@@ -62,9 +72,13 @@ class ApiClient {
   Future<http.Response> get(
     String path, {
     Map<String, String>? headers,
-  }) {
+  }) async {
     final uri = _resolve(path);
-    return _httpClient.get(uri, headers: headers);
+    final resolvedHeaders = await _composeHeaders(headers);
+    return _httpClient.get(
+      uri,
+      headers: resolvedHeaders.isEmpty ? null : resolvedHeaders,
+    );
   }
 
   http.Client get httpClient => _httpClient;
@@ -99,9 +113,10 @@ class ApiClient {
     debugPrint('[ApiClient] POST $uri');
     debugPrint('[ApiClient] createUpload payload: $payload');
 
+    final headers = await _jsonHeaders();
     final response = await _httpClient.post(
       uri,
-      headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+      headers: headers,
       body: jsonEncode(payload),
     );
     debugPrint('[ApiClient] createUpload status=${response.statusCode}');
@@ -170,9 +185,10 @@ class ApiClient {
             },
     }..removeWhere((key, value) => value == null);
 
+    final headers = await _jsonHeaders();
     final response = await _httpClient.post(
       uri,
-      headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+      headers: headers,
       body: jsonEncode(body),
     );
 
@@ -203,9 +219,10 @@ class ApiClient {
     debugPrint('[ApiClient] POST $uri');
     debugPrint('[ApiClient] createPost payload: $payload');
 
+    final headers = await _jsonHeaders();
     final response = await _httpClient.post(
       uri,
-      headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+      headers: headers,
       body: jsonEncode(payload),
     );
     final status = response.statusCode;
@@ -234,5 +251,116 @@ class ApiClient {
     }
 
     return Map<String, dynamic>.from(decoded);
+  }
+
+  Future<Profile> getMyProfile() async {
+    final response = await get('/api/profile/me');
+    if (response.statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: response.statusCode);
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        'Failed to load profile: ${response.statusCode}',
+        statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (decoded is Map<String, dynamic>) {
+      return Profile.fromJson(decoded);
+    }
+    throw ApiException('Unexpected profile response format');
+  }
+
+  Future<Profile> upsertMyProfile(ProfileUpdate update) async {
+    final uri = _resolve('/api/profile');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(update.toJson()),
+    );
+
+    if (response.statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: response.statusCode);
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        'Failed to update profile: ${response.statusCode}',
+        statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (decoded is Map<String, dynamic>) {
+      return Profile.fromJson(decoded);
+    }
+    throw ApiException('Unexpected profile update response');
+  }
+
+  Future<List<Post>> getMyPosts({bool includePending = false}) async {
+    final query = includePending ? '?includePending=true' : '';
+    final response = await get('/api/users/me/posts$query');
+    if (response.statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: response.statusCode);
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        'Failed to load posts: ${response.statusCode}',
+        statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (decoded is! List) {
+      throw ApiException('Unexpected posts response');
+    }
+    final posts = <Post>[];
+    for (var i = 0; i < decoded.length; i++) {
+      final item = decoded[i];
+      if (item is Map<String, dynamic>) {
+        try {
+          posts.add(Post.fromJson(item, fallbackId: 'me-$i'));
+        } catch (error, stackTrace) {
+          debugPrint('[ApiClient] Skipping malformed post: $error\n$stackTrace');
+        }
+      }
+    }
+    return posts;
+  }
+
+  Future<Map<String, String>> _jsonHeaders([Map<String, String>? headers]) async {
+    final resolved = await _composeHeaders(headers);
+    resolved.putIfAbsent(HttpHeaders.contentTypeHeader, () => 'application/json');
+    return resolved;
+  }
+
+  Future<Map<String, String>> _composeHeaders(
+    Map<String, String>? headers,
+  ) async {
+    final resolved = <String, String>{};
+    if (headers != null) {
+      resolved.addAll(headers);
+    }
+    final authorization = await _authorizationHeader();
+    if (authorization != null) {
+      resolved.putIfAbsent(HttpHeaders.authorizationHeader, () => authorization);
+    }
+    return resolved;
+  }
+
+  Future<String?> _authorizationHeader() async {
+    if (kAuthBypassEnabled) {
+      return null;
+    }
+    final service = _authService;
+    if (service == null) {
+      return null;
+    }
+    final token = await service.fetchAuthToken();
+    if (token == null || token.isEmpty) {
+      return null;
+    }
+    return 'Bearer $token';
   }
 }

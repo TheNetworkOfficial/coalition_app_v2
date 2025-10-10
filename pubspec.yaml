@@ -23,6 +23,11 @@ dependencies:
   infinite_scroll_pagination: ^5.0.0
   device_info_plus: ^10.1.0
   dio: ^5.9.0
+  amplify_flutter: ^1.6.0
+  amplify_auth_cognito: ^1.6.0
+  google_sign_in: ^6.2.1
+  flutter_secure_storage: ^9.2.2
+  cached_network_image: ^3.3.1
 
 flutter:
   uses-material-design: true
