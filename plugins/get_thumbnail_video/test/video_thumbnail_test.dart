@@ -7,7 +7,8 @@ void main() {
   const channel = MethodChannel('video_thumbnail');
 
   setUp(() {
-    channel.setMockMethodCallHandler((MethodCall methodCall) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
       final m = methodCall.method;
       final a = methodCall.arguments as Map<String, dynamic>;
 
@@ -16,7 +17,8 @@ void main() {
   });
 
   tearDown(() {
-    channel.setMockMethodCallHandler(null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null);
   });
 
   test('thumbnailData', () async {

@@ -67,7 +67,7 @@ class CreateUploadResponse {
     }
 
     String? urlString;
-    for (final entry in <MapEntry<String, dynamic?>>[
+    for (final entry in <MapEntry<String, dynamic>>[
       MapEntry('uploadURL', json['uploadURL']),
       MapEntry('uploadUrl', json['uploadUrl']),
       MapEntry('url', json['url']),
@@ -86,7 +86,7 @@ class CreateUploadResponse {
     }
 
     String? uidString;
-    for (final entry in <MapEntry<String, dynamic?>>[
+    for (final entry in <MapEntry<String, dynamic>>[
       MapEntry('uid', json['uid']),
       MapEntry('postId', json['postId']),
       if (cfAssetMap != null) MapEntry('cfAsset.uid', cfAssetMap['uid']),

@@ -1,3 +1,4 @@
+import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
 import 'package:coalition_app_v2/widgets/user_avatar.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -71,7 +72,8 @@ class FeedEntry {
         _asString(json['posterUrl']) ??
         imageUrl;
 
-    String? videoUrl = _asString(json['videoUrl']) ??
+    String? videoUrl = resolveCloudflareHlsUrl(json) ??
+        _asString(json['videoUrl']) ??
         _asString(json['streamUrl']) ??
         _asString(json['mediaUrl']) ??
         _asString(json['url']);
@@ -153,7 +155,7 @@ class _FeedItemState extends State<FeedItem> {
   @override
   void initState() {
     super.initState();
-    _maybeInitializeController();
+    _updatePlayback();
   }
 
   @override
@@ -163,7 +165,7 @@ class _FeedItemState extends State<FeedItem> {
     if (widget.item.type == FeedMediaType.video &&
         oldWidget.item.videoUrl != widget.item.videoUrl) {
       _disposeController();
-      _maybeInitializeController();
+      _updatePlayback();
     }
 
     if (widget.isActive != oldWidget.isActive) {
@@ -178,6 +180,12 @@ class _FeedItemState extends State<FeedItem> {
   }
 
   void _maybeInitializeController() {
+    if (_controller != null) {
+      return;
+    }
+    if (!widget.isActive) {
+      return;
+    }
     if (widget.item.type != FeedMediaType.video || widget.item.videoUrl == null) {
       return;
     }
@@ -190,12 +198,12 @@ class _FeedItemState extends State<FeedItem> {
     }
     final controller = VideoPlayerController.networkUrl(uri);
     _initializeFuture = controller.initialize().then((_) {
+      if (!mounted || _controller != controller) {
+        return;
+      }
       controller
         ..setLooping(true)
         ..setVolume(0);
-      if (!mounted) {
-        return;
-      }
       setState(() {});
       _updatePlayback();
     });
@@ -204,18 +212,33 @@ class _FeedItemState extends State<FeedItem> {
   }
 
   void _updatePlayback() {
+    if (widget.item.type != FeedMediaType.video) {
+      return;
+    }
+
     final controller = _controller;
+    if (widget.isActive) {
+      if (controller == null) {
+        _maybeInitializeController();
+        return;
+      }
+      if (!controller.value.isInitialized) {
+        return;
+      }
+      controller.play();
+      return;
+    }
+
     if (controller == null) {
       return;
     }
-    if (!controller.value.isInitialized) {
-      return;
+
+    if (controller.value.isInitialized) {
+      controller
+        ..pause()
+        ..seekTo(Duration.zero);
     }
-    if (widget.isActive) {
-      controller.play();
-    } else {
-      controller.pause();
-    }
+    _disposeController();
   }
 
   void _disposeController() {

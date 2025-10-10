@@ -1,3 +1,5 @@
+import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
+
 class Post {
   const Post({
     required this.id,
@@ -61,16 +63,20 @@ class Post {
     final description = _asString(json['description']) ??
         _asString(json['caption']) ??
         _asString(json['text']);
-    final mediaUrl = _asString(json['mediaUrl']) ??
-        _asString(json['videoUrl']) ??
-        _asString(json['imageUrl']) ??
-        '';
-    final thumbUrl = _asString(json['thumbUrl']) ??
-        _asString(json['thumbnailUrl']) ??
-        _asString(json['previewImageUrl']);
     final isVideo = json.containsKey('isVideo')
         ? _asBool(json['isVideo'])
         : _asBool(json['type'] == 'video');
+    final fallbackMediaUrl = _asString(json['mediaUrl']) ??
+        _asString(json['videoUrl']) ??
+        _asString(json['imageUrl']) ??
+        '';
+    final resolvedHlsUrl = resolveCloudflareHlsUrl(json);
+    final mediaUrl = isVideo
+        ? (resolvedHlsUrl ?? fallbackMediaUrl)
+        : fallbackMediaUrl;
+    final thumbUrl = _asString(json['thumbUrl']) ??
+        _asString(json['thumbnailUrl']) ??
+        _asString(json['previewImageUrl']);
 
     return Post(
       id: id,

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../models/post_draft.dart';

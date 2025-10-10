@@ -19,8 +19,10 @@ class ExpandableDescription extends StatefulWidget {
 class _ExpandableDescriptionState extends State<ExpandableDescription> {
   OverlayEntry? _overlayEntry;
 
-  bool get _hasDescription =>
-      (widget.description != null && widget.description!.trim().isNotEmpty);
+  bool get _hasDescription {
+    final description = widget.description;
+    return description != null && description.trim().isNotEmpty;
+  }
 
   @override
   void dispose() {
@@ -32,7 +34,7 @@ class _ExpandableDescriptionState extends State<ExpandableDescription> {
     if (!_hasDescription || _overlayEntry != null) {
       return;
     }
-    final overlay = Overlay.of(context);
+    final overlay = Overlay.maybeOf(context);
     if (overlay == null) {
       return;
     }
@@ -123,7 +125,7 @@ class _DescriptionOverlay extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onTap: onClose,
         child: Material(
-          color: Colors.black.withOpacity(0.7),
+          color: Colors.black.withValues(alpha: 0.7),
           child: SafeArea(
             minimum: const EdgeInsets.all(16),
             child: Align(
@@ -133,7 +135,7 @@ class _DescriptionOverlay extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.85),
+                    color: Colors.black.withValues(alpha: 0.85),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(

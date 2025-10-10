@@ -226,7 +226,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
       return min;
     }
     final clamped = frameMs.clamp(min, max);
-    return clamped is int ? clamped : clamped.toInt();
+    return clamped.toInt();
   }
 
   Duration _clampDuration(Duration input) {

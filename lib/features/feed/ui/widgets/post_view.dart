@@ -81,7 +81,7 @@ class PostViewState extends State<PostView>
     controller.setVolume(0);
 
     controller.initialize().then((_) {
-      if (!mounted) {
+      if (!mounted || _videoController != controller) {
         return;
       }
       setState(() {});
@@ -118,6 +118,7 @@ class PostViewState extends State<PostView>
         ..pause()
         ..seekTo(Duration.zero);
     }
+    _disposeVideo();
   }
 
   void _disposeVideo() {
@@ -267,10 +268,10 @@ class PostViewState extends State<PostView>
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            Colors.black.withOpacity(0.2),
-            Colors.black.withOpacity(0.05),
-            Colors.black.withOpacity(0.4),
-            Colors.black.withOpacity(0.8),
+            Colors.black.withValues(alpha: 0.2),
+            Colors.black.withValues(alpha: 0.05),
+            Colors.black.withValues(alpha: 0.4),
+            Colors.black.withValues(alpha: 0.8),
           ],
           stops: const [0, 0.4, 0.7, 1],
         ),

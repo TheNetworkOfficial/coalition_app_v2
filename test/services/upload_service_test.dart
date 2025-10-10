@@ -6,7 +6,6 @@ import 'package:test/test.dart';
 
 import 'package:coalition_app_v2/models/create_upload_response.dart';
 import 'package:coalition_app_v2/models/post_draft.dart';
-import 'package:coalition_app_v2/models/upload_outcome.dart';
 import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/services/tus_uploader.dart';
 import 'package:coalition_app_v2/services/upload_service.dart';
@@ -85,6 +84,8 @@ void main() {
       expect(feedRefreshed, isTrue);
       expect(tusUploader.uploadCompleted, isTrue);
       expect(tusCompleteBeforeCreatePost, isTrue);
+      final expectedChunkSize = await tempFile.length();
+      expect(tusUploader.lastChunkSize, expectedChunkSize);
 
       expect(apiClient.createPostCalls, 1);
       final args = apiClient.lastCreatePostArgs;
@@ -153,6 +154,8 @@ void main() {
       expect(outcome.ok, isTrue);
       expect(feedRefreshed, isTrue);
       expect(apiClient.createPostCalls, 3);
+      final expectedChunkSize = await tempFile.length();
+      expect(tusUploader.lastChunkSize, expectedChunkSize);
 
       service.dispose();
     });
@@ -209,6 +212,53 @@ void main() {
       expect(outcome.statusCode, 409);
       expect(feedRefreshed, isTrue);
       expect(apiClient.createPostCalls, 1);
+      final expectedChunkSize = await tempFile.length();
+      expect(tusUploader.lastChunkSize, expectedChunkSize);
+
+      service.dispose();
+    });
+
+    test('uses hinted TUS chunk size when provided', () async {
+      final chunkSizeHint = 2 * 1024 * 1024;
+      await tempFile.writeAsBytes(
+        List<int>.filled(3 * 1024 * 1024, 1),
+      );
+
+      final createResponse = CreateUploadResponse(
+        uploadUrl: Uri.parse('https://example.com/upload'),
+        uid: 'cf-upload-hinted',
+        method: 'PATCH',
+      );
+      final createResult = CreateUploadResult(
+        response: createResponse,
+        rawJson: {
+          'tusInfo': {
+            'endpoint': 'https://tus.example.com/upload',
+            'chunkSize': chunkSizeHint,
+          },
+        },
+      );
+
+      final apiClient = _StubbedApiClient(createResult: createResult);
+      final tusUploader = _FakeTusUploader();
+      final service = UploadService(
+        apiClient: apiClient,
+        tusUploader: tusUploader,
+      );
+
+      final draft = PostDraft(
+        originalFilePath: tempFile.path,
+        type: 'video',
+        description: 'example',
+      );
+
+      final outcome = await service.startUpload(
+        draft: draft,
+        description: 'Chunk hint',
+      );
+
+      expect(outcome.ok, isTrue);
+      expect(tusUploader.lastChunkSize, chunkSizeHint);
 
       service.dispose();
     });
@@ -307,6 +357,7 @@ class _FakeTusUploader extends TusUploader {
   _FakeTusUploader() : super();
 
   bool uploadCompleted = false;
+  int? lastChunkSize;
 
   @override
   Future<void> uploadFile({
@@ -317,6 +368,7 @@ class _FakeTusUploader extends TusUploader {
     int chunkSize = 8 * 1024 * 1024,
     CancelToken? cancelToken,
   }) async {
+    lastChunkSize = chunkSize;
     final total = await file.length();
     onProgress?.call(total, total);
     uploadCompleted = true;

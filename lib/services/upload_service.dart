@@ -14,6 +14,8 @@ import '../models/upload_outcome.dart';
 import 'api_client.dart';
 import 'tus_uploader.dart';
 
+const int _kDefaultTusChunkSizeBytes = 5 * 1024 * 1024; // 5 MB default TUS chunk size.
+
 class UploadService {
   UploadService({
     ApiClient? apiClient,
@@ -132,6 +134,59 @@ class UploadService {
       return <String, String>{};
     }
 
+    int? asPositiveInt(dynamic value) {
+      if (value is int) {
+        return value > 0 ? value : null;
+      }
+      if (value is num) {
+        final rounded = value.round();
+        return rounded > 0 ? rounded : null;
+      }
+      if (value is String) {
+        final trimmed = value.trim();
+        if (trimmed.isEmpty) {
+          return null;
+        }
+        final parsed = int.tryParse(trimmed);
+        if (parsed != null && parsed > 0) {
+          return parsed;
+        }
+      }
+      return null;
+    }
+
+    int? chunkSizeFromMap(Map<dynamic, dynamic>? source) {
+      if (source == null || source.isEmpty) {
+        return null;
+      }
+      const keys = <String>[
+        'chunkSize',
+        'chunk_size',
+        'chunkSizeBytes',
+        'chunk_size_bytes',
+      ];
+      for (final key in keys) {
+        if (source.containsKey(key)) {
+          final parsed = asPositiveInt(source[key]);
+          if (parsed != null) {
+            return parsed;
+          }
+        }
+      }
+      return null;
+    }
+
+    int resolveChunkSize(int? requestedBytes) {
+      var chunkSize = requestedBytes ?? _kDefaultTusChunkSizeBytes;
+      if (chunkSize <= 0) {
+        chunkSize = _kDefaultTusChunkSizeBytes;
+      }
+      if (fileSize > 0 && chunkSize > fileSize) {
+        chunkSize = fileSize;
+      }
+      return chunkSize;
+    }
+
     final dynamic tusInfoRaw = rawUploadJson['tusInfo'];
     final String? tusUrlFromInfo =
         tusInfoRaw is Map ? asNonEmptyString(tusInfoRaw['endpoint']) : null;
@@ -162,7 +217,14 @@ class UploadService {
 
     final shouldUseTus = tusEndpoint != null && draft.type == 'video';
     if (shouldUseTus) {
-      debugPrint('[UploadService] Using TUS endpoint: ${tusEndpoint.toString()}');
+      final chunkSizeHint =
+          chunkSizeFromMap(tusInfoRaw is Map ? tusInfoRaw : null) ??
+              chunkSizeFromMap(rawUploadJson);
+      final resolvedChunkSize = resolveChunkSize(chunkSizeHint);
+      debugPrint(
+        '[UploadService] Using TUS endpoint: ${tusEndpoint.toString()} (chunkSize=$resolvedChunkSize'
+        '${chunkSizeHint != null ? ', hinted=$chunkSizeHint' : ''})',
+      );
       return _startTusUpload(
         draft: draft,
         description: description,
@@ -174,6 +236,7 @@ class UploadService {
         tusEndpoint: tusEndpoint,
         tusHeaders: tusHeaders,
         feedRefreshCallback: feedRefreshCallback,
+        chunkSize: resolvedChunkSize,
       );
     }
 
@@ -309,6 +372,7 @@ class UploadService {
     required Uri tusEndpoint,
     required Map<String, String> tusHeaders,
     required VoidCallback? feedRefreshCallback,
+    required int chunkSize,
   }) {
     final taskId = create.taskId ?? create.uid;
     final task = _createSyntheticTusTask(
@@ -334,6 +398,7 @@ class UploadService {
       description: description.trim(),
       completer: completer,
       feedRefreshCallback: feedRefreshCallback,
+      chunkSize: chunkSize,
     );
     _tusUploads[taskId] = state;
 
@@ -788,8 +853,9 @@ class _TusUploadState {
     required this.description,
     required this.completer,
     required this.feedRefreshCallback,
-    this.chunkSize = 5 * 1024 * 1024,
-  }) : tusHeaders = Map.unmodifiable(Map<String, String>.from(tusHeaders));
+    required this.chunkSize,
+  })  : assert(chunkSize > 0),
+        tusHeaders = Map.unmodifiable(Map<String, String>.from(tusHeaders));
 
   final UploadTask task;
   final File file;

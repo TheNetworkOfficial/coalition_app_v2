@@ -20,6 +20,29 @@ class MyApp extends StatelessWidget {
   }
 }
 
+class _FormatOption extends StatelessWidget {
+  const _FormatOption({
+    required this.format,
+    required this.label,
+  });
+
+  final ImageFormat format;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Radio<ImageFormat>(
+          value: format,
+        ),
+        Text(label),
+      ],
+    );
+  }
+}
+
 class ThumbnailRequest {
   const ThumbnailRequest({
     required this.video,
@@ -287,52 +310,25 @@ class _DemoHomeState extends State<DemoHome> {
             isDense: true,
             labelText: 'Thumbnail Format',
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: <Widget>[
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Radio<ImageFormat>(
-                    groupValue: _format,
-                    value: ImageFormat.JPEG,
-                    onChanged: (v) => setState(() {
-                      _format = v!;
-                      _editNode.unfocus();
-                    }),
-                  ),
-                  const Text('JPEG'),
-                ],
-              ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Radio<ImageFormat>(
-                    groupValue: _format,
-                    value: ImageFormat.PNG,
-                    onChanged: (v) => setState(() {
-                      _format = v!;
-                      _editNode.unfocus();
-                    }),
-                  ),
-                  const Text('PNG'),
-                ],
-              ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Radio<ImageFormat>(
-                    groupValue: _format,
-                    value: ImageFormat.WEBP,
-                    onChanged: (v) => setState(() {
-                      _format = v!;
-                      _editNode.unfocus();
-                    }),
-                  ),
-                  const Text('WebP'),
-                ],
-              ),
-            ],
+          child: RadioGroup<ImageFormat>(
+            groupValue: _format,
+            onChanged: (format) {
+              if (format == null) {
+                return;
+              }
+              setState(() {
+                _format = format;
+                _editNode.unfocus();
+              });
+            },
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: <Widget>[
+                _FormatOption(format: ImageFormat.JPEG, label: 'JPEG'),
+                _FormatOption(format: ImageFormat.PNG, label: 'PNG'),
+                _FormatOption(format: ImageFormat.WEBP, label: 'WebP'),
+              ],
+            ),
           ),
         ),
       )
