@@ -22,6 +22,8 @@ class PostReviewPage extends ConsumerStatefulWidget {
 }
 
 class _PostReviewPageState extends ConsumerState<PostReviewPage> {
+  static const int _coverThumbnailMaxDimension = 720;
+
   late final TextEditingController _descriptionController;
   bool _isPosting = false;
   VideoPlayerController? _videoController;
@@ -196,6 +198,8 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
         timeMs: frameMs,
         quality: 80,
         imageFormat: ImageFormat.JPEG,
+        maxHeight: _coverThumbnailMaxDimension,
+        maxWidth: _coverThumbnailMaxDimension,
       );
     } catch (error) {
       debugPrint('Cover thumbnail generation failed: $error');
