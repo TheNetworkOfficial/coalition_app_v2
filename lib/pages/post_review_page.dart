@@ -46,7 +46,6 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
       _coverFrameMs = initialCover;
       if (!kIsWeb) {
         _initializeVideoPreview();
-        unawaited(_refreshCoverThumbnail(initialCover));
       }
     } else {
       _coverFrameMs = widget.draft.coverFrameMs;
@@ -267,10 +266,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
               startMs,
               endMs > startMs ? endMs : startMs + 1,
             );
-    Uint8List? initialBytes = _coverThumbnail;
-    if (initialBytes == null) {
-      initialBytes = await _createThumbnail(sliderValue.toInt());
-    }
+    final Uint8List? initialBytes = _coverThumbnail;
 
     final result = await showModalBottomSheet<_CoverSelection>(
       context: context,
@@ -278,12 +274,12 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
       builder: (context) {
         double currentValue = sliderValue;
         Uint8List? previewBytes = initialBytes;
-        bool localLoading = false;
+        bool localLoading = previewBytes == null;
+        bool initialPreviewRequested = previewBytes != null;
         return StatefulBuilder(
           builder: (context, setModalState) {
-            Future<void> updatePreview(double value) async {
+            Future<void> loadPreview(double value) async {
               setModalState(() {
-                currentValue = value;
                 localLoading = true;
               });
               final bytes = await _createThumbnail(value.toInt());
@@ -294,6 +290,27 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
                 previewBytes = bytes;
                 localLoading = false;
               });
+            }
+
+            if (!initialPreviewRequested && previewBytes == null) {
+              initialPreviewRequested = true;
+              Future<void>(() async {
+                final bytes = await _createThumbnail(currentValue.toInt());
+                if (!mounted) {
+                  return;
+                }
+                setModalState(() {
+                  previewBytes = bytes;
+                  localLoading = false;
+                });
+              });
+            }
+
+            Future<void> updatePreview(double value) async {
+              setModalState(() {
+                currentValue = value;
+              });
+              await loadPreview(value);
             }
 
             return SafeArea(
