@@ -62,18 +62,34 @@ class UploadService {
     required String description,
     VoidCallback? onFeedRefreshRequested,
   }) async {
-    final file = File(draft.originalFilePath);
+    final preferProxy =
+        draft.type == 'video' && draft.hasVideoProxy && kPreferVideoProxyUploads;
+    var resolvedPath = draft.resolveUploadPath(preferProxy: preferProxy);
+    var file = File(resolvedPath);
+    if (!await file.exists() && preferProxy) {
+      debugPrint('[UploadService] Proxy not found at $resolvedPath; using original file');
+      resolvedPath = draft.resolveUploadPath(preferProxy: false);
+      file = File(resolvedPath);
+    }
+
     if (!await file.exists()) {
-      const message = 'Original file for upload not found';
-      debugPrint('[UploadService] $message');
-      return const UploadOutcome(ok: false, message: message);
+      debugPrint('[UploadService] Upload file missing at $resolvedPath');
+      return const UploadOutcome(
+        ok: false,
+        message: 'Upload file not found',
+      );
     }
 
     final fileSize = await file.length();
-    final resolvedFileName = p.basename(file.path);
+    final resolvedFileName = p.basename(resolvedPath);
     final fileName = (resolvedFileName.isEmpty || resolvedFileName == '.')
         ? 'upload'
         : resolvedFileName;
+
+    if (preferProxy && resolvedPath == draft.proxyFilePath) {
+      final resolution = draft.proxyMetadata?.resolution;
+      debugPrint('[UploadService] Uploading proxy file (resolution=$resolution)');
+    }
 
     final assumedContentType = draft.type == 'image'
         ? 'image/jpeg'

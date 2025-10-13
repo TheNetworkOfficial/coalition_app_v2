@@ -11,6 +11,7 @@ import 'package:video_player/video_player.dart';
 
 import '../models/post_draft.dart';
 import '../providers/upload_manager.dart';
+import '../services/video_proxy_service.dart';
 
 class PostReviewPage extends ConsumerStatefulWidget {
   const PostReviewPage({super.key, required this.draft});
@@ -35,6 +36,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
   Uint8List? _coverThumbnail;
   bool _isCoverLoading = false;
   Object? _videoInitError;
+  bool _uploadCompleted = false;
 
   @override
   void initState() {
@@ -59,6 +61,12 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     _descriptionController.dispose();
     _videoController?.removeListener(_handleVideoLoop);
     _videoController?.dispose();
+    if (_uploadCompleted) {
+      final proxyPath = widget.draft.proxyFilePath;
+      if (proxyPath != null) {
+        unawaited(VideoProxyService().deleteProxy(proxyPath));
+      }
+    }
     super.dispose();
   }
 
@@ -78,6 +86,9 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     try {
       final updatedDraft = PostDraft(
         originalFilePath: widget.draft.originalFilePath,
+        proxyFilePath: widget.draft.proxyFilePath,
+        proxyMetadata: widget.draft.proxyMetadata,
+        originalDurationMs: widget.draft.originalDurationMs,
         type: widget.draft.type,
         description: _descriptionController.text,
         videoTrim: widget.draft.videoTrim,
@@ -103,6 +114,11 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
         return;
       }
 
+      _uploadCompleted = true;
+      final proxyPath = widget.draft.proxyFilePath;
+      if (proxyPath != null) {
+        unawaited(VideoProxyService().deleteProxy(proxyPath));
+      }
       navigator.popUntil((route) => route.isFirst);
       router.go('/feed');
     } catch (error) {
@@ -131,7 +147,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     _trimEnd = trim != null ? Duration(milliseconds: trim.endMs) : null;
 
     final controller =
-        VideoPlayerController.file(File(widget.draft.originalFilePath));
+        VideoPlayerController.file(File(widget.draft.videoPlaybackPath));
     _videoController = controller;
     _videoInitFuture = controller.initialize().then((_) {
       _videoDuration = controller.value.duration;
@@ -194,7 +210,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     }
     try {
       return await VideoThumbnail.thumbnailData(
-        video: widget.draft.originalFilePath,
+        video: widget.draft.videoPlaybackPath,
         timeMs: frameMs,
         quality: 80,
         imageFormat: ImageFormat.JPEG,
