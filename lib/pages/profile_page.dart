@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -26,8 +27,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   List<Post> _posts = const [];
   bool _isLoading = true;
   bool _hasLoaded = false;
-  bool _hasPending = false;
-  String? _error;
+  final Random _random = Random();
   ProviderSubscription<UploadManager>? _uploadSubscription;
 
   @override
@@ -54,28 +54,25 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   }
 
   Future<void> _loadProfile({bool showLoader = true}) async {
+    if (!mounted) {
+      return;
+    }
     setState(() {
       if (showLoader) {
         _isLoading = true;
       }
-      _error = null;
     });
 
     final apiClient = ref.read(apiClientProvider);
     try {
-      final profile = await apiClient.getMyProfile();
-      final posts = await apiClient.getMyPosts(includePending: true);
-      final readyPosts = posts
-          .where((post) => post.isVideo && post.status == PostStatus.ready)
-          .toList();
-      final hasPending = posts.any((post) => post.status != PostStatus.ready);
+      final profile = await _fetchOrCreateProfile(apiClient);
+      final posts = await apiClient.getMyPosts();
       if (!mounted) {
         return;
       }
       setState(() {
         _profile = profile;
-        _posts = readyPosts;
-        _hasPending = hasPending;
+        _posts = posts;
         _isLoading = false;
         _hasLoaded = true;
       });
@@ -91,8 +88,14 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       if (!mounted) {
         return;
       }
+      if (error.statusCode != HttpStatus.notFound) {
+        _showProfileErrorSnackBar(
+          error.message.isNotEmpty
+              ? error.message
+              : 'Failed to load profile: ${error.statusCode}',
+        );
+      }
       setState(() {
-        _error = error.message;
         _isLoading = false;
         _hasLoaded = true;
       });
@@ -100,8 +103,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       if (!mounted) {
         return;
       }
+      _showProfileErrorSnackBar('Failed to load profile: $error');
       setState(() {
-        _error = error.toString();
         _isLoading = false;
         _hasLoaded = true;
       });
@@ -112,98 +115,133 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     await _loadProfile(showLoader: false);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final posts = _posts;
-    final profile = _profile;
+  Future<Profile> _fetchOrCreateProfile(ApiClient apiClient) async {
+    try {
+      return await apiClient.getMyProfile();
+    } on ApiException catch (error) {
+      if (error.statusCode == HttpStatus.notFound) {
+        final defaultDisplayName = _generateDefaultDisplayName();
+        final authState = ref.read(authStateProvider);
+        final username = authState.user?.username;
+        final update = ProfileUpdate(
+          displayName: defaultDisplayName,
+          username:
+              (username != null && username.isNotEmpty) ? username : null,
+        );
+        final upserted = await apiClient.upsertMyProfile(update);
+        try {
+          return await apiClient.getMyProfile();
+        } on ApiException catch (retryError) {
+          if (retryError.statusCode == HttpStatus.notFound) {
+            return upserted;
+          }
+          rethrow;
+        }
+      }
+      rethrow;
+    }
+  }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile'),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: _handleMenuSelected,
-            itemBuilder: (context) => [
-              const PopupMenuItem<String>(
-                value: 'edit',
-                child: Text('Edit profile'),
-              ),
-              const PopupMenuItem<String>(
-                value: 'signout',
-                child: Text('Sign out'),
-              ),
-            ],
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _refreshProfile,
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(
-              child: _ProfileHeader(
-                profile: profile,
-                isLoading: _isLoading,
-                hasError: _error != null,
-                onEditTap: _handleEditProfile,
+  String _generateDefaultDisplayName() {
+    final number = _random.nextInt(900000) + 100000;
+    return 'user$number';
+  }
+
+  void _showProfileErrorSnackBar(String message) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () {
+              _loadProfile();
+            },
               ),
             ),
-            if (_error != null)
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: _ProfileErrorView(
-                  message: _error!,
-                  onRetry: () => _loadProfile(),
-                ),
-              )
-            else if (_isLoading && !_hasLoaded)
-              SliverPadding(
-                padding: const EdgeInsets.all(12),
-                sliver: SliverGrid(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => const _ShimmerTile(),
-                    childCount: 6,
-                  ),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 6,
-                    mainAxisSpacing: 6,
-                    childAspectRatio: 1,
-                  ),
-                ),
-              )
-            else if (posts.isEmpty)
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: _ProfileEmptyState(
-                  hasPending: _hasPending,
-                  onRefresh: _refreshProfile,
-                ),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.all(12),
-                sliver: SliverGrid(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final post = posts[index];
-                      return _PostGridTile(
-                        post: post,
-                        onTap: () => _openPost(post),
-                      );
-                    },
-                    childCount: posts.length,
-                  ),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 6,
-                    mainAxisSpacing: 6,
-                    childAspectRatio: 1,
+          );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final authState = ref.watch(authStateProvider);
+    final posts = _posts;
+    final profile = _profile;
+    final isInitialLoading = _isLoading && !_hasLoaded;
+    final usernameValue = profile?.username?.trim().isNotEmpty == true
+        ? profile!.username!.trim()
+        : (authState.user?.username ?? '').trim();
+    final usernameLabel =
+        usernameValue.isNotEmpty ? '@$usernameValue' : 'Username pending';
+
+    return Scaffold(
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: _refreshProfile,
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+                  child: _ProfileDetailsSection(
+                    profile: profile,
+                    isLoading: _isLoading,
+                    onEditProfile: _handleEditProfile,
+                    onSignOut: _signOut,
+                    usernameLabel: usernameLabel,
                   ),
                 ),
               ),
-          ],
+              if (isInitialLoading)
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  sliver: SliverGrid(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) => const _ShimmerTile(),
+                      childCount: 9,
+                    ),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 6,
+                      mainAxisSpacing: 6,
+                      childAspectRatio: 1,
+                    ),
+                  ),
+                )
+              else if (posts.isEmpty)
+                const SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _NoPostsView(),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.all(12),
+                  sliver: SliverGrid(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final post = posts[index];
+                        return _PostGridTile(
+                          post: post,
+                          onTap: () => _openPost(post),
+                        );
+                      },
+                      childCount: posts.length,
+                    ),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 6,
+                      mainAxisSpacing: 6,
+                      childAspectRatio: 1,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -218,17 +256,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     );
     if (result != null) {
       setState(() => _profile = result);
-    }
-  }
-
-  void _handleMenuSelected(String value) {
-    switch (value) {
-      case 'edit':
-        _handleEditProfile();
-        break;
-      case 'signout':
-        _signOut();
-        break;
     }
   }
 
@@ -249,157 +276,114 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   }
 }
 
-class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader({
+class _ProfileDetailsSection extends StatelessWidget {
+  const _ProfileDetailsSection({
     required this.profile,
     required this.isLoading,
-    required this.hasError,
-    required this.onEditTap,
+    required this.onEditProfile,
+    required this.onSignOut,
+    required this.usernameLabel,
   });
 
   final Profile? profile;
   final bool isLoading;
-  final bool hasError;
-  final VoidCallback onEditTap;
+  final VoidCallback onEditProfile;
+  final VoidCallback onSignOut;
+  final String usernameLabel;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final displayName = profile?.displayName ?? 'Set your name';
-    final username = profile?.username != null
-        ? '@${profile!.username}'
-        : 'Add a username';
+    final displayName = profile?.displayName?.trim();
+    final avatarUrl = profile?.avatarUrl;
+    final bio = profile?.bio;
 
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 36,
-                backgroundImage: profile?.avatarUrl != null
-                    ? NetworkImage(profile!.avatarUrl!)
-                    : null,
-                child: profile?.avatarUrl == null
-                    ? const Icon(Icons.person, size: 36)
-                    : null,
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      displayName,
-                      style: theme.textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      username,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!isLoading && !hasError)
-                TextButton.icon(
-                  onPressed: onEditTap,
-                  icon: const Icon(Icons.edit_outlined),
-                  label: const Text('Edit'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            profile?.bio?.isNotEmpty == true
-                ? profile!.bio!
-                : 'Tell the community more about you.',
-            style: theme.textTheme.bodyMedium,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfileErrorView extends StatelessWidget {
-  const _ProfileErrorView({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'We couldn\'t load your profile.',
-              style: Theme.of(context).textTheme.titleMedium,
-              textAlign: TextAlign.center,
+            CircleAvatar(
+              radius: 36,
+              backgroundImage:
+                  avatarUrl != null ? NetworkImage(avatarUrl) : null,
+              child: avatarUrl == null ? const Icon(Icons.person, size: 36) : null,
             ),
-            const SizedBox(height: 8),
-            Text(
-              message,
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    displayName != null && displayName.isNotEmpty
+                        ? displayName
+                        : 'Set your display name',
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    usernameLabel,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton.icon(
+                    onPressed: isLoading ? null : onEditProfile,
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit profile'),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: onRetry,
-              child: const Text('Retry'),
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                switch (value) {
+                  case 'edit':
+                    onEditProfile();
+                    break;
+                  case 'signout':
+                    onSignOut();
+                    break;
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem<String>(
+                  value: 'edit',
+                  child: Text('Edit profile'),
+                ),
+                PopupMenuItem<String>(
+                  value: 'signout',
+                  child: Text('Sign out'),
+                ),
+              ],
             ),
           ],
         ),
-      ),
+        const SizedBox(height: 16),
+        Text(
+          bio?.isNotEmpty == true
+              ? bio!
+              : 'Tell the community more about you.',
+          style: theme.textTheme.bodyMedium,
+        ),
+      ],
     );
   }
 }
 
-class _ProfileEmptyState extends StatelessWidget {
-  const _ProfileEmptyState({required this.hasPending, required this.onRefresh});
-
-  final bool hasPending;
-  final Future<void> Function() onRefresh;
+class _NoPostsView extends StatelessWidget {
+  const _NoPostsView();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              hasPending ? Icons.hourglass_empty : Icons.video_library_outlined,
-              size: 64,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              hasPending
-                  ? 'Your video is processing—check back in a minute.'
-                  : 'You haven\'t uploaded any videos yet.',
-              style: theme.textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: hasPending
-                  ? () => onRefresh()
-                  : () => GoRouter.of(context).go('/create'),
-              child: Text(hasPending ? 'Refresh' : 'Upload a video'),
-            ),
-          ],
-        ),
+      child: Text(
+        'No posts yet.',
+        style: theme.textTheme.bodyMedium,
+        textAlign: TextAlign.center,
       ),
     );
   }
@@ -414,6 +398,11 @@ class _PostGridTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final duration = post.duration;
+    final hasThumb = post.thumbUrl != null && post.thumbUrl!.isNotEmpty;
+    final canUseMedia = !post.isVideo && post.mediaUrl.isNotEmpty;
+    final thumbnailUrl = hasThumb
+        ? post.thumbUrl!
+        : (canUseMedia ? post.mediaUrl : null);
     return GestureDetector(
       onTap: onTap,
       child: ClipRRect(
@@ -421,16 +410,26 @@ class _PostGridTile extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            CachedNetworkImage(
-              imageUrl: post.thumbUrl ?? post.mediaUrl,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => const _ShimmerTile(),
-              errorWidget: (context, url, error) => Container(
+            if (thumbnailUrl != null && thumbnailUrl.isNotEmpty)
+              CachedNetworkImage(
+                imageUrl: thumbnailUrl,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => const _ShimmerTile(),
+                errorWidget: (context, url, error) => Container(
+                  color: Colors.grey.shade300,
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.broken_image_outlined),
+                ),
+              )
+            else
+              Container(
                 color: Colors.grey.shade300,
                 alignment: Alignment.center,
-                child: const Icon(Icons.broken_image_outlined),
+                child: Icon(
+                  post.isVideo ? Icons.videocam_outlined : Icons.image_outlined,
+                  color: Colors.grey.shade600,
+                ),
               ),
-            ),
             if (duration != null)
               Positioned(
                 right: 6,

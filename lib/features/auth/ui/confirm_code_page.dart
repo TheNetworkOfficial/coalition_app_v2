@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../models/profile.dart';
+import '../../../providers/app_providers.dart';
+import '../../../services/api_client.dart';
 import '../../../services/auth_service.dart';
 import '../providers/auth_state.dart';
 
@@ -16,6 +19,7 @@ class _ConfirmCodePageState extends ConsumerState<ConfirmCodePage> {
   final TextEditingController _codeController = TextEditingController();
   String? _inputError;
   bool _navigatedAway = false;
+  bool _initialProfileSubmitted = false;
 
   @override
   void dispose() {
@@ -136,6 +140,10 @@ class _ConfirmCodePageState extends ConsumerState<ConfirmCodePage> {
       await ref
           .read(authStateProvider.notifier)
           .confirmSignUp(username: awaiting.username, code: code);
+      if (!_initialProfileSubmitted) {
+        _initialProfileSubmitted = true;
+        await _submitInitialProfileUsername(awaiting.username);
+      }
     } on AuthUiException catch (error) {
       ref.read(authStateProvider.notifier).clearError();
       setState(() {
@@ -154,6 +162,37 @@ class _ConfirmCodePageState extends ConsumerState<ConfirmCodePage> {
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(content: Text('Could not confirm code: $error')),
+        );
+    }
+  }
+
+  Future<void> _submitInitialProfileUsername(String username) async {
+    final trimmed = username.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final client = ref.read(apiClientProvider);
+      await client.upsertMyProfile(ProfileUpdate(username: trimmed));
+    } on ApiException catch (error) {
+      final message = error.message.isNotEmpty
+          ? error.message
+          : 'status ${error.statusCode ?? 'unknown'}';
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Could not finish profile setup: $message'),
+          ),
+        );
+    } catch (error) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Could not finish profile setup: $error'),
+          ),
         );
     }
   }

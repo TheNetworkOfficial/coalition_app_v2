@@ -258,6 +258,13 @@ class ApiClient {
     if (response.statusCode == HttpStatus.unauthorized) {
       throw ApiException('Unauthorized', statusCode: response.statusCode);
     }
+    if (response.statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Profile not found',
+        statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
         'Failed to load profile: ${response.statusCode}',
@@ -266,8 +273,9 @@ class ApiClient {
       );
     }
     final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    if (decoded is Map<String, dynamic>) {
-      return Profile.fromJson(decoded);
+    final profileMap = _extractProfileMap(decoded);
+    if (profileMap != null) {
+      return Profile.fromJson(profileMap);
     }
     throw ApiException('Unexpected profile response format');
   }
@@ -292,8 +300,9 @@ class ApiClient {
       );
     }
     final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    if (decoded is Map<String, dynamic>) {
-      return Profile.fromJson(decoded);
+    final profileMap = _extractProfileMap(decoded);
+    if (profileMap != null) {
+      return Profile.fromJson(profileMap);
     }
     throw ApiException('Unexpected profile update response');
   }
@@ -304,6 +313,9 @@ class ApiClient {
     if (response.statusCode == HttpStatus.unauthorized) {
       throw ApiException('Unauthorized', statusCode: response.statusCode);
     }
+    if (response.statusCode == HttpStatus.notFound) {
+      return const [];
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
         'Failed to load posts: ${response.statusCode}',
@@ -312,12 +324,13 @@ class ApiClient {
       );
     }
     final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    if (decoded is! List) {
+    final items = _extractItemsList(decoded);
+    if (items == null) {
       throw ApiException('Unexpected posts response');
     }
     final posts = <Post>[];
-    for (var i = 0; i < decoded.length; i++) {
-      final item = decoded[i];
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
       if (item is Map<String, dynamic>) {
         try {
           posts.add(Post.fromJson(item, fallbackId: 'me-$i'));
@@ -362,5 +375,42 @@ class ApiClient {
       return null;
     }
     return 'Bearer $token';
+  }
+
+  Map<String, dynamic>? _extractProfileMap(dynamic payload) {
+    if (payload is Map<String, dynamic>) {
+      final profile = payload['profile'];
+      if (profile is Map<String, dynamic>) {
+        return Map<String, dynamic>.from(profile);
+      }
+      final data = payload['data'];
+      if (data is Map<String, dynamic>) {
+        return Map<String, dynamic>.from(data);
+      }
+      final hasUserIdentifiers = payload.containsKey('userId') ||
+          payload.containsKey('id') ||
+          payload.containsKey('sub');
+      if (hasUserIdentifiers) {
+        return Map<String, dynamic>.from(payload);
+      }
+    }
+    return null;
+  }
+
+  List<dynamic>? _extractItemsList(dynamic payload) {
+    if (payload is List) {
+      return payload;
+    }
+    if (payload is Map<String, dynamic>) {
+      final items = payload['items'];
+      if (items is List) {
+        return List<dynamic>.from(items);
+      }
+      final data = payload['data'];
+      if (data is List) {
+        return List<dynamic>.from(data);
+      }
+    }
+    return null;
   }
 }

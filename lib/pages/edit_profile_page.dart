@@ -17,7 +17,6 @@ class EditProfilePage extends ConsumerStatefulWidget {
 class _EditProfilePageState extends ConsumerState<EditProfilePage> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _displayNameController;
-  late final TextEditingController _usernameController;
   late final TextEditingController _avatarUrlController;
   late final TextEditingController _bioController;
 
@@ -30,7 +29,6 @@ class _EditProfilePageState extends ConsumerState<EditProfilePage> {
     final profile = widget.initialProfile;
     _displayNameController =
         TextEditingController(text: profile?.displayName ?? '');
-    _usernameController = TextEditingController(text: profile?.username ?? '');
     _avatarUrlController =
         TextEditingController(text: profile?.avatarUrl ?? '');
     _bioController = TextEditingController(text: profile?.bio ?? '');
@@ -39,7 +37,6 @@ class _EditProfilePageState extends ConsumerState<EditProfilePage> {
   @override
   void dispose() {
     _displayNameController.dispose();
-    _usernameController.dispose();
     _avatarUrlController.dispose();
     _bioController.dispose();
     super.dispose();
@@ -75,19 +72,7 @@ class _EditProfilePageState extends ConsumerState<EditProfilePage> {
                 },
               ),
               const SizedBox(height: 16),
-              TextFormField(
-                controller: _usernameController,
-                decoration: const InputDecoration(labelText: 'Username'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Username is required';
-                  }
-                  if (value.contains(' ')) {
-                    return 'Username cannot contain spaces';
-                  }
-                  return null;
-                },
-              ),
+              _UsernameReadOnlyField(profile: widget.initialProfile),
               const SizedBox(height: 16),
               TextFormField(
                 controller: _avatarUrlController,
@@ -137,7 +122,6 @@ class _EditProfilePageState extends ConsumerState<EditProfilePage> {
     final apiClient = ref.read(apiClientProvider);
     final update = ProfileUpdate(
       displayName: _displayNameController.text.trim(),
-      username: _usernameController.text.trim(),
       avatarUrl: _avatarUrlController.text.trim().isEmpty
           ? null
           : _avatarUrlController.text.trim(),
@@ -169,5 +153,30 @@ class _EditProfilePageState extends ConsumerState<EditProfilePage> {
         setState(() => _isSaving = false);
       }
     }
+  }
+}
+
+class _UsernameReadOnlyField extends StatelessWidget {
+  const _UsernameReadOnlyField({this.profile});
+
+  final Profile? profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final username = profile?.username?.trim();
+    final theme = Theme.of(context);
+    final displayText = (username != null && username.isNotEmpty)
+        ? '@$username'
+        : 'Username set during sign-up';
+
+    return TextFormField(
+      initialValue: displayText,
+      readOnly: true,
+      enabled: false,
+      decoration: const InputDecoration(
+        labelText: 'Username',
+      ),
+      style: theme.textTheme.bodyMedium,
+    );
   }
 }

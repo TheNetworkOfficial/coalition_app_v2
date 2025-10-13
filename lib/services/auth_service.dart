@@ -373,17 +373,26 @@ class AuthService {
     }
     await configureIfNeeded();
     try {
-      final session = await Amplify.Auth.fetchAuthSession(
-        options: const FetchAuthSessionOptions(forceRefresh: false),
-      );
-      if (session is CognitoAuthSession) {
-        final tokens = session.userPoolTokensResult.valueOrNull;
-        if (tokens != null) {
-          return tokens.idToken.raw;
-        }
+      final token = await _tryFetchIdToken(forceRefresh: false);
+      if (token != null) {
+        return token;
       }
+      return await _tryFetchIdToken(forceRefresh: true);
     } on AuthException catch (error, stackTrace) {
       debugPrint('[AuthService] fetchAuthToken failed: $error\n$stackTrace');
+    }
+    return null;
+  }
+
+  Future<String?> _tryFetchIdToken({required bool forceRefresh}) async {
+    final session = await Amplify.Auth.fetchAuthSession(
+      options: FetchAuthSessionOptions(forceRefresh: forceRefresh),
+    );
+    if (session is CognitoAuthSession) {
+      final tokens = session.userPoolTokensResult.valueOrNull;
+      if (tokens != null) {
+        return tokens.idToken.raw;
+      }
     }
     return null;
   }
