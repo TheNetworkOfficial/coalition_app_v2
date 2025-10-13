@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 const String kApiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
 const bool kAuthBypassEnabled =
     bool.fromEnvironment('AUTH_BYPASS', defaultValue: false);
+const bool kPreferVideoProxyUploads =
+    bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: true);
 
 String normalizeApiBaseUrl(String base) {
   if (base.isEmpty) {

@@ -172,6 +172,7 @@ class ApiClient {
           : {
               'startMs': trim.startMs,
               'endMs': trim.endMs,
+              'durationMs': trim.durationMs,
             },
       'coverFrameMs': coverFrameMs,
       'imageCrop': imageCrop == null

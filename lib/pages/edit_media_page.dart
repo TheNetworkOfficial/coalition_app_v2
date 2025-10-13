@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:video_editor_2/video_editor.dart';
 
 import '../models/post_draft.dart';
+import '../models/video_proxy.dart';
+import '../services/video_proxy_service.dart';
+import '../widgets/video_proxy_dialog.dart';
 import 'post_review_page.dart';
 
 class EditMediaData {
@@ -14,12 +17,16 @@ class EditMediaData {
     required this.sourceAssetId,
     required this.originalFilePath,
     this.originalDurationMs,
+    this.proxyResult,
+    this.proxyRequest,
   }) : assert(type == 'image' || type == 'video');
 
   final String type;
   final String sourceAssetId;
   final String originalFilePath;
   final int? originalDurationMs;
+  final VideoProxyResult? proxyResult;
+  final VideoProxyRequest? proxyRequest;
 }
 
 class EditMediaPage extends StatefulWidget {
@@ -35,6 +42,10 @@ class _EditMediaPageState extends State<EditMediaPage> {
   static const _videoTrimHeight = 72.0;
 
   VideoEditorController? _videoController;
+  VideoProxyResult? _activeProxy;
+  bool _usingFallbackProxy = false;
+  bool _isPreparingFallback = false;
+  bool _retainProxyForNextStep = false;
   bool _videoInitialized = false;
   Object? _videoInitError;
   Duration? _videoDuration;
@@ -53,7 +64,14 @@ class _EditMediaPageState extends State<EditMediaPage> {
   void initState() {
     super.initState();
     if (widget.media.type == 'video') {
-      _initVideoController();
+      final proxy = widget.media.proxyResult;
+      if (proxy == null) {
+        _videoInitError = const VideoProxyException('Missing video proxy');
+      } else {
+        _activeProxy = proxy;
+        _usingFallbackProxy = proxy.metadata.resolution == VideoProxyResolution.hd720;
+        unawaited(_initVideoController());
+      }
     } else {
       _loadImageMetadata();
     }
@@ -66,24 +84,48 @@ class _EditMediaPageState extends State<EditMediaPage> {
       controller.removeListener(_handleVideoControllerUpdate);
       unawaited(controller.dispose());
     }
+    if (!_retainProxyForNextStep) {
+      final proxy = _activeProxy;
+      if (proxy != null) {
+        unawaited(VideoProxyService().deleteProxy(proxy.filePath));
+      }
+    }
     _trimSeekDebounce?.cancel();
     super.dispose();
   }
 
   Future<void> _initVideoController() async {
-    final maxDuration = widget.media.originalDurationMs != null &&
-            widget.media.originalDurationMs! > 0
-        ? Duration(milliseconds: widget.media.originalDurationMs!)
+    final proxy = _activeProxy;
+    if (proxy == null) {
+      setState(() {
+        _videoInitError = const VideoProxyException('Missing video proxy');
+      });
+      return;
+    }
+
+    final durationMs = proxy.metadata.durationMs > 0
+        ? proxy.metadata.durationMs
+        : (widget.media.originalDurationMs ?? 0);
+    final maxDuration = durationMs > 0
+        ? Duration(milliseconds: durationMs)
         : const Duration(days: 1);
 
     final controller = VideoEditorController.file(
-      XFile(widget.media.originalFilePath),
+      XFile(proxy.filePath),
       maxDuration: maxDuration,
       minDuration: Duration.zero,
     );
 
+    final previous = _videoController;
+    if (previous != null) {
+      previous.removeListener(_handleVideoControllerUpdate);
+      unawaited(previous.dispose());
+    }
+
     setState(() {
       _videoController = controller;
+      _videoInitialized = false;
+      _videoInitError = null;
     });
 
     try {
@@ -100,10 +142,99 @@ class _EditMediaPageState extends State<EditMediaPage> {
       });
     } catch (error) {
       if (!mounted) return;
+      final fallbackSucceeded = await _attemptFallback(error);
+      if (fallbackSucceeded) {
+        return;
+      }
       setState(() {
-        _videoInitError = error;
+        _videoInitError ??= error;
       });
     }
+  }
+
+  Future<bool> _attemptFallback(Object error) async {
+    if (_usingFallbackProxy || _isPreparingFallback) {
+      return false;
+    }
+    final request = widget.media.proxyRequest;
+    if (request == null) {
+      return false;
+    }
+
+    debugPrint('[EditMediaPage] Video initialization failed, attempting fallback: $error');
+
+    setState(() {
+      _isPreparingFallback = true;
+    });
+
+    final service = VideoProxyService();
+    final fallbackJob = service.createJob(request: request.fallback720());
+    final outcome = await showDialog<VideoProxyDialogOutcome>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => VideoProxyProgressDialog(
+        job: fallbackJob,
+        title: 'Preparing smaller video…',
+        allowCancel: true,
+      ),
+    );
+
+    if (!mounted) {
+      setState(() {
+        _isPreparingFallback = false;
+      });
+      return false;
+    }
+
+    setState(() {
+      _isPreparingFallback = false;
+    });
+
+    if (outcome == null || outcome.cancelled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video optimization canceled.')),
+      );
+      setState(() {
+        _videoInitError = const VideoProxyException('Video optimization canceled');
+      });
+      return false;
+    }
+
+    if (outcome.error != null) {
+      final errorMessage = outcome.error is VideoProxyException
+          ? (outcome.error as VideoProxyException).message
+          : outcome.error.toString();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to prepare fallback: $errorMessage')),
+      );
+      setState(() {
+        _videoInitError = VideoProxyException('Fallback failed: $errorMessage');
+      });
+      return false;
+    }
+
+    final result = outcome.result;
+    if (result == null) {
+      return false;
+    }
+
+    final previousProxy = _activeProxy;
+    if (previousProxy != null) {
+      unawaited(service.deleteProxy(previousProxy.filePath));
+    }
+
+    setState(() {
+      _activeProxy = result;
+      _usingFallbackProxy = true;
+      _videoInitError = null;
+    });
+
+    debugPrint(
+      '[EditMediaPage] Fallback proxy ready ${result.metadata.width}x${result.metadata.height} in ${result.transcodeDurationMs}ms',
+    );
+
+    await _initVideoController();
+    return true;
   }
 
   Future<void> _loadImageMetadata() async {
@@ -172,7 +303,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
                 MediaQuery.of(context).padding.bottom + 16,
               ),
               child: ElevatedButton(
-                onPressed: _canContinue ? _onContinuePressed : null,
+                onPressed: _canContinue ? () => _onContinuePressed() : null,
                 child: const Text('Continue'),
               ),
             ),
@@ -184,7 +315,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
 
   bool get _canContinue {
     if (_isVideo) {
-      return _videoInitialized && _videoInitError == null;
+      return _videoInitialized && _videoInitError == null && !_isPreparingFallback;
     }
     if (_imageLoadFailed) {
       return false;
@@ -450,9 +581,21 @@ class _EditMediaPageState extends State<EditMediaPage> {
     return _rotationTurns.isOdd ? 1 / baseAspect : baseAspect;
   }
 
-  void _onContinuePressed() {
+  Future<void> _onContinuePressed() async {
+    if (_isVideo && _activeProxy == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video proxy missing. Please retry.')),
+      );
+      return;
+    }
+
+    _retainProxyForNextStep = true;
+
     final draft = PostDraft(
       originalFilePath: widget.media.originalFilePath,
+      proxyFilePath: _activeProxy?.filePath,
+      proxyMetadata: _activeProxy?.metadata,
+      originalDurationMs: widget.media.originalDurationMs,
       type: widget.media.type,
       description: '',
       videoTrim: _buildVideoTrim(),
@@ -460,11 +603,19 @@ class _EditMediaPageState extends State<EditMediaPage> {
       imageCrop: _buildImageCrop(),
     );
 
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PostReviewPage(draft: draft),
       ),
     );
+
+    if (mounted) {
+      setState(() {
+        _retainProxyForNextStep = false;
+      });
+    } else {
+      _retainProxyForNextStep = false;
+    }
   }
 
   VideoTrimData? _buildVideoTrim() {
@@ -483,7 +634,14 @@ class _EditMediaPageState extends State<EditMediaPage> {
         return null;
       }
     }
-    return VideoTrimData(startMs: start, endMs: end);
+    final total = controller.videoDuration.inMilliseconds;
+    final trimmed = (end - start).clamp(0, total);
+    final durationMs = trimmed is num ? trimmed.round() : (end - start);
+    return VideoTrimData(
+      startMs: start,
+      endMs: end,
+      durationMs: durationMs,
+    );
   }
 
   int? _buildCoverFrameMs() {

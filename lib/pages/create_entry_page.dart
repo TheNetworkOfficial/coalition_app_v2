@@ -1,16 +1,27 @@
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
+import '../models/video_proxy.dart';
 import '../pickers/lightweight_asset_picker.dart';
+import '../services/video_proxy_service.dart';
+import '../widgets/video_proxy_dialog.dart';
 import 'edit_media_page.dart';
 
-class CreateEntryPage extends StatelessWidget {
+enum _ProxyRetryDecision { cancel, retry, fallback }
+
+class CreateEntryPage extends StatefulWidget {
   const CreateEntryPage({super.key});
 
+  @override
+  State<CreateEntryPage> createState() => _CreateEntryPageState();
+}
+
+class _CreateEntryPageState extends State<CreateEntryPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -26,14 +37,15 @@ class CreateEntryPage extends StatelessWidget {
                 .headlineSmall
                 ?.copyWith(color: Colors.white),
           ),
-          onPressed: () => _onCreatePressed(context),
+          onPressed: _onCreatePressed,
           child: const Text('Create'),
         ),
       ),
     );
   }
 
-  Future<void> _onCreatePressed(BuildContext context) async {
+  Future<void> _onCreatePressed() async {
+    final context = this.context;
     if (!await _ensureMediaPermissions(context)) {
       return;
     }
@@ -90,24 +102,153 @@ class CreateEntryPage extends StatelessWidget {
     final asset = assets.first;
     final file = await asset.file;
 
-    if (!context.mounted || file == null) {
+    if (!mounted || file == null) {
       return;
     }
 
     final isVideo = asset.type == AssetType.video;
+    VideoProxyResult? proxy;
+    VideoProxyRequest? request;
+    final originalDurationMs =
+        isVideo ? Duration(seconds: asset.duration).inMilliseconds : null;
+
+    if (isVideo) {
+      final videoRequest = VideoProxyRequest(
+        sourcePath: file.path,
+        targetWidth: 1080,
+        targetHeight: 1920,
+        estimatedDurationMs: originalDurationMs,
+      );
+      final result = await _prepareVideoProxy(context, videoRequest);
+      if (result == null) {
+        return;
+      }
+      proxy = result;
+      request = videoRequest;
+    }
+
     final media = EditMediaData(
       type: isVideo ? 'video' : 'image',
       sourceAssetId: asset.id,
       originalFilePath: file.path,
-      originalDurationMs:
-          isVideo ? Duration(seconds: asset.duration).inMilliseconds : null,
+      originalDurationMs: originalDurationMs,
+      proxyResult: proxy,
+      proxyRequest: request,
     );
+
+    if (!mounted) {
+      return;
+    }
 
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => EditMediaPage(media: media),
       ),
     );
+  }
+
+  Future<VideoProxyResult?> _prepareVideoProxy(
+    BuildContext context,
+    VideoProxyRequest request,
+  ) async {
+    var currentRequest = request;
+    final service = VideoProxyService();
+
+    while (mounted) {
+      final job = service.createJob(request: currentRequest);
+      final outcome = await showDialog<VideoProxyDialogOutcome>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => VideoProxyProgressDialog(
+          job: job,
+          title: 'Preparing video…',
+          message: 'Optimizing for editing.',
+          allowCancel: true,
+        ),
+      );
+
+      if (outcome == null) {
+        return null;
+      }
+
+      if (outcome.cancelled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video preparation canceled.')),
+        );
+        return null;
+      }
+
+      if (outcome.isSuccess && outcome.result != null) {
+        final result = outcome.result!;
+        debugPrint(
+          '[CreateEntryPage] Proxy ready ${result.metadata.width}x${result.metadata.height} in ${result.transcodeDurationMs}ms (resolution=${result.metadata.resolution})',
+        );
+        if (currentRequest.resolution == VideoProxyResolution.hd720) {
+          debugPrint('[CreateEntryPage] Using 720p proxy fallback.');
+        }
+        return result;
+      }
+
+      final errorMessage = outcome.error is VideoProxyException
+          ? (outcome.error as VideoProxyException).message
+          : outcome.error?.toString() ?? 'Unknown error';
+
+      final decision = await _showProxyErrorDialog(
+        context,
+        errorMessage: errorMessage,
+        allowFallback: currentRequest.resolution != VideoProxyResolution.hd720,
+      );
+
+      if (decision == _ProxyRetryDecision.retry) {
+        currentRequest = request;
+        continue;
+      }
+
+      if (decision == _ProxyRetryDecision.fallback) {
+        currentRequest = request.fallback720();
+        continue;
+      }
+
+      return null;
+    }
+
+    return null;
+  }
+
+  Future<_ProxyRetryDecision> _showProxyErrorDialog(
+    BuildContext context, {
+    required String errorMessage,
+    required bool allowFallback,
+  }) async {
+    final actions = <Widget>[
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(_ProxyRetryDecision.cancel),
+        child: const Text('Cancel'),
+      ),
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(_ProxyRetryDecision.retry),
+        child: const Text('Retry'),
+      ),
+      if (allowFallback)
+        TextButton(
+          onPressed: () =>
+              Navigator.of(context).pop(_ProxyRetryDecision.fallback),
+          child: const Text('Try smaller version'),
+        ),
+    ];
+
+    final decision = await showDialog<_ProxyRetryDecision>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Video preparation failed'),
+        content: Text(
+          'We couldn\'t optimize your video. $errorMessage',
+        ),
+        actions: actions,
+      ),
+    );
+
+    return decision ?? _ProxyRetryDecision.cancel;
   }
 
   Future<bool> _ensureMediaPermissions(BuildContext context) async {
