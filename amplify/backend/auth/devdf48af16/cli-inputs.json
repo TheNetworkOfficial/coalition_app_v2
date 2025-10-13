@@ -1,0 +1,77 @@
+{
+  "version": "1",
+  "cognitoConfig": {
+    "identityPoolName": "devdf48af16_identitypool_df48af16",
+    "allowUnauthenticatedIdentities": false,
+    "resourceNameTruncated": "devdf48af16",
+    "userPoolName": "devdf48af16_userpool_df48af16",
+    "autoVerifiedAttributes": [
+      "email"
+    ],
+    "mfaConfiguration": "OPTIONAL",
+    "mfaTypes": [
+      "SMS Text Message",
+      "TOTP"
+    ],
+    "smsAuthenticationMessage": "Your Coalition verification code is {####}. It expires in 10 minutes. If you didn’t request this, ignore this message.",
+    "smsVerificationMessage": "Your verification code is {####}",
+    "emailVerificationSubject": "Verify your Coalition account",
+    "emailVerificationMessage": "Your Coalition verification code is {####}. It expires in 10 minutes. If you didn’t request this, please ignore this email.",
+    "defaultPasswordPolicy": false,
+    "passwordPolicyMinLength": 8,
+    "passwordPolicyCharacters": [],
+    "requiredAttributes": [
+      "email"
+    ],
+    "aliasAttributes": [],
+    "userpoolClientGenerateSecret": false,
+    "userpoolClientRefreshTokenValidity": "30",
+    "userpoolClientWriteAttributes": [
+      "email"
+    ],
+    "userpoolClientReadAttributes": [
+      "email"
+    ],
+    "userpoolClientLambdaRole": "devdf4df48af16_userpoolclient_lambda_role",
+    "userpoolClientSetAttributes": false,
+    "sharedId": "df48af16",
+    "resourceName": "devdf48af16",
+    "authSelections": "identityPoolAndUserPool",
+    "useDefault": "manual",
+    "hostedUI": true,
+    "triggers": {},
+    "hostedUIDomainName": "coalition-auth-app-dev",
+    "authProvidersUserPool": [
+      "Google"
+    ],
+    "hostedUIProviderMeta": "[{\"ProviderName\":\"Google\",\"authorize_scopes\":\"openid email profile\",\"AttributeMapping\":{\"email\":\"email\",\"username\":\"sub\"}}]",
+    "userPoolGroupList": [],
+    "serviceName": "Cognito",
+    "verificationBucketName": "devdf48af16verificationbucket",
+    "usernameCaseSensitive": false,
+    "useEnabledMfas": true,
+    "authRoleArn": {
+      "Fn::GetAtt": [
+        "AuthRole",
+        "Arn"
+      ]
+    },
+    "unauthRoleArn": {
+      "Fn::GetAtt": [
+        "UnauthRole",
+        "Arn"
+      ]
+    },
+    "breakCircularDependency": true,
+    "dependsOn": [],
+    "permissions": [],
+    "thirdPartyAuth": false,
+    "userPoolGroups": false,
+    "adminQueries": false,
+    "oAuthMetadata": "{\"AllowedOAuthFlows\":[\"code\"],\"AllowedOAuthScopes\":[\"phone\",\"email\",\"openid\",\"profile\"],\"CallbackURLs\":[\"myapp://auth/\"],\"LogoutURLs\":[\"myapp://auth/\"]}",
+    "authProviders": [],
+    "parentStack": {
+      "Ref": "AWS::StackId"
+    }
+  }
+}

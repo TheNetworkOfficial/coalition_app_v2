@@ -1,0 +1,21 @@
+{
+  "coalition": {
+    "awscloudformation": {
+      "AuthRoleName": "amplify-dev-coalition-edc8d-authRole",
+      "UnauthRoleArn": "arn:aws:iam::553967852168:role/amplify-dev-coalition-edc8d-unauthRole",
+      "AuthRoleArn": "arn:aws:iam::553967852168:role/amplify-dev-coalition-edc8d-authRole",
+      "Region": "us-west-2",
+      "DeploymentBucketName": "amplify-dev-coalition-edc8d-deployment",
+      "UnauthRoleName": "amplify-dev-coalition-edc8d-unauthRole",
+      "StackName": "amplify-dev-coalition-edc8d",
+      "StackId": "arn:aws:cloudformation:us-west-2:553967852168:stack/amplify-dev-coalition-edc8d/76968300-a6cc-11f0-8c66-025a9209a173",
+      "AmplifyAppId": "db0sed86pb5rl",
+      "AuthTriggerTemplateURL": "https://s3.amazonaws.com/amplify-dev-coalition-edc8d-deployment/amplify-cfn-templates/auth/auth-trigger-cloudformation-template.json"
+    },
+    "categories": {
+      "auth": {
+        "devdf48af16": {}
+      }
+    }
+  }
+}

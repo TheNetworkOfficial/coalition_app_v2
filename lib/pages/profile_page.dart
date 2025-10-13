@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:background_downloader/background_downloader.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -511,9 +510,9 @@ class _ShimmerTileState extends State<_ShimmerTile>
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: [
-                          Colors.grey.shade200.withOpacity(0.0),
-                          Colors.grey.shade100.withOpacity(0.7),
-                          Colors.grey.shade200.withOpacity(0.0),
+                          Colors.grey.shade200.withAlpha(0),
+                          Colors.grey.shade100.withAlpha(179), // ~0.7 * 255
+                          Colors.grey.shade200.withAlpha(0),
                         ],
                         begin: Alignment.centerLeft,
                         end: Alignment.centerRight,

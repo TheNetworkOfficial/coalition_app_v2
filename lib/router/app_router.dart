@@ -1,5 +1,7 @@
 import 'package:coalition_app_v2/features/auth/ui/auth_gate_page.dart';
+import 'package:coalition_app_v2/features/auth/ui/confirm_code_page.dart';
 import 'package:coalition_app_v2/features/feed/ui/feed_page.dart';
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../app_shell.dart';
@@ -24,6 +26,13 @@ final GoRouter appRouter = GoRouter(
       name: 'auth',
       pageBuilder: (context, state) => const NoTransitionPage(
         child: AuthGatePage(),
+      ),
+    ),
+    GoRoute(
+      path: '/auth/confirm-code',
+      name: 'confirm-code',
+      pageBuilder: (context, state) => const MaterialPage(
+        child: ConfirmCodePage(),
       ),
     ),
     StatefulShellRoute(
