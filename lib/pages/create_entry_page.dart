@@ -1,9 +1,12 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
+
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../models/video_proxy.dart';
 import '../pickers/lightweight_asset_picker.dart';
@@ -109,15 +112,36 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
     final originalDurationMs =
         isVideo ? Duration(seconds: asset.duration).inMilliseconds : null;
 
+    Uint8List? posterBytes;
+
     if (isVideo) {
+      try {
+        posterBytes = await VideoThumbnail.thumbnailData(
+          video: file.path,
+          imageFormat: ImageFormat.PNG,
+          timeMs: 300,
+          maxWidth: 360,
+          quality: 75,
+        );
+      } catch (error) {
+        debugPrint('[CreateEntryPage] Failed to create video poster: $error');
+      }
+
       final videoRequest = VideoProxyRequest(
         sourcePath: file.path,
-        targetWidth: 1080,
-        targetHeight: 1920,
+        targetWidth: 540,
+        targetHeight: 960,
         estimatedDurationMs: originalDurationMs,
-        frameRateHint: 30,
+        frameRateHint: 24,
+        keyframeIntervalSeconds: 1,
+        audioBitrateKbps: 96,
+        previewQuality: VideoProxyPreviewQuality.fast,
       );
-      final result = await _prepareVideoProxy(context, videoRequest);
+      final result = await _prepareVideoProxy(
+        context,
+        videoRequest,
+        posterBytes: posterBytes,
+      );
       if (result == null) {
         return;
       }
@@ -147,8 +171,9 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
 
   Future<VideoProxyResult?> _prepareVideoProxy(
     BuildContext context,
-    VideoProxyRequest request,
-  ) async {
+    VideoProxyRequest request, {
+    Uint8List? posterBytes,
+  }) async {
     var currentRequest = request;
     final service = VideoProxyService();
 
@@ -162,6 +187,7 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
           title: 'Preparing video…',
           message: 'Optimizing for editing.',
           allowCancel: true,
+          posterBytes: posterBytes,
         ),
       );
 
@@ -181,8 +207,8 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
         debugPrint(
           '[CreateEntryPage] Proxy ready ${result.metadata.width}x${result.metadata.height} in ${result.transcodeDurationMs}ms (resolution=${result.metadata.resolution})',
         );
-        if (currentRequest.resolution == VideoProxyResolution.hd720) {
-          debugPrint('[CreateEntryPage] Using 720p proxy fallback.');
+        if (currentRequest.resolution == VideoProxyResolution.p360) {
+          debugPrint('[CreateEntryPage] Using fast fallback proxy.');
         }
         return result;
       }
@@ -194,7 +220,8 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
       final decision = await _showProxyErrorDialog(
         context,
         errorMessage: errorMessage,
-        allowFallback: currentRequest.resolution != VideoProxyResolution.hd720,
+        allowFallback:
+            currentRequest.resolution != VideoProxyResolution.p360,
       );
 
       if (decision == _ProxyRetryDecision.retry) {
@@ -203,7 +230,7 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
       }
 
       if (decision == _ProxyRetryDecision.fallback) {
-        currentRequest = request.fallback720();
+        currentRequest = request.fallbackPreview();
         continue;
       }
 

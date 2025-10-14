@@ -22,11 +22,13 @@ class _NativeProxyEvent {
     required this.jobId,
     required this.type,
     this.progress,
+    this.fallbackTriggered = false,
   });
 
   final String jobId;
   final String type;
   final double? progress;
+  final bool fallbackTriggered;
 
   factory _NativeProxyEvent.fromDynamic(Object? value) {
     if (value is! Map) {
@@ -35,10 +37,12 @@ class _NativeProxyEvent {
     final jobId = value['jobId']?.toString();
     final type = value['type']?.toString();
     final progress = value['progress'];
+    final fallbackTriggered = value['fallbackTriggered'] == true;
     return _NativeProxyEvent(
       jobId: jobId ?? '',
       type: type ?? 'unknown',
       progress: progress is num ? progress.toDouble() : null,
+      fallbackTriggered: fallbackTriggered,
     );
   }
 
@@ -46,9 +50,10 @@ class _NativeProxyEvent {
 }
 
 class VideoProxyProgress {
-  const VideoProxyProgress(this.fraction);
+  const VideoProxyProgress(this.fraction, {this.fallbackTriggered = false});
 
   final double? fraction;
+  final bool fallbackTriggered;
 }
 
 class VideoProxyJob {
@@ -109,15 +114,68 @@ class VideoProxyService {
     final progressController = StreamController<VideoProxyProgress>.broadcast();
     final completer = Completer<VideoProxyResult>();
     final stopwatch = Stopwatch()..start();
-    final useFallback = request.resolution == VideoProxyResolution.hd720;
     var cancelled = false;
+    var autoFallbackRequested = request.forceFallback;
+    Timer? timeoutTimer;
+    Timer? stallTimer;
+    var fallbackScheduled = request.forceFallback;
+
+    void cancelTimers() {
+      timeoutTimer?.cancel();
+      stallTimer?.cancel();
+    }
+
+    void triggerFallback() {
+      if (cancelled || fallbackScheduled) {
+        return;
+      }
+      fallbackScheduled = true;
+      autoFallbackRequested = true;
+      progressController.add(
+        const VideoProxyProgress(null, fallbackTriggered: true),
+      );
+      unawaited(_methodChannel.invokeMethod('cancelProxy', {
+        'jobId': jobId,
+      }));
+    }
+
+    void scheduleTimeouts() {
+      if (fallbackScheduled || cancelled) {
+        return;
+      }
+      timeoutTimer?.cancel();
+      timeoutTimer = Timer(const Duration(seconds: 40), triggerFallback);
+      stallTimer?.cancel();
+      stallTimer = Timer(const Duration(seconds: 10), triggerFallback);
+    }
+
+    void resetStallTimer() {
+      if (fallbackScheduled || cancelled) {
+        return;
+      }
+      stallTimer?.cancel();
+      stallTimer = Timer(const Duration(seconds: 10), triggerFallback);
+    }
 
     StreamSubscription<_NativeProxyEvent>? subscription;
     subscription = _progressEvents
         .where((event) => event.jobId == jobId && event.isProgress)
         .listen((event) {
       if (cancelled) return;
-      progressController.add(VideoProxyProgress(event.progress));
+      resetStallTimer();
+      final shouldNotifyFallback = event.fallbackTriggered && !autoFallbackRequested;
+      if (shouldNotifyFallback) {
+        autoFallbackRequested = true;
+        progressController.add(
+          const VideoProxyProgress(null, fallbackTriggered: true),
+        );
+      }
+      progressController.add(
+        VideoProxyProgress(
+          event.progress,
+          fallbackTriggered: shouldNotifyFallback,
+        ),
+      );
     });
 
     Future<void> finalize() async {
@@ -149,20 +207,27 @@ class VideoProxyService {
       }
     }
 
+    Future<Map<String, dynamic>?> _invokeProxy(VideoProxyRequest proxyRequest) async {
+      final cacheDir = await _ensureCacheDirectory();
+      final args = proxyRequest.toPlatformRequest(jobId: jobId)
+        ..addAll({
+          'outputDirectory': cacheDir.path,
+          'enableLogging': enableLogging,
+        });
+
+      final methodName = proxyRequest.forceFallback
+          ? 'createProxyFallback720p'
+          : 'createProxy';
+
+      return _methodChannel.invokeMapMethod<String, dynamic>(methodName, args);
+    }
+
     Future<void> startJob() async {
       try {
-        final cacheDir = await _ensureCacheDirectory();
-        final args = request.toPlatformRequest(jobId: jobId)
-          ..addAll({
-            'outputDirectory': cacheDir.path,
-            'enableLogging': enableLogging,
-          });
-
         await emitSourceSummary();
 
-        final methodName = useFallback ? 'createProxyFallback720p' : 'createProxy';
-        final response =
-            await _methodChannel.invokeMapMethod<String, dynamic>(methodName, args);
+        var currentRequest = request;
+        Map<String, dynamic>? response;
 
         if (cancelled) {
           if (!completer.isCompleted) {
@@ -171,14 +236,40 @@ class VideoProxyService {
           return;
         }
 
-        if (response == null || response['ok'] != true) {
+        while (true) {
+          fallbackScheduled = currentRequest.forceFallback;
+          final responseFuture = _invokeProxy(currentRequest);
+          if (!currentRequest.forceFallback) {
+            scheduleTimeouts();
+          }
+          response = await responseFuture;
+          cancelTimers();
+
+          if (response != null && response['ok'] == true) {
+            break;
+          }
+
           final code = response?['code']?.toString();
+
+          if (cancelled) {
+            if (!completer.isCompleted) {
+              completer.completeError(const VideoProxyCancelException());
+            }
+            return;
+          }
+
+          if (fallbackScheduled && code == 'cancelled') {
+            currentRequest = currentRequest.fallbackPreview();
+            continue;
+          }
+
           if (code == 'cancelled') {
             if (!completer.isCompleted) {
               completer.completeError(const VideoProxyCancelException());
             }
             return;
           }
+
           final message = response?['message']?.toString() ?? 'Unknown error';
           if (!completer.isCompleted) {
             completer.completeError(VideoProxyException(message, code: code));
@@ -207,9 +298,12 @@ class VideoProxyService {
             (response['transcodeDurationMs'] as num?)?.toInt() ?? stopwatch.elapsedMilliseconds;
 
         final maxEdge = width >= height ? width : height;
-        final resolution = maxEdge <= 1280
-            ? VideoProxyResolution.hd720
-            : VideoProxyResolution.hd1080;
+        final resolution = () {
+          if (maxEdge <= 640) return VideoProxyResolution.p360;
+          if (maxEdge <= 960) return VideoProxyResolution.p540;
+          if (maxEdge <= 1280) return VideoProxyResolution.hd720;
+          return VideoProxyResolution.hd1080;
+        }();
 
         final metadata = VideoProxyMetadata(
           width: width,
@@ -225,7 +319,7 @@ class VideoProxyService {
           metadata: metadata,
           request: request,
           transcodeDurationMs: transcodeDurationMs,
-          usedFallback720p: usedFallbackFlag,
+          usedFallback720p: usedFallbackFlag || autoFallbackRequested,
         );
 
         if (enableLogging) {
@@ -263,6 +357,7 @@ class VideoProxyService {
           completer.completeError(VideoProxyException('Failed to prepare proxy: $error'));
         }
       } finally {
+        cancelTimers();
         stopwatch.stop();
         await finalize();
       }

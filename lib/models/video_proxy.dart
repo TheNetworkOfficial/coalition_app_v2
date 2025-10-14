@@ -1,9 +1,13 @@
 import 'dart:math' as math;
 
 enum VideoProxyResolution {
-  hd1080,
+  p360,
+  p540,
   hd720,
+  hd1080,
 }
+
+enum VideoProxyPreviewQuality { fast, quality }
 
 class VideoProxyRequest {
   const VideoProxyRequest({
@@ -14,6 +18,8 @@ class VideoProxyRequest {
     this.frameRateHint,
     this.keyframeIntervalSeconds = 2,
     this.audioBitrateKbps = 128,
+    this.previewQuality = VideoProxyPreviewQuality.fast,
+    this.forceFallback = false,
   })  : assert(targetWidth > 0),
         assert(targetHeight > 0);
 
@@ -24,12 +30,23 @@ class VideoProxyRequest {
   final int? frameRateHint;
   final int keyframeIntervalSeconds;
   final int audioBitrateKbps;
+  final VideoProxyPreviewQuality previewQuality;
+  final bool forceFallback;
 
   bool get isPortraitCanvas => targetHeight >= targetWidth;
 
   VideoProxyResolution get resolution {
     final maxEdge = math.max(targetWidth, targetHeight);
-    return maxEdge <= 1280 ? VideoProxyResolution.hd720 : VideoProxyResolution.hd1080;
+    if (maxEdge <= 640) {
+      return VideoProxyResolution.p360;
+    }
+    if (maxEdge <= 960) {
+      return VideoProxyResolution.p540;
+    }
+    if (maxEdge <= 1280) {
+      return VideoProxyResolution.hd720;
+    }
+    return VideoProxyResolution.hd1080;
   }
 
   int get maxLongEdge => math.max(targetWidth, targetHeight);
@@ -52,6 +69,8 @@ class VideoProxyRequest {
       'letterbox': true,
       'fastStart': true,
       'estimatedDurationMs': estimatedDurationMs,
+      'previewQuality': previewQuality.name.toUpperCase(),
+      'forceFallback': forceFallback,
     };
   }
 
@@ -63,6 +82,8 @@ class VideoProxyRequest {
     int? frameRateHint,
     int? keyframeIntervalSeconds,
     int? audioBitrateKbps,
+    VideoProxyPreviewQuality? previewQuality,
+    bool? forceFallback,
   }) {
     return VideoProxyRequest(
       sourcePath: sourcePath ?? this.sourcePath,
@@ -73,14 +94,22 @@ class VideoProxyRequest {
       keyframeIntervalSeconds:
           keyframeIntervalSeconds ?? this.keyframeIntervalSeconds,
       audioBitrateKbps: audioBitrateKbps ?? this.audioBitrateKbps,
+      previewQuality: previewQuality ?? this.previewQuality,
+      forceFallback: forceFallback ?? this.forceFallback,
     );
   }
 
-  VideoProxyRequest fallback720() {
-    if (isPortraitCanvas) {
-      return copyWith(targetWidth: 720, targetHeight: 1280);
-    }
-    return copyWith(targetWidth: 1280, targetHeight: 720);
+  VideoProxyRequest fallbackPreview() {
+    final portrait = isPortraitCanvas;
+    return copyWith(
+      targetWidth: portrait ? 360 : 640,
+      targetHeight: portrait ? 640 : 360,
+      frameRateHint: 24,
+      keyframeIntervalSeconds: 1,
+      audioBitrateKbps: 96,
+      previewQuality: VideoProxyPreviewQuality.fast,
+      forceFallback: true,
+    );
   }
 }
 
@@ -121,8 +150,8 @@ class VideoProxyResult {
   final int transcodeDurationMs;
   final bool usedFallback720p;
 
-  bool get usedFallback =>
-      usedFallback720p || metadata.resolution == VideoProxyResolution.hd720;
+  bool get usedFallback => usedFallback720p ||
+      metadata.resolution == VideoProxyResolution.p360;
 }
 
 class VideoProxyException implements Exception {
