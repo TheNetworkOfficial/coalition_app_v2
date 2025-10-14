@@ -115,6 +115,7 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
         targetWidth: 1080,
         targetHeight: 1920,
         estimatedDurationMs: originalDurationMs,
+        frameRateHint: 30,
       );
       final result = await _prepareVideoProxy(context, videoRequest);
       if (result == null) {

@@ -11,6 +11,9 @@ class VideoProxyRequest {
     required this.targetWidth,
     required this.targetHeight,
     this.estimatedDurationMs,
+    this.frameRateHint,
+    this.keyframeIntervalSeconds = 2,
+    this.audioBitrateKbps = 128,
   })  : assert(targetWidth > 0),
         assert(targetHeight > 0);
 
@@ -18,6 +21,9 @@ class VideoProxyRequest {
   final int targetWidth;
   final int targetHeight;
   final int? estimatedDurationMs;
+  final int? frameRateHint;
+  final int keyframeIntervalSeconds;
+  final int audioBitrateKbps;
 
   bool get isPortraitCanvas => targetHeight >= targetWidth;
 
@@ -26,17 +32,47 @@ class VideoProxyRequest {
     return maxEdge <= 1280 ? VideoProxyResolution.hd720 : VideoProxyResolution.hd1080;
   }
 
+  int get maxLongEdge => math.max(targetWidth, targetHeight);
+
+  Map<String, Object?> toPlatformRequest({
+    required String jobId,
+  }) {
+    return {
+      'jobId': jobId,
+      'sourcePath': sourcePath,
+      'targetCanvas': {
+        'width': targetWidth,
+        'height': targetHeight,
+      },
+      'maxLongEdge': maxLongEdge,
+      'frameRateHint': frameRateHint,
+      'keyframeIntervalSeconds': keyframeIntervalSeconds,
+      'audioBitrateKbps': audioBitrateKbps,
+      'bakeRotation': true,
+      'letterbox': true,
+      'fastStart': true,
+      'estimatedDurationMs': estimatedDurationMs,
+    };
+  }
+
   VideoProxyRequest copyWith({
     String? sourcePath,
     int? targetWidth,
     int? targetHeight,
     int? estimatedDurationMs,
+    int? frameRateHint,
+    int? keyframeIntervalSeconds,
+    int? audioBitrateKbps,
   }) {
     return VideoProxyRequest(
       sourcePath: sourcePath ?? this.sourcePath,
       targetWidth: targetWidth ?? this.targetWidth,
       targetHeight: targetHeight ?? this.targetHeight,
       estimatedDurationMs: estimatedDurationMs ?? this.estimatedDurationMs,
+      frameRateHint: frameRateHint ?? this.frameRateHint,
+      keyframeIntervalSeconds:
+          keyframeIntervalSeconds ?? this.keyframeIntervalSeconds,
+      audioBitrateKbps: audioBitrateKbps ?? this.audioBitrateKbps,
     );
   }
 
@@ -54,6 +90,7 @@ class VideoProxyMetadata {
     required this.height,
     required this.durationMs,
     required this.resolution,
+    required this.rotationBaked,
     this.frameRate,
   })  : assert(width > 0),
         assert(height > 0),
@@ -64,6 +101,7 @@ class VideoProxyMetadata {
   final int durationMs;
   final VideoProxyResolution resolution;
   final double? frameRate;
+  final bool rotationBaked;
 
   bool get isPortrait => height >= width;
 }
@@ -74,16 +112,17 @@ class VideoProxyResult {
     required this.metadata,
     required this.request,
     required this.transcodeDurationMs,
+    this.usedFallback720p = false,
   });
 
   final String filePath;
   final VideoProxyMetadata metadata;
   final VideoProxyRequest request;
   final int transcodeDurationMs;
+  final bool usedFallback720p;
 
   bool get usedFallback =>
-      metadata.resolution == VideoProxyResolution.hd720 &&
-      request.resolution == VideoProxyResolution.hd720;
+      usedFallback720p || metadata.resolution == VideoProxyResolution.hd720;
 }
 
 class VideoProxyException implements Exception {
