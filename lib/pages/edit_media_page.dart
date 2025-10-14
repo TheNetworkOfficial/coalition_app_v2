@@ -70,7 +70,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
       } else {
         _activeProxy = proxy;
         _usingFallbackProxy =
-            proxy.metadata.resolution == VideoProxyResolution.hd720;
+            proxy.metadata.resolution == VideoProxyResolution.p360;
         unawaited(_initVideoController());
       }
     } else {
@@ -170,7 +170,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
     });
 
     final service = VideoProxyService();
-    final fallbackJob = service.createJob(request: request.fallback720());
+    final fallbackJob = service.createJob(request: request.fallbackPreview());
     final outcome = await showDialog<VideoProxyDialogOutcome>(
       context: context,
       barrierDismissible: false,

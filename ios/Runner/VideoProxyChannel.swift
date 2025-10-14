@@ -1,9 +1,75 @@
 import AVFoundation
+import CoreMedia
 import Flutter
 import Foundation
 
 private let proxyChannelName = "coalition/video_proxy"
 private let proxyProgressChannelName = "coalition/video_proxy/progress"
+
+private enum PreviewTier {
+  case fast
+  case quality
+  case fallback
+}
+
+private struct PreviewProfile {
+  let size: CGSize
+  let frameRate: Int
+  let keyframeInterval: Int
+  let videoBitrate: Int
+  let audioBitrate: Int
+  let audioSampleRate: Int
+}
+
+private func parsePreviewTier(_ value: String?, isFallback: Bool) -> PreviewTier {
+  if isFallback { return .fallback }
+  guard let value else { return .fast }
+  return value.uppercased() == "QUALITY" ? .quality : .fast
+}
+
+private func profile(for tier: PreviewTier) -> PreviewProfile {
+  switch tier {
+  case .fast:
+    return PreviewProfile(
+      size: CGSize(width: 540, height: 960),
+      frameRate: 24,
+      keyframeInterval: 24,
+      videoBitrate: 1_000_000,
+      audioBitrate: 96_000,
+      audioSampleRate: 44_100
+    )
+  case .quality:
+    return PreviewProfile(
+      size: CGSize(width: 720, height: 1280),
+      frameRate: 24,
+      keyframeInterval: 24,
+      videoBitrate: 1_500_000,
+      audioBitrate: 128_000,
+      audioSampleRate: 48_000
+    )
+  case .fallback:
+    return PreviewProfile(
+      size: CGSize(width: 360, height: 640),
+      frameRate: 24,
+      keyframeInterval: 24,
+      videoBitrate: 800_000,
+      audioBitrate: 96_000,
+      audioSampleRate: 44_100
+    )
+  }
+}
+
+private func shouldPassthroughAudio(_ track: AVAssetTrack?) -> Bool {
+  guard let track else { return false }
+  let bitrate = track.estimatedDataRate
+  guard bitrate <= 128_000 else { return false }
+  guard let formatDesc = track.formatDescriptions.first as? CMAudioFormatDescription else { return false }
+  guard let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee else { return false }
+  let isAac = asbd.mFormatID == kAudioFormatMPEG4AAC
+  let sampleRate = Int(asbd.mSampleRate)
+  let validSampleRate = sampleRate == 44_100 || sampleRate == 48_000
+  return isAac && validSampleRate
+}
 
 final class VideoProxyChannel: NSObject, FlutterStreamHandler {
   private var eventSink: FlutterEventSink?
@@ -38,16 +104,17 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
       let args = arguments as? [String: Any],
       let jobId = args["jobId"] as? String,
       let sourcePath = args["sourcePath"] as? String,
-      let targetCanvas = args["targetCanvas"] as? [String: Any],
       let outputDirectory = args["outputDirectory"] as? String
     else {
       result(["ok": false, "code": "invalid_args", "message": "Missing arguments", "recoverable": true])
       return
     }
 
-    let targetWidth = (targetCanvas["width"] as? NSNumber)?.intValue ?? 1080
-    let targetHeight = (targetCanvas["height"] as? NSNumber)?.intValue ?? 1920
-    let frameRateHint = (args["frameRateHint"] as? NSNumber)?.intValue ?? 30
+    let previewQuality = args["previewQuality"] as? String
+    let forceFallback = (args["forceFallback"] as? NSNumber)?.boolValue ?? false
+    let tier = parsePreviewTier(previewQuality, isFallback: fallback || forceFallback)
+    let profile = profile(for: tier)
+    let frameRateHint = profile.frameRate
     let enableLogging = (args["enableLogging"] as? NSNumber)?.boolValue ?? true
 
     let outputDirectoryURL = URL(fileURLWithPath: outputDirectory, isDirectory: true)
@@ -65,12 +132,13 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
     let job = ProxyJob(
       jobId: jobId,
       sourcePath: sourcePath,
-      targetSize: CGSize(width: targetWidth, height: targetHeight),
+      targetSize: profile.size,
       frameRateHint: frameRateHint,
-      fallback: fallback,
+      fallback: fallback || forceFallback,
       outputURL: outputURL,
       enableLogging: enableLogging,
-      completion: result
+      completion: result,
+      tier: tier
     )
 
     syncQueue.async {
@@ -108,6 +176,9 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
       return
     }
 
+    let audioTrack = asset.tracks(withMediaType: .audio).first
+    job.audioPassthrough = shouldPassthroughAudio(audioTrack)
+
     let composition = AVMutableComposition()
     guard let compositionVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
       complete(jobId: job.jobId, payload: ["ok": false, "code": "composition_failed", "message": "Unable to create video track", "recoverable": true])
@@ -117,7 +188,7 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
     do {
       try compositionVideo.insertTimeRange(CMTimeRange(start: .zero, duration: asset.duration), of: videoTrack, at: .zero)
       compositionVideo.preferredTransform = .identity
-      if let audioTrack = asset.tracks(withMediaType: .audio).first,
+      if let audioTrack,
          let compositionAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
         try compositionAudio.insertTimeRange(CMTimeRange(start: .zero, duration: asset.duration), of: audioTrack, at: .zero)
       }
@@ -180,6 +251,7 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
         "jobId": job.jobId,
         "type": "progress",
         "progress": exportSession.progress,
+        "fallbackTriggered": job.fallback,
       ])
     }
     timer.resume()
@@ -188,7 +260,11 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
     job.progressTimer = timer
     job.startDate = Date()
     if job.enableLogging {
-      print("[VideoProxyChannel] Starting job=\(job.jobId) source=\(job.sourcePath) target=\(Int(job.targetSize.width))x\(Int(job.targetSize.height)) fallback=\(job.fallback)")
+      print(
+        "[VideoProxyChannel] Starting job=\(job.jobId) source=\(job.sourcePath) " +
+          "target=\(Int(job.targetSize.width))x\(Int(job.targetSize.height)) tier=\(job.tier) " +
+          "fallback=\(job.fallback) audioPassthrough=\(job.audioPassthrough)"
+      )
     }
 
     exportSession.exportAsynchronously { [weak self] in
@@ -199,7 +275,11 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
         let elapsed = Int(Date().timeIntervalSince(job.startDate ?? Date()) * 1000)
         let metadata = self.inspectProxy(at: job.outputURL, frameRateHint: job.frameRateHint, fallbackSize: job.targetSize)
         if job.enableLogging {
-          print("[VideoProxyChannel] Completed job=\(job.jobId) elapsed=\(elapsed)ms size=\(metadata.width)x\(metadata.height) fallback=\(job.fallback)")
+          print(
+            "[VideoProxyChannel] Completed job=\(job.jobId) elapsed=\(elapsed)ms " +
+              "size=\(metadata.width)x\(metadata.height) tier=\(job.tier) " +
+              "fallback=\(job.fallback) audioPassthrough=\(job.audioPassthrough)"
+          )
         }
         let payload: [String: Any] = [
           "ok": true,
@@ -318,9 +398,11 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
     let outputURL: URL
     let enableLogging: Bool
     let completion: FlutterResult
+    let tier: PreviewTier
     var exportSession: AVAssetExportSession?
     var progressTimer: DispatchSourceTimer?
     var startDate: Date?
+    var audioPassthrough: Bool = false
 
     init(jobId: String,
          sourcePath: String,
@@ -329,7 +411,8 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
          fallback: Bool,
          outputURL: URL,
          enableLogging: Bool,
-         completion: @escaping FlutterResult) {
+         completion: @escaping FlutterResult,
+         tier: PreviewTier) {
       self.jobId = jobId
       self.sourcePath = sourcePath
       self.targetSize = targetSize
@@ -338,6 +421,7 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
       self.outputURL = outputURL
       self.enableLogging = enableLogging
       self.completion = completion
+      self.tier = tier
     }
   }
 

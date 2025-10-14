@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -36,12 +37,14 @@ class VideoProxyProgressDialog extends StatefulWidget {
     this.title = 'Preparing video…',
     this.message,
     this.allowCancel = true,
+    this.posterBytes,
   });
 
   final VideoProxyJob job;
   final String title;
   final String? message;
   final bool allowCancel;
+  final Uint8List? posterBytes;
 
   @override
   State<VideoProxyProgressDialog> createState() =>
@@ -52,6 +55,7 @@ class _VideoProxyProgressDialogState extends State<VideoProxyProgressDialog> {
   StreamSubscription<VideoProxyProgress>? _subscription;
   double? _progress;
   bool _didPop = false;
+  bool _fallbackNotified = false;
 
   @override
   void initState() {
@@ -61,6 +65,16 @@ class _VideoProxyProgressDialogState extends State<VideoProxyProgressDialog> {
       setState(() {
         _progress = event.fraction;
       });
+      if (event.fallbackTriggered && !_fallbackNotified) {
+        _fallbackNotified = true;
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        messenger?.showSnackBar(
+          const SnackBar(
+            content: Text('Optimizing for quick editing…'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
     });
     widget.job.future.then((result) {
       _pop(VideoProxyDialogOutcome.success(result));
@@ -110,6 +124,20 @@ class _VideoProxyProgressDialogState extends State<VideoProxyProgressDialog> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (widget.posterBytes != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 9 / 16,
+                    child: Image.memory(
+                      widget.posterBytes!,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: CircularProgressIndicator(value: value?.toDouble()),

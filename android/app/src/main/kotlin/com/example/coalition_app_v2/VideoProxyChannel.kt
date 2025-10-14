@@ -1,6 +1,8 @@
 package com.example.coalition_app_v2
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
@@ -13,6 +15,7 @@ import com.otaliastudios.transcoder.sink.DefaultDataSink
 import com.otaliastudios.transcoder.source.FilePathDataSource
 import com.otaliastudios.transcoder.strategy.DefaultAudioStrategy
 import com.otaliastudios.transcoder.strategy.DefaultVideoStrategy
+import com.otaliastudios.transcoder.strategy.PassThroughTrackStrategy
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -26,9 +29,111 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.max
 
 private const val TAG = "VideoProxyChannel"
+
+private enum class PreviewTier {
+    FAST,
+    QUALITY,
+    FALLBACK,
+}
+
+private data class PreviewProfile(
+    val width: Int,
+    val height: Int,
+    val frameRate: Int,
+    val keyframeIntervalSec: Float,
+    val videoBitrate: Long,
+    val audioBitrateKbps: Int,
+    val audioSampleRate: Int,
+)
+
+private data class AudioInfo(
+    val mimeType: String?,
+    val bitrate: Int?,
+    val sampleRate: Int?,
+)
+
+private fun parsePreviewTier(preview: String?, fallback: Boolean): PreviewTier {
+    if (fallback) return PreviewTier.FALLBACK
+    return when (preview?.uppercase()) {
+        "QUALITY" -> PreviewTier.QUALITY
+        else -> PreviewTier.FAST
+    }
+}
+
+private fun previewProfileFor(tier: PreviewTier): PreviewProfile {
+    return when (tier) {
+        PreviewTier.FAST -> PreviewProfile(
+            width = 540,
+            height = 960,
+            frameRate = 24,
+            keyframeIntervalSec = 0.5f,
+            videoBitrate = 1_000_000L,
+            audioBitrateKbps = 96,
+            audioSampleRate = 44_100,
+        )
+        PreviewTier.QUALITY -> PreviewProfile(
+            width = 720,
+            height = 1280,
+            frameRate = 24,
+            keyframeIntervalSec = 0.75f,
+            videoBitrate = 1_500_000L,
+            audioBitrateKbps = 128,
+            audioSampleRate = 48_000,
+        )
+        PreviewTier.FALLBACK -> PreviewProfile(
+            width = 360,
+            height = 640,
+            frameRate = 24,
+            keyframeIntervalSec = 0.5f,
+            videoBitrate = 800_000L,
+            audioBitrateKbps = 96,
+            audioSampleRate = 44_100,
+        )
+    }
+}
+
+private fun readAudioInfo(sourcePath: String): AudioInfo? {
+    val extractor = MediaExtractor()
+    return try {
+        extractor.setDataSource(sourcePath)
+        for (index in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(index)
+            val mime = format.getString(MediaFormat.KEY_MIME)
+            if (mime?.startsWith("audio/") == true) {
+                val bitrate = if (format.containsKey(MediaFormat.KEY_BIT_RATE)) {
+                    format.getInteger(MediaFormat.KEY_BIT_RATE)
+                } else {
+                    null
+                }
+                val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                    format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                } else {
+                    null
+                }
+                return AudioInfo(mime, bitrate, sampleRate)
+            }
+        }
+        null
+    } catch (error: Throwable) {
+        Log.w(TAG, "Unable to read audio info", error)
+        null
+    } finally {
+        extractor.release()
+    }
+}
+
+private fun shouldPassthroughAudio(info: AudioInfo?): Boolean {
+    if (info == null) return false
+    val mime = info.mimeType?.lowercase() ?: return false
+    val bitrate = info.bitrate ?: return false
+    val sampleRate = info.sampleRate ?: return false
+    if (!mime.contains("aac") && !mime.contains("mp4a")) return false
+    if (bitrate > 128_000) return false
+    if (sampleRate != 44_100 && sampleRate != 48_000) return false
+    return true
+}
 
 class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger) :
     MethodChannel.MethodCallHandler,
@@ -90,12 +195,22 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
             return
         }
 
-        val targetCanvas = args["targetCanvas"] as? Map<*, *>
-        val targetWidth = (targetCanvas?.get("width") as? Number)?.toInt() ?: 1080
-        val targetHeight = (targetCanvas?.get("height") as? Number)?.toInt() ?: 1920
-        val frameRateHint = (args["frameRateHint"] as? Number)?.toInt() ?: 30
-        val keyIntervalSeconds = (args["keyframeIntervalSeconds"] as? Number)?.toFloat() ?: 2f
-        val audioBitrateKbps = (args["audioBitrateKbps"] as? Number)?.toInt() ?: 128
+        val previewQualityArg = args["previewQuality"]?.toString()
+        val forceFallbackFlag = args["forceFallback"] as? Boolean ?: false
+        val tier = parsePreviewTier(previewQualityArg, isFallback || forceFallbackFlag)
+        val profile = previewProfileFor(tier)
+        var targetWidth = profile.width
+        var targetHeight = profile.height
+        if (targetWidth > targetHeight) {
+            val swap = targetWidth
+            targetWidth = targetHeight
+            targetHeight = swap
+        }
+        val frameRateHint = profile.frameRate
+        val keyIntervalSeconds = profile.keyframeIntervalSec
+        val audioBitrateKbps = profile.audioBitrateKbps
+        val audioInfo = readAudioInfo(sourcePath)
+        val audioPassthrough = shouldPassthroughAudio(audioInfo)
         val outputDirectoryPath = args["outputDirectory"]?.toString()
         val enableLogging = args["enableLogging"] as? Boolean ?: true
 
@@ -110,23 +225,23 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
             return
         }
 
-        val maxEdge = max(targetWidth, targetHeight)
-        val targetBitrate = if (maxEdge <= 1280) 3_000_000L else 5_000_000L
-
         val jobOutput = createOutputFile(outputDirectory)
 
         val videoStrategy = DefaultVideoStrategy.exact(targetWidth, targetHeight)
-            .bitRate(targetBitrate)
-            .frameRate(frameRateHint)
+            .bitRate(profile.videoBitrate)
+            .frameRate(profile.frameRate)
             .keyFrameInterval(keyIntervalSeconds)
             .build()
 
-        val audioStrategy = DefaultAudioStrategy.builder()
-            .channels(2)
-            .sampleRate(48_000)
-            // FIX: builder expects Long bps; convert kbps -> bps as Long
-            .bitRate(audioBitrateKbps.toLong() * 1000L)
-            .build()
+        val audioStrategy = if (audioPassthrough) {
+            PassThroughTrackStrategy()
+        } else {
+            DefaultAudioStrategy.builder()
+                .channels(DefaultAudioStrategy.CHANNELS_AS_INPUT)
+                .sampleRate(profile.audioSampleRate)
+                .bitRate(audioBitrateKbps.toLong() * 1000L)
+                .build()
+        }
 
         val rotationDegrees = readRotationDegrees(sourcePath)
 
@@ -149,6 +264,7 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                         outputFile = jobOutput,
                         frameRateHint = frameRateHint,
                         fallback = isFallback,
+                        tier = tier,
                         enableLogging = enableLogging,
                     )
 
@@ -174,7 +290,9 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                     if (enableLogging) {
                         Log.d(
                             TAG,
-                            "Starting proxy job=$jobId source=$sourcePath target=${targetWidth}x$targetHeight fallback=$isFallback",
+                            "Starting proxy job=$jobId source=$sourcePath " +
+                                "target=${targetWidth}x$targetHeight tier=${tier.name} " +
+                                "fallback=$isFallback audioPassthrough=$audioPassthrough",
                         )
                     }
                 } catch (error: Throwable) {
@@ -259,11 +377,12 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         outputFile: File,
         frameRateHint: Int,
         fallback: Boolean,
+        tier: PreviewTier,
         enableLogging: Boolean,
     ): TranscoderListener {
         return object : TranscoderListener {
             override fun onTranscodeProgress(progress: Double) {
-                emitProgress(jobId, progress)
+                emitProgress(jobId, progress, fallback)
             }
 
             override fun onTranscodeCompleted(successCode: Int) {
@@ -275,7 +394,7 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                         if (enableLogging) {
                             Log.d(
                                 TAG,
-                                "Proxy job=$jobId completed in ${elapsedMs}ms size=${metadata.width}x${metadata.height} fallback=$fallback",
+                                "Proxy job=$jobId completed in ${elapsedMs}ms size=${metadata.width}x${metadata.height} tier=${tier.name} fallback=$fallback",
                             )
                         }
                         val payload = mapOf(
@@ -338,13 +457,14 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         }
     }
 
-    private fun emitProgress(jobId: String, progress: Double) {
+    private fun emitProgress(jobId: String, progress: Double, fallback: Boolean) {
         val sink = eventSink ?: return
         sink.success(
             mapOf(
                 "jobId" to jobId,
                 "type" to "progress",
                 "progress" to progress,
+                "fallbackTriggered" to fallback,
             ),
         )
     }
