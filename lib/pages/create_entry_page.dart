@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
@@ -76,10 +75,8 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
 
     List<AssetEntity>? assets;
     try {
-      assets = await AssetPicker.pickAssetsWithDelegate<
-          AssetEntity,
-          AssetPathEntity,
-          LightweightAssetPickerProvider>(
+      assets = await AssetPicker.pickAssetsWithDelegate<AssetEntity,
+          AssetPathEntity, LightweightAssetPickerProvider>(
         context,
         delegate: delegate,
         permissionRequestOption: permissionOption,

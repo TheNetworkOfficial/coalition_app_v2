@@ -45,9 +45,7 @@ class VideoProxyService {
 
   Future<Directory> _ensureCacheDirectory() async {
     final existing = _cacheDirectory;
-    if (existing != null) {
-      return existing;
-    }
+    if (existing != null) return existing;
     final base = await getTemporaryDirectory();
     final dir = Directory(p.join(base.path, 'video_proxies'));
     await dir.create(recursive: true);
@@ -58,9 +56,7 @@ class VideoProxyService {
   Future<void> deleteProxy(String path) async {
     try {
       final file = File(path);
-      if (await file.exists()) {
-        await file.delete();
-      }
+      if (await file.exists()) await file.delete();
     } catch (error) {
       debugPrint('[VideoProxyService] Failed to delete proxy at $path: $error');
     }
@@ -76,21 +72,16 @@ class VideoProxyService {
     final stopwatch = Stopwatch()..start();
 
     Future<void> emitProgress(Statistics statistics) async {
-      if (cancelled) {
-        return;
-      }
+      if (cancelled) return;
       final durationMs = request.estimatedDurationMs;
       double? fraction;
       if (durationMs != null && durationMs > 0) {
         final time = statistics.getTime();
-        if (time != null) {
-          final ratio = time / durationMs;
-          fraction = ratio.clamp(0, 1.0);
-        }
+        final ratio = time / durationMs;
+        fraction = ratio.clamp(0, 1.0);
       }
-      if (!progressController.isClosed) {
+      if (!progressController.isClosed)
         progressController.add(VideoProxyProgress(fraction));
-      }
     }
 
     Future<VideoProxyResult> onSuccess(String outputPath) async {
@@ -100,50 +91,55 @@ class VideoProxyService {
       int height = request.targetHeight;
       int durationMs = request.estimatedDurationMs ?? 0;
       double? frameRate;
+
       if (info != null) {
         final duration = info.getDuration();
         if (duration != null) {
           final parsed = double.tryParse(duration);
-          if (parsed != null) {
-            durationMs = (parsed * 1000).round();
-          }
+          if (parsed != null) durationMs = (parsed * 1000).round();
         }
+
         final streams = info.getStreams();
-        if (streams != null) {
-          for (final stream in streams) {
-            if (stream.getType() == 'video') {
-              final widthString = stream.getWidth();
-              final heightString = stream.getHeight();
-              final frameRateString = stream.getAverageFrameRate() ?? stream.getRFrameRate();
-              final parsedWidth = int.tryParse(widthString ?? '');
-              final parsedHeight = int.tryParse(heightString ?? '');
-              if (parsedWidth != null && parsedWidth > 0) {
-                width = parsedWidth;
+        for (final stream in streams) {
+          if (stream.getType() == 'video') {
+            // getters can return non-String objects depending on ffprobe bindings; normalize to String
+            final widthString = stream.getWidth()?.toString();
+            final heightString = stream.getHeight()?.toString();
+            final props = stream.getAllProperties();
+            final frameRateString =
+                (stream.getAverageFrameRate()?.toString()) ??
+                    props?['r_frame_rate']?.toString() ??
+                    props?['avg_frame_rate']?.toString();
+
+            final parsedWidth = int.tryParse(widthString ?? '');
+            final parsedHeight = int.tryParse(heightString ?? '');
+            if (parsedWidth != null && parsedWidth > 0) width = parsedWidth;
+            if (parsedHeight != null && parsedHeight > 0) height = parsedHeight;
+
+            if (frameRateString != null && frameRateString.contains('/')) {
+              final parts = frameRateString.split('/');
+              final numerator = double.tryParse(parts[0]);
+              final denominator =
+                  double.tryParse(parts.length > 1 ? parts[1] : '1');
+              if (numerator != null &&
+                  denominator != null &&
+                  denominator != 0) {
+                frameRate = numerator / denominator;
               }
-              if (parsedHeight != null && parsedHeight > 0) {
-                height = parsedHeight;
-              }
-              if (frameRateString != null && frameRateString.contains('/')) {
-                final parts = frameRateString.split('/');
-                final numerator = double.tryParse(parts[0]);
-                final denominator = double.tryParse(parts.length > 1 ? parts[1] : '1');
-                if (numerator != null && denominator != null && denominator != 0) {
-                  frameRate = numerator / denominator;
-                }
-              } else if (frameRateString != null) {
-                final parsed = double.tryParse(frameRateString);
-                if (parsed != null) {
-                  frameRate = parsed;
-                }
-              }
-              break;
+            } else if (frameRateString != null) {
+              final parsed = double.tryParse(frameRateString);
+              if (parsed != null) frameRate = parsed;
             }
+
+            break;
           }
         }
       }
 
       final maxEdge = width >= height ? width : height;
-      final resolution = maxEdge <= 1280 ? VideoProxyResolution.hd720 : VideoProxyResolution.hd1080;
+      final resolution = maxEdge <= 1280
+          ? VideoProxyResolution.hd720
+          : VideoProxyResolution.hd1080;
       final metadata = VideoProxyMetadata(
         width: width,
         height: height,
@@ -152,64 +148,59 @@ class VideoProxyService {
         resolution: resolution,
       );
 
-      final result = VideoProxyResult(
+      return VideoProxyResult(
         filePath: outputPath,
         metadata: metadata,
         request: request,
         transcodeDurationMs: stopwatch.elapsedMilliseconds,
       );
-      return result;
     }
 
     Future<void> finalizeFailure(String message, {String? code}) async {
       if (cancelled) {
-        if (!completer.isCompleted) {
+        if (!completer.isCompleted)
           completer.completeError(const VideoProxyCancelException());
-        }
         return;
       }
-      if (!completer.isCompleted) {
+      if (!completer.isCompleted)
         completer.completeError(VideoProxyException(message, code: code));
-      }
     }
 
     final startReady = Completer<void>();
+    Future<void> Function()? _activeCancellation;
 
     Future<void> logSourceSummary() async {
-      if (!enableLogging) {
-        return;
-      }
+      if (!enableLogging) return;
       try {
-        final infoSession = await FFprobeKit.getMediaInformation(request.sourcePath);
+        final infoSession =
+            await FFprobeKit.getMediaInformation(request.sourcePath);
         final info = await infoSession.getMediaInformation();
-        if (info == null) {
-          return;
-        }
+        if (info == null) return;
+
         String? codec;
         String? rotation;
         int? width;
         int? height;
         double? durationSeconds;
+
         final duration = info.getDuration();
-        if (duration != null) {
-          durationSeconds = double.tryParse(duration);
-        }
+        if (duration != null) durationSeconds = double.tryParse(duration);
+
         final streams = info.getStreams();
-        if (streams != null) {
-          for (final stream in streams) {
-            if (stream.getType() == 'video') {
-              codec = stream.getCodec();
-              width = int.tryParse(stream.getWidth() ?? '');
-              height = int.tryParse(stream.getHeight() ?? '');
-              try {
-                final properties = stream.getAllProperties();
-                final rawRotation = properties?['rotation'];
-                rotation = rawRotation?.toString();
-              } catch (_) {}
-              break;
-            }
+        for (final stream in streams) {
+          if (stream.getType() == 'video') {
+            codec = stream.getCodec();
+            width = int.tryParse(stream.getWidth()?.toString() ?? '');
+            height = int.tryParse(stream.getHeight()?.toString() ?? '');
+            try {
+              final properties = stream.getAllProperties();
+              final rawRotation = properties?['rotation'];
+              rotation = rawRotation?.toString();
+            } catch (_) {}
+            break;
           }
         }
+
         debugPrint(
           '[VideoProxyService] Source summary: codec=$codec ${width ?? '?'}x${height ?? '?'} rotation=$rotation duration=${durationSeconds != null ? (durationSeconds * 1000).round() : '?'}ms',
         );
@@ -228,109 +219,112 @@ class VideoProxyService {
 
         await logSourceSummary();
 
-      final filter = [
-        "scale='min(${request.targetWidth},iw)':'min(${request.targetHeight},ih)':force_original_aspect_ratio=decrease",
-        'format=yuv420p',
-        'setsar=1',
-        'pad=${request.targetWidth}:${request.targetHeight}:(ow-iw)/2:(oh-ih)/2:color=black',
-      ].join(',');
+        final filter = [
+          "scale='min(${request.targetWidth},iw)':'min(${request.targetHeight},ih)':force_original_aspect_ratio=decrease",
+          'format=yuv420p',
+          'setsar=1',
+          'pad=${request.targetWidth}:${request.targetHeight}:(ow-iw)/2:(oh-ih)/2:color=black',
+        ].join(',');
 
-      final command = <String>[
-        '-hide_banner',
-        '-y',
-        '-i',
-        request.sourcePath,
-        '-vf',
-        filter,
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-profile:v',
-        'high',
-        '-level:v',
-        '4.1',
-        '-pix_fmt',
-        'yuv420p',
-        '-x264-params',
-        'keyint=60:min-keyint=60:scenecut=0',
-        '-movflags',
-        '+faststart',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k',
-        '-ac',
-        '2',
-        '-ar',
-        '48000',
-        '-map_metadata',
-        '-1',
-        '-metadata:s:v:0',
-        'rotate=0',
-        outputPath,
-      ];
+        final command = <String>[
+          '-hide_banner',
+          '-y',
+          '-i',
+          request.sourcePath,
+          '-vf',
+          filter,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-profile:v',
+          'high',
+          '-level:v',
+          '4.1',
+          '-pix_fmt',
+          'yuv420p',
+          '-x264-params',
+          'keyint=60:min-keyint=60:scenecut=0',
+          '-movflags',
+          '+faststart',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+          '-ac',
+          '2',
+          '-ar',
+          '48000',
+          '-map_metadata',
+          '-1',
+          '-metadata:s:v:0',
+          'rotate=0',
+          outputPath,
+        ];
 
-        final sessionFuture = FFmpegKit.executeAsyncWithArguments(
-        command,
-        (session) async {
-          final returnCode = await session.getReturnCode();
-          final sessionState = await session.getState();
-          stopwatch.stop();
-          if (ReturnCode.isSuccess(returnCode)) {
-            if (!completer.isCompleted) {
-              try {
-                final result = await onSuccess(outputPath);
-                if (enableLogging) {
-                  debugPrint(
-                    '[VideoProxyService] Proxy created (${result.metadata.width}x${result.metadata.height}) in ${result.transcodeDurationMs} ms',
-                  );
+        // Use executeAsync with a single command string. Joining args is fine here because
+        // we control quoting for complex args like the filter above.
+        final sessionFuture = FFmpegKit.executeAsync(
+          command.join(' '),
+          (session) async {
+            final returnCode = await session.getReturnCode();
+            final sessionState = await session.getState();
+            stopwatch.stop();
+            if (ReturnCode.isSuccess(returnCode)) {
+              if (!completer.isCompleted) {
+                try {
+                  final result = await onSuccess(outputPath);
+                  if (enableLogging) {
+                    debugPrint(
+                      '[VideoProxyService] Proxy created (${result.metadata.width}x${result.metadata.height}) in ${result.transcodeDurationMs} ms',
+                    );
+                  }
+                  completer.complete(result);
+                } catch (error) {
+                  await deleteProxy(outputPath);
+                  await finalizeFailure('Failed to inspect proxy: $error',
+                      code: 'probe_failed');
                 }
-                completer.complete(result);
-              } catch (error) {
-                await deleteProxy(outputPath);
-                await finalizeFailure('Failed to inspect proxy: $error', code: 'probe_failed');
               }
+            } else if (ReturnCode.isCancel(returnCode)) {
+              await deleteProxy(outputPath);
+              cancelled = true;
+              await finalizeFailure('Proxy generation canceled',
+                  code: 'cancelled');
+            } else {
+              final failStack = await session.getFailStackTrace();
+              await deleteProxy(outputPath);
+              await finalizeFailure(
+                'Proxy generation failed (state=$sessionState, code=$returnCode, stack=$failStack)',
+                code: returnCode?.getValue().toString(),
+              );
             }
-          } else if (ReturnCode.isCancel(returnCode)) {
-            await deleteProxy(outputPath);
-            cancelled = true;
-            await finalizeFailure('Proxy generation canceled', code: 'cancelled');
-          } else {
-            final failStack = await session.getFailStackTrace();
-            await deleteProxy(outputPath);
-            await finalizeFailure(
-              'Proxy generation failed (state=$sessionState, code=$returnCode, stack=$failStack)',
-              code: returnCode?.getValue().toString(),
-            );
-          }
-        },
-        enableLogging
-            ? (log) {
-                debugPrint('[VideoProxyService] ${log.getMessage()}');
-              }
-            : null,
-        (statistics) async {
-          await emitProgress(statistics);
-        },
-      );
+          },
+          enableLogging
+              ? (log) {
+                  debugPrint('[VideoProxyService] ${log.getMessage()}');
+                }
+              : null,
+          (statistics) async {
+            await emitProgress(statistics);
+          },
+        );
 
         Future<void> cancelJob() async {
-          if (cancelled) {
-            return;
-          }
+          if (cancelled) return;
           cancelled = true;
           try {
             await FFmpegKit.cancel();
           } catch (error) {
-            debugPrint('[VideoProxyService] Failed to cancel FFmpeg session: $error');
+            debugPrint(
+                '[VideoProxyService] Failed to cancel FFmpeg session: $error');
           }
           try {
             final session = await sessionFuture;
             final output = await session.getOutput();
-            if (enableLogging) {
-              debugPrint('[VideoProxyService] Cancelled session output: $output');
-            }
+            if (enableLogging)
+              debugPrint(
+                  '[VideoProxyService] Cancelled session output: $output');
           } catch (_) {}
         }
 
@@ -339,21 +333,14 @@ class VideoProxyService {
         });
 
         _activeCancellation = cancelJob;
-        if (!startReady.isCompleted) {
-          startReady.complete();
-        }
+        if (!startReady.isCompleted) startReady.complete();
       } catch (error) {
-        await finalizeFailure('Failed to prepare proxy: $error', code: 'start_failed');
-        if (!progressController.isClosed) {
-          await progressController.close();
-        }
-        if (!startReady.isCompleted) {
-          startReady.complete();
-        }
+        await finalizeFailure('Failed to prepare proxy: $error',
+            code: 'start_failed');
+        if (!progressController.isClosed) await progressController.close();
+        if (!startReady.isCompleted) startReady.complete();
       }
     }
-
-    Future<void> Function()? _activeCancellation;
 
     unawaited(start());
 
@@ -361,13 +348,9 @@ class VideoProxyService {
       future: completer.future,
       progress: progressController.stream,
       cancel: () async {
-        if (!startReady.isCompleted) {
-          await startReady.future;
-        }
+        if (!startReady.isCompleted) await startReady.future;
         final canceller = _activeCancellation;
-        if (canceller != null) {
-          await canceller();
-        }
+        if (canceller != null) await canceller();
       },
     );
   }

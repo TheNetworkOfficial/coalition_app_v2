@@ -14,6 +14,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'test_http_overrides.dart';
+import 'package:coalition_app_v2/providers/app_providers.dart';
+import 'package:coalition_app_v2/services/auth_service.dart';
+import 'package:coalition_app_v2/features/auth/models/user_summary.dart';
 
 class FakeFeedRepository implements FeedRepository {
   const FakeFeedRepository();
@@ -48,10 +51,20 @@ void main() {
     'Bottom navigation switches to candidates page',
     (WidgetTester tester) async {
       await runWithHttpOverrides(tester, () async {
+        final fakeAuth = _FakeAuthService(
+          user: const UserSummary(
+            userId: 'u1',
+            username: 'u1',
+            displayName: 'Test User',
+          ),
+        );
+
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
-              feedRepositoryProvider.overrideWithValue(const FakeFeedRepository()),
+              feedRepositoryProvider
+                  .overrideWithValue(const FakeFeedRepository()),
+              authServiceProvider.overrideWithValue(fakeAuth),
             ],
             child: const MyApp(),
           ),
@@ -68,4 +81,24 @@ void main() {
       });
     },
   );
+}
+
+class _FakeAuthService extends AuthService {
+  _FakeAuthService({UserSummary? user})
+      : _user = user,
+        super();
+
+  final UserSummary? _user;
+
+  @override
+  Future<void> configureIfNeeded() async {}
+
+  @override
+  Future<bool> isSignedIn() async => _user != null;
+
+  @override
+  Future<UserSummary?> currentUser() async => _user;
+
+  @override
+  Future<void> signOut() async {}
 }

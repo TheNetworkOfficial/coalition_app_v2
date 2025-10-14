@@ -69,7 +69,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
         _videoInitError = const VideoProxyException('Missing video proxy');
       } else {
         _activeProxy = proxy;
-        _usingFallbackProxy = proxy.metadata.resolution == VideoProxyResolution.hd720;
+        _usingFallbackProxy =
+            proxy.metadata.resolution == VideoProxyResolution.hd720;
         unawaited(_initVideoController());
       }
     } else {
@@ -161,7 +162,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
       return false;
     }
 
-    debugPrint('[EditMediaPage] Video initialization failed, attempting fallback: $error');
+    debugPrint(
+        '[EditMediaPage] Video initialization failed, attempting fallback: $error');
 
     setState(() {
       _isPreparingFallback = true;
@@ -195,7 +197,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
         const SnackBar(content: Text('Video optimization canceled.')),
       );
       setState(() {
-        _videoInitError = const VideoProxyException('Video optimization canceled');
+        _videoInitError =
+            const VideoProxyException('Video optimization canceled');
       });
       return false;
     }
@@ -315,7 +318,9 @@ class _EditMediaPageState extends State<EditMediaPage> {
 
   bool get _canContinue {
     if (_isVideo) {
-      return _videoInitialized && _videoInitError == null && !_isPreparingFallback;
+      return _videoInitialized &&
+          _videoInitError == null &&
+          !_isPreparingFallback;
     }
     if (_imageLoadFailed) {
       return false;
@@ -636,7 +641,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
     }
     final total = controller.videoDuration.inMilliseconds;
     final trimmed = (end - start).clamp(0, total);
-    final durationMs = trimmed is num ? trimmed.round() : (end - start);
+    final durationMs = trimmed.round();
     return VideoTrimData(
       startMs: start,
       endMs: end,

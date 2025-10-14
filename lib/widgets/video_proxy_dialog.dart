@@ -44,7 +44,8 @@ class VideoProxyProgressDialog extends StatefulWidget {
   final bool allowCancel;
 
   @override
-  State<VideoProxyProgressDialog> createState() => _VideoProxyProgressDialogState();
+  State<VideoProxyProgressDialog> createState() =>
+      _VideoProxyProgressDialogState();
 }
 
 class _VideoProxyProgressDialogState extends State<VideoProxyProgressDialog> {
@@ -99,6 +100,9 @@ class _VideoProxyProgressDialogState extends State<VideoProxyProgressDialog> {
     final percent = value != null ? (value * 100).clamp(0, 100).round() : null;
     final message = widget.message ?? 'This may take a moment.';
 
+    // WillPopScope is deprecated in newer Flutter versions; ignore the deprecation
+    // to preserve the original behavior until a safe migration to PopScope is available.
+    // ignore: deprecated_member_use
     return WillPopScope(
       onWillPop: () async => false,
       child: AlertDialog(
@@ -110,10 +114,7 @@ class _VideoProxyProgressDialogState extends State<VideoProxyProgressDialog> {
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: CircularProgressIndicator(value: value?.toDouble()),
             ),
-            if (percent != null)
-              Text('$percent%')
-            else
-              Text(message),
+            if (percent != null) Text('$percent%') else Text(message),
           ],
         ),
         actions: [

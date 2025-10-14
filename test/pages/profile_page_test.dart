@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:collection';
 
 import 'package:background_downloader/background_downloader.dart';
