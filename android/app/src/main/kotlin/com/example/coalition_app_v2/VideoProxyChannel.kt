@@ -65,11 +65,11 @@ private fun parsePreviewTier(preview: String?, fallback: Boolean): PreviewTier {
 private fun previewProfileFor(tier: PreviewTier): PreviewProfile {
     return when (tier) {
         PreviewTier.FAST -> PreviewProfile(
-            width = 540,
-            height = 960,
+            width = 720,
+            height = 1280,
             frameRate = 24,
-            keyframeIntervalSec = 0.5f,
-            videoBitrate = 1_000_000L,
+            keyframeIntervalSec = 1f,
+            videoBitrate = 1_200_000L,
             audioBitrateKbps = 96,
             audioSampleRate = 44_100,
         )
@@ -77,17 +77,17 @@ private fun previewProfileFor(tier: PreviewTier): PreviewProfile {
             width = 720,
             height = 1280,
             frameRate = 24,
-            keyframeIntervalSec = 0.75f,
+            keyframeIntervalSec = 1f,
             videoBitrate = 1_500_000L,
             audioBitrateKbps = 128,
             audioSampleRate = 48_000,
         )
         PreviewTier.FALLBACK -> PreviewProfile(
-            width = 360,
-            height = 640,
+            width = 720,
+            height = 1280,
             frameRate = 24,
-            keyframeIntervalSec = 0.5f,
-            videoBitrate = 800_000L,
+            keyframeIntervalSec = 1f,
+            videoBitrate = 1_000_000L,
             audioBitrateKbps = 96,
             audioSampleRate = 44_100,
         )
@@ -243,8 +243,6 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                 .build()
         }
 
-        val rotationDegrees = readRotationDegrees(sourcePath)
-
         scope.launch {
             jobMutex.withLock {
                 if (jobs.containsKey(jobId)) {
@@ -274,7 +272,7 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                         .setAudioTrackStrategy(audioStrategy)
                         .setListener(listener)
                         .setListenerHandler(mainHandler)
-                        .setVideoRotation(rotationDegrees)
+                        .setVideoRotation(0)
 
                     val future = Transcoder.getInstance().transcode(optionsBuilder.build())
 
@@ -473,19 +471,6 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         val prefix = "proxy_${System.currentTimeMillis()}_${UUID.randomUUID()}_"
         val tempFile = File.createTempFile(prefix, ".mp4", directory)
         return tempFile
-    }
-
-    private fun readRotationDegrees(sourcePath: String): Int {
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(context, Uri.fromFile(File(sourcePath)))
-            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-        } catch (error: Throwable) {
-            Log.w(TAG, "Unable to read rotation", error)
-            0
-        } finally {
-            retriever.release()
-        }
     }
 
     private fun inspectProxy(outputFile: File, frameRateHint: Int): ProxyMetadata {

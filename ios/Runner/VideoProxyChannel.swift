@@ -31,10 +31,10 @@ private func profile(for tier: PreviewTier) -> PreviewProfile {
   switch tier {
   case .fast:
     return PreviewProfile(
-      size: CGSize(width: 540, height: 960),
+      size: CGSize(width: 720, height: 1280),
       frameRate: 24,
       keyframeInterval: 24,
-      videoBitrate: 1_000_000,
+      videoBitrate: 1_200_000,
       audioBitrate: 96_000,
       audioSampleRate: 44_100
     )
@@ -49,10 +49,10 @@ private func profile(for tier: PreviewTier) -> PreviewProfile {
     )
   case .fallback:
     return PreviewProfile(
-      size: CGSize(width: 360, height: 640),
+      size: CGSize(width: 720, height: 1280),
       frameRate: 24,
       keyframeInterval: 24,
-      videoBitrate: 800_000,
+      videoBitrate: 1_000_000,
       audioBitrate: 96_000,
       audioSampleRate: 44_100
     )
