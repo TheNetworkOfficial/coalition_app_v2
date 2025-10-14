@@ -124,7 +124,8 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         val audioStrategy = DefaultAudioStrategy.builder()
             .channels(2)
             .sampleRate(48_000)
-            .bitRate(audioBitrateKbps * 1000)
+            // FIX: builder expects Long bps; convert kbps -> bps as Long
+            .bitRate(audioBitrateKbps.toLong() * 1000L)
             .build()
 
         val rotationDegrees = readRotationDegrees(sourcePath)
@@ -161,12 +162,12 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
 
                     val future = Transcoder.getInstance().transcode(optionsBuilder.build())
 
-                val proxyJob = ProxyJob(
-                    jobId = jobId,
-                    future = future,
-                    outputFile = jobOutput,
-                    startElapsedRealtimeMs = SystemClock.elapsedRealtime(),
-                )
+                    val proxyJob = ProxyJob(
+                        jobId = jobId,
+                        future = future,
+                        outputFile = jobOutput,
+                        startElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+                    )
 
                     jobs[jobId] = proxyJob
 
