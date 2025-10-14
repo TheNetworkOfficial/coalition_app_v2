@@ -28,10 +28,7 @@ dependencies:
   amplify_auth_cognito: ^2.6.0
   flutter_secure_storage: ^9.2.2
   cached_network_image: ^3.3.1
+  video_thumbnail: ^0.5.3
 
 flutter:
   uses-material-design: true
-
-dependency_overrides:
-  get_thumbnail_video:
-    path: plugins/get_thumbnail_video
