@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +23,7 @@ class EditMediaData {
     this.originalDurationMs,
     this.proxyResult,
     this.proxyRequest,
+    this.proxyPosterBytes,
   }) : assert(type == 'image' || type == 'video');
 
   final String type;
@@ -30,6 +32,7 @@ class EditMediaData {
   final int? originalDurationMs;
   final VideoProxyResult? proxyResult;
   final VideoProxyRequest? proxyRequest;
+  final Uint8List? proxyPosterBytes;
 }
 
 class EditMediaPage extends StatefulWidget {
@@ -46,6 +49,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
 
   VideoEditorController? _videoController;
   ProxyPlaylistController? _playlistController;
+  VideoProxyJob? _activeJob;
   VideoProxyResult? _activeProxy;
   bool _usingFallbackProxy = false;
   bool _isPreparingFallback = false;
@@ -55,6 +59,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
   Duration? _videoDuration;
   RangeValues? _videoTrimRangeMs;
   Timer? _trimSeekDebounce;
+  bool _segmentedSnackShown = false;
 
   double? _imageWidth;
   double? _imageHeight;
@@ -69,20 +74,40 @@ class _EditMediaPageState extends State<EditMediaPage> {
     super.initState();
     if (widget.media.type == 'video') {
       final proxy = widget.media.proxyResult;
-      if (proxy == null) {
-        _videoInitError = const VideoProxyException('Missing video proxy');
-      } else {
+      final request = widget.media.proxyRequest;
+      if (proxy != null) {
         _activeProxy = proxy;
         _usingFallbackProxy =
             proxy.metadata.resolution == VideoProxyResolution.p360;
-        // If segmented preview enabled, initialize playlist controller
-        final wantSegments = kEnableSegmentedPreview ||
-            (widget.media.proxyRequest?.segmentedPreview == true);
-        if (wantSegments && widget.media.proxyRequest != null) {
-          _initPlaylistController(widget.media.proxyRequest!);
-        } else {
-          unawaited(_initVideoController());
-        }
+        unawaited(_initVideoController());
+      } else if (request != null &&
+          (request.segmentedPreview || kEnableSegmentedPreview)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _segmentedSnackShown) return;
+          _segmentedSnackShown = true;
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          messenger?.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Preparing segmented preview… edits unlock as soon as the first segment is ready.',
+              ),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        });
+        unawaited(_initPlaylistController(
+          request,
+          showProgressDialog: false,
+          posterBytes: widget.media.proxyPosterBytes,
+        ));
+      } else if (request != null) {
+        unawaited(_initPlaylistController(
+          request,
+          showProgressDialog: true,
+          posterBytes: widget.media.proxyPosterBytes,
+        ));
+      } else {
+        _videoInitError = const VideoProxyException('Missing video proxy');
       }
     } else {
       _loadImageMetadata();
@@ -92,14 +117,19 @@ class _EditMediaPageState extends State<EditMediaPage> {
   @override
   void dispose() {
     final controller = _videoController;
-    final playlistEditor = _playlistController?.editor;
-    if (controller != null) {
+    final playlist = _playlistController;
+    if (playlist != null) {
+      playlist.editor?.removeListener(_handleVideoControllerUpdate);
+      unawaited(playlist.dispose());
+    } else if (controller != null) {
       controller.removeListener(_handleVideoControllerUpdate);
       unawaited(controller.dispose());
     }
-    if (playlistEditor != null) {
-      playlistEditor.removeListener(_handleVideoControllerUpdate);
-      unawaited(playlistEditor.dispose());
+    if (_activeProxy == null) {
+      final job = _activeJob;
+      if (job != null) {
+        unawaited(job.cancel());
+      }
     }
     if (!_retainProxyForNextStep) {
       final proxy = _activeProxy;
@@ -169,49 +199,143 @@ class _EditMediaPageState extends State<EditMediaPage> {
     }
   }
 
-  void _initPlaylistController(VideoProxyRequest request) {
+  Future<void> _initPlaylistController(
+    VideoProxyRequest request, {
+    required bool showProgressDialog,
+    Uint8List? posterBytes,
+  }) async {
     final service = VideoProxyService();
     final job = service.createJob(
       request: request,
       onJobCreated: (jobId) {
         if (_playlistController == null) {
-          _playlistController = ProxyPlaylistController(jobId: jobId);
-          _playlistController!.onReady = () {
-            final editor = _playlistController!.editor;
-            if (editor != null) {
-              editor.addListener(_handleVideoControllerUpdate);
-              setState(() {
-                _videoController = editor;
-                _videoInitialized = true;
-                _videoDuration = Duration(
-                    milliseconds: _playlistController!.segments
-                        .fold(0, (a, s) => a + s.durationMs));
-                _videoTrimRangeMs =
-                    RangeValues(0, _videoDuration!.inMilliseconds.toDouble());
-              });
-            }
-          };
+          final controller = ProxyPlaylistController(jobId: jobId);
+          controller.onReady = _handlePlaylistReady;
+          controller.onSegmentAppended = _handlePlaylistSegmentAppended;
+          _playlistController = controller;
         }
       },
     );
 
-    // Show the existing progress dialog UX while background proxy runs.
-    unawaited(showDialog<VideoProxyDialogOutcome>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => VideoProxyProgressDialog(
-        job: job,
-        title: 'Preparing preview…',
-        allowCancel: true,
-      ),
-    ).then((outcome) {
-      if (outcome == null || outcome.cancelled) {
-        setState(() {
-          _videoInitError =
-              const VideoProxyException('Video optimization canceled');
-        });
+    _activeJob = job;
+
+    job.future.then((result) {
+      if (!mounted) return;
+      setState(() {
+        _activeProxy = result;
+        _usingFallbackProxy =
+            result.metadata.resolution == VideoProxyResolution.p360;
+        _activeJob = null;
+      });
+      _handlePlaylistSegmentAppended();
+    }).catchError((error) {
+      if (!mounted || showProgressDialog) {
+        return;
       }
-    }));
+      _activeJob = null;
+      _handlePlaylistError(error);
+    });
+
+    if (showProgressDialog) {
+      unawaited(showDialog<VideoProxyDialogOutcome>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => VideoProxyProgressDialog(
+          job: job,
+          title: 'Preparing preview…',
+          allowCancel: true,
+          posterBytes: posterBytes,
+        ),
+      ).then((outcome) {
+        if (outcome == null || outcome.cancelled) {
+          setState(() {
+            _videoInitError =
+                const VideoProxyException('Video optimization canceled');
+            _activeJob = null;
+          });
+        } else if (outcome.error != null) {
+          _activeJob = null;
+          _handlePlaylistError(outcome.error!);
+        }
+      }));
+    }
+  }
+
+  void _handlePlaylistReady() {
+    final playlist = _playlistController;
+    if (playlist == null) {
+      return;
+    }
+    final editor = playlist.editor;
+    if (editor == null) {
+      return;
+    }
+
+    final previous = _videoController;
+    if (previous != null && previous != editor) {
+      previous.removeListener(_handleVideoControllerUpdate);
+    }
+
+    editor.addListener(_handleVideoControllerUpdate);
+
+    final totalMs = playlist.segments.fold<int>(0, (total, segment) {
+      return total + segment.durationMs;
+    });
+
+    setState(() {
+      _videoController = editor;
+      _videoInitialized = true;
+      _videoInitError = null;
+      _videoDuration = Duration(milliseconds: totalMs);
+      _videoTrimRangeMs = RangeValues(0, totalMs.toDouble());
+    });
+  }
+
+  void _handlePlaylistSegmentAppended() {
+    final playlist = _playlistController;
+    if (playlist == null) {
+      return;
+    }
+
+    final totalMs = playlist.segments.fold<int>(0, (sum, segment) {
+      return sum + segment.durationMs;
+    });
+
+    if (totalMs <= 0) {
+      return;
+    }
+
+    final currentRange = _videoTrimRangeMs;
+    final end = totalMs.toDouble();
+    final start = currentRange?.start ?? 0;
+    final startCandidate = start.clamp(0, end);
+    final clampedStart = startCandidate.toDouble();
+    final endCandidate = currentRange != null
+        ? currentRange.end.clamp(clampedStart, end)
+        : end;
+    final clampedEnd = endCandidate.toDouble();
+
+    setState(() {
+      _videoDuration = Duration(milliseconds: totalMs);
+      _videoTrimRangeMs = RangeValues(clampedStart, clampedEnd);
+    });
+  }
+
+  void _handlePlaylistError(Object error) {
+    final message = error is VideoProxyException
+        ? error.message
+        : error.toString();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Unable to optimize video: $message')),
+    );
+    setState(() {
+      _videoInitError = error;
+      _videoInitialized = false;
+      _activeJob = null;
+    });
   }
 
   Future<bool> _attemptFallback(Object error) async {
@@ -381,7 +505,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
     if (_isVideo) {
       return _videoInitialized &&
           _videoInitError == null &&
-          !_isPreparingFallback;
+          !_isPreparingFallback &&
+          _activeProxy != null;
     }
     if (_imageLoadFailed) {
       return false;
@@ -411,6 +536,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
     final aspectRatio = videoValue.isInitialized && videoValue.aspectRatio > 0
         ? videoValue.aspectRatio
         : 9 / 16;
+    final isProxyJobRunning = _activeJob != null && _activeProxy == null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -430,6 +556,21 @@ class _EditMediaPageState extends State<EditMediaPage> {
           ),
         ),
         const SizedBox(height: 16),
+        if (isProxyJobRunning)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: const [
+                Expanded(child: LinearProgressIndicator()),
+                SizedBox(width: 12),
+                Flexible(
+                  child: Text(
+                    'Rendering proxy… keep editing while we finish.',
+                  ),
+                ),
+              ],
+            ),
+          ),
         _buildTrimControls(controller),
       ],
     );

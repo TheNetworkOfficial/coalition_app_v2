@@ -129,8 +129,7 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
       }
 
       // For segmented preview we request a small fast preview canvas (360x640)
-      final useSegmented =
-          true; // force segmented preview for faster progressive playback
+      final useSegmented = kEnableSegmentedPreview;
       final videoRequest = VideoProxyRequest(
         sourcePath: file.path,
         targetWidth: useSegmented ? 360 : 540,
@@ -142,16 +141,20 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
         previewQuality: VideoProxyPreviewQuality.fast,
         segmentedPreview: useSegmented,
       );
-      final result = await _prepareVideoProxy(
-        context,
-        videoRequest,
-        posterBytes: posterBytes,
-      );
-      if (result == null) {
-        return;
+      if (videoRequest.segmentedPreview) {
+        request = videoRequest;
+      } else {
+        final result = await _prepareVideoProxy(
+          context,
+          videoRequest,
+          posterBytes: posterBytes,
+        );
+        if (result == null) {
+          return;
+        }
+        proxy = result;
+        request = videoRequest;
       }
-      proxy = result;
-      request = videoRequest;
     }
 
     final media = EditMediaData(
@@ -161,6 +164,7 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
       originalDurationMs: originalDurationMs,
       proxyResult: proxy,
       proxyRequest: request,
+      proxyPosterBytes: posterBytes,
     );
 
     if (!mounted) {
