@@ -40,12 +40,16 @@ class VideoTrimData {
     required this.startMs,
     required this.endMs,
     required this.durationMs,
+    this.proxyStartMs,
+    this.proxyEndMs,
   })  : assert(startMs >= 0 && endMs >= 0 && endMs >= startMs),
         assert(durationMs >= 0);
 
   final int startMs;
   final int endMs;
   final int durationMs;
+  final int? proxyStartMs;
+  final int? proxyEndMs;
 }
 
 class ImageCropData {

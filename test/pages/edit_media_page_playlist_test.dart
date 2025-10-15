@@ -155,6 +155,8 @@ void main() {
       'durationMs': 6000,
       'width': 360,
       'height': 640,
+      'sourceStartMs': 0,
+      'sourceEndMs': 6000,
     });
 
     await tester.pump(const Duration(milliseconds: 80));
@@ -166,6 +168,8 @@ void main() {
       'durationMs': 5000,
       'width': 360,
       'height': 640,
+      'sourceStartMs': 6000,
+      'sourceEndMs': 11000,
     });
 
     await tester.pump(const Duration(milliseconds: 120));
@@ -185,6 +189,8 @@ void main() {
     expect(trim!.startMs, equals(500));
     expect(trim.endMs, equals(10500));
     expect(trim.durationMs, equals(10000));
+    expect(trim.proxyStartMs, equals(500));
+    expect(trim.proxyEndMs, equals(10500));
 
     await tester.pumpWidget(const SizedBox.shrink());
     await playlistController.dispose();

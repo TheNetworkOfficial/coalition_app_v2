@@ -224,6 +224,13 @@ class ProxySegment {
     required this.width,
     required this.height,
     required this.hasAudio,
+    this.sourceStartMs,
+    this.sourceEndMs,
+    this.orientation,
+    this.videoCodec,
+    this.audioCodec,
+    this.matchesSourceVideoCodec,
+    this.matchesSourceAudioCodec,
   });
 
   final int index;
@@ -232,6 +239,31 @@ class ProxySegment {
   final int width;
   final int height;
   final bool hasAudio;
+  final int? sourceStartMs;
+  final int? sourceEndMs;
+  final String? orientation;
+  final String? videoCodec;
+  final String? audioCodec;
+  final bool? matchesSourceVideoCodec;
+  final bool? matchesSourceAudioCodec;
+
+  Map<String, Object?> toJson() {
+    return {
+      'index': index,
+      'path': path,
+      'durationMs': durationMs,
+      'width': width,
+      'height': height,
+      'hasAudio': hasAudio,
+      'sourceStartMs': sourceStartMs,
+      'sourceEndMs': sourceEndMs,
+      'orientation': orientation,
+      'videoCodec': videoCodec,
+      'audioCodec': audioCodec,
+      'matchesSourceVideoCodec': matchesSourceVideoCodec,
+      'matchesSourceAudioCodec': matchesSourceAudioCodec,
+    }..removeWhere((key, value) => value == null);
+  }
 }
 
 class ProxyManifest {
@@ -245,6 +277,13 @@ class ProxyManifest {
     required this.hasAudio,
     this.keyframes = const [],
     this.durationMs,
+    this.sourceStartMs,
+    this.sourceEndMs,
+    this.orientation,
+    this.videoCodec,
+    this.audioCodec,
+    this.matchesSourceVideoCodec,
+    this.matchesSourceAudioCodec,
   });
 
   final int version;
@@ -256,6 +295,13 @@ class ProxyManifest {
   final bool hasAudio;
   final List<ProxyKeyframe> keyframes;
   final int? durationMs;
+  final int? sourceStartMs;
+  final int? sourceEndMs;
+  final String? orientation;
+  final String? videoCodec;
+  final String? audioCodec;
+  final bool? matchesSourceVideoCodec;
+  final bool? matchesSourceAudioCodec;
 }
 
 class VideoProxyMetadata {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -39,6 +40,13 @@ class _NativeProxyEvent {
     this.previewPayload,
     this.timelinePayload,
     this.qualityLabel,
+    this.sourceStartMs,
+    this.sourceEndMs,
+    this.orientation,
+    this.videoCodec,
+    this.audioCodec,
+    this.matchesSourceVideoCodec,
+    this.matchesSourceAudioCodec,
     Map<String, dynamic>? raw,
   }) : raw = raw ?? const {};
 
@@ -61,6 +69,13 @@ class _NativeProxyEvent {
   final Map<String, dynamic>? previewPayload;
   final Map<String, dynamic>? timelinePayload;
   final String? qualityLabel;
+  final int? sourceStartMs;
+  final int? sourceEndMs;
+  final String? orientation;
+  final String? videoCodec;
+  final String? audioCodec;
+  final bool? matchesSourceVideoCodec;
+  final bool? matchesSourceAudioCodec;
   final Map<String, dynamic> raw;
 
   factory _NativeProxyEvent.fromDynamic(Object? value) {
@@ -84,6 +99,19 @@ class _NativeProxyEvent {
     final totalDurationMs = (map['totalDurationMs'] as num?)?.toInt();
     final portraitPreferred = map['portraitPreferred'] == true;
     final proxyBounding = map['proxyBounding']?.toString();
+    final sourceStartMs = (map['sourceStartMs'] as num?)?.toInt();
+    final sourceEndMs = (map['sourceEndMs'] as num?)?.toInt();
+    final orientation = map['orientation']?.toString();
+    final videoCodec = map['videoCodec']?.toString();
+    final audioCodec = map['audioCodec']?.toString();
+    final matchesSourceVideoCodec =
+        map.containsKey('matchesSourceVideoCodec')
+            ? map['matchesSourceVideoCodec'] == true
+            : null;
+    final matchesSourceAudioCodec =
+        map.containsKey('matchesSourceAudioCodec')
+            ? map['matchesSourceAudioCodec'] == true
+            : null;
     Map<String, dynamic>? metadataPayload;
     final metadata = map['metadata'];
     if (metadata is Map) {
@@ -136,6 +164,13 @@ class _NativeProxyEvent {
       previewPayload: previewPayload,
       timelinePayload: timelinePayload,
       qualityLabel: qualityLabel,
+      sourceStartMs: sourceStartMs,
+      sourceEndMs: sourceEndMs,
+      orientation: orientation,
+      videoCodec: videoCodec,
+      audioCodec: audioCodec,
+      matchesSourceVideoCodec: matchesSourceVideoCodec,
+      matchesSourceAudioCodec: matchesSourceAudioCodec,
       raw: map,
     );
   }
@@ -162,11 +197,41 @@ class ProxySessionMetadataEvent {
     this.durationMs,
     this.frameRate,
     this.keyframes = const [],
+    this.segments = const [],
+    this.sourceStartMs,
+    this.sourceEndMs,
+    this.orientation,
+    this.videoCodec,
+    this.audioCodec,
+    this.matchesSourceVideoCodec,
+    this.matchesSourceAudioCodec,
   });
 
   final int? durationMs;
   final double? frameRate;
   final List<ProxyKeyframe> keyframes;
+  final List<ProxySegment> segments;
+  final int? sourceStartMs;
+  final int? sourceEndMs;
+  final String? orientation;
+  final String? videoCodec;
+  final String? audioCodec;
+  final bool? matchesSourceVideoCodec;
+  final bool? matchesSourceAudioCodec;
+}
+
+class ProxySourceRange {
+  const ProxySourceRange({
+    required this.startMs,
+    required this.endMs,
+    required this.durationMs,
+  })  : assert(startMs >= 0),
+        assert(endMs >= startMs),
+        assert(durationMs >= 0);
+
+  final int startMs;
+  final int endMs;
+  final int durationMs;
 }
 
 class ProxyManifestData {
@@ -177,12 +242,26 @@ class ProxyManifestData {
     double? fps,
     bool hasAudio = true,
     int? durationMs,
+    int? sourceStartMs,
+    int? sourceEndMs,
+    String? orientation,
+    String? videoCodec,
+    String? audioCodec,
+    bool? matchesSourceVideoCodec,
+    bool? matchesSourceAudioCodec,
   })  : segmentDurationMs = segmentDurationMs ?? 0,
         width = width,
         height = height,
         fps = fps,
         hasAudio = hasAudio,
-        durationMs = durationMs;
+        durationMs = durationMs,
+        sourceStartMs = sourceStartMs,
+        sourceEndMs = sourceEndMs,
+        orientation = orientation,
+        videoCodec = videoCodec,
+        audioCodec = audioCodec,
+        matchesSourceVideoCodec = matchesSourceVideoCodec,
+        matchesSourceAudioCodec = matchesSourceAudioCodec;
 
   int segmentDurationMs;
   int? width;
@@ -190,6 +269,13 @@ class ProxyManifestData {
   double? fps;
   bool hasAudio;
   int? durationMs;
+  int? sourceStartMs;
+  int? sourceEndMs;
+  String? orientation;
+  String? videoCodec;
+  String? audioCodec;
+  bool? matchesSourceVideoCodec;
+  bool? matchesSourceAudioCodec;
   final List<ProxySegment> segments = [];
   final List<ProxyKeyframe> keyframes = [];
 
@@ -200,6 +286,13 @@ class ProxyManifestData {
     double? fps,
     bool? hasAudio,
     int? durationMs,
+    int? sourceStartMs,
+    int? sourceEndMs,
+    String? orientation,
+    String? videoCodec,
+    String? audioCodec,
+    bool? matchesSourceVideoCodec,
+    bool? matchesSourceAudioCodec,
   }) {
     if (segmentDurationMs != null && segmentDurationMs > 0) {
       this.segmentDurationMs = segmentDurationMs;
@@ -219,6 +312,27 @@ class ProxyManifestData {
     if (durationMs != null && durationMs >= 0) {
       this.durationMs = durationMs;
     }
+    if (sourceStartMs != null && sourceStartMs >= 0) {
+      this.sourceStartMs = sourceStartMs;
+    }
+    if (sourceEndMs != null && sourceEndMs >= 0) {
+      this.sourceEndMs = sourceEndMs;
+    }
+    if (orientation != null && orientation.isNotEmpty) {
+      this.orientation = orientation;
+    }
+    if (videoCodec != null && videoCodec.isNotEmpty) {
+      this.videoCodec = videoCodec;
+    }
+    if (audioCodec != null && audioCodec.isNotEmpty) {
+      this.audioCodec = audioCodec;
+    }
+    if (matchesSourceVideoCodec != null) {
+      this.matchesSourceVideoCodec = matchesSourceVideoCodec;
+    }
+    if (matchesSourceAudioCodec != null) {
+      this.matchesSourceAudioCodec = matchesSourceAudioCodec;
+    }
   }
 
   void addSegment(ProxySegment segment) {
@@ -236,6 +350,33 @@ class ProxyManifestData {
       height = segment.height;
     }
     hasAudio = segment.hasAudio;
+    if (segment.sourceStartMs != null) {
+      if (sourceStartMs == null || segment.sourceStartMs! < sourceStartMs!) {
+        sourceStartMs = segment.sourceStartMs;
+      }
+    }
+    if (segment.sourceEndMs != null) {
+      if (sourceEndMs == null || segment.sourceEndMs! > sourceEndMs!) {
+        sourceEndMs = segment.sourceEndMs;
+      }
+    }
+    if (segment.orientation != null && segment.orientation!.isNotEmpty) {
+      orientation ??= segment.orientation;
+    }
+    if (segment.videoCodec != null && segment.videoCodec!.isNotEmpty) {
+      videoCodec ??= segment.videoCodec;
+    }
+    if (segment.audioCodec != null && segment.audioCodec!.isNotEmpty) {
+      audioCodec ??= segment.audioCodec;
+    }
+    if (segment.matchesSourceVideoCodec != null) {
+      matchesSourceVideoCodec = (matchesSourceVideoCodec ?? true) &&
+          segment.matchesSourceVideoCodec!;
+    }
+    if (segment.matchesSourceAudioCodec != null) {
+      matchesSourceAudioCodec = (matchesSourceAudioCodec ?? true) &&
+          segment.matchesSourceAudioCodec!;
+    }
   }
 
   void addKeyframes(Iterable<ProxyKeyframe> frames) {
@@ -275,6 +416,102 @@ class ProxyManifestData {
         .toList(growable: false);
   }
 
+  int? sourceTimestampForProxy(int timestampMs) {
+    if (timestampMs < 0) {
+      return null;
+    }
+    final range = sourceRangeForProxyRange(timestampMs, timestampMs + 1);
+    if (range == null) {
+      return null;
+    }
+    return range.startMs;
+  }
+
+  ProxySourceRange? sourceRangeForProxyRange(int startMs, int endMs) {
+    if (endMs <= startMs) {
+      return null;
+    }
+    final ordered = [...segments]..sort((a, b) => a.index.compareTo(b.index));
+    if (ordered.isEmpty) {
+      return null;
+    }
+
+    int? mappedStart;
+    int? mappedEnd;
+    var accumulatedDuration = 0;
+
+    for (final segment in ordered) {
+      final segmentDuration = segment.durationMs;
+      final segmentStart = accumulatedDuration;
+      final segmentEnd = segmentStart + segmentDuration;
+      if (segmentEnd <= startMs) {
+        accumulatedDuration = segmentEnd;
+        continue;
+      }
+      if (segmentStart >= endMs) {
+        break;
+      }
+      final overlapStart = math.max(startMs, segmentStart);
+      final overlapEnd = math.min(endMs, segmentEnd);
+      if (overlapEnd <= overlapStart) {
+        accumulatedDuration = segmentEnd;
+        continue;
+      }
+      final mapped = _mapWithinSegment(
+        segment,
+        overlapStart - segmentStart,
+        overlapEnd - segmentStart,
+      );
+      if (mapped == null) {
+        return null;
+      }
+      mappedStart ??= mapped.startMs;
+      mappedEnd = mapped.endMs;
+      accumulatedDuration = segmentEnd;
+    }
+
+    if (mappedStart == null || mappedEnd == null) {
+      return null;
+    }
+
+    final duration = math.max(0, mappedEnd - mappedStart);
+    return ProxySourceRange(
+      startMs: mappedStart,
+      endMs: mappedEnd,
+      durationMs: duration,
+    );
+  }
+
+  _SegmentSourceWindow? _mapWithinSegment(
+    ProxySegment segment,
+    int localStartMs,
+    int localEndMs,
+  ) {
+    final segmentDuration = segment.durationMs;
+    final sourceStart = segment.sourceStartMs;
+    final sourceEnd = segment.sourceEndMs;
+    if (segmentDuration <= 0 ||
+        sourceStart == null ||
+        sourceEnd == null ||
+        sourceEnd <= sourceStart) {
+      return null;
+    }
+    final clampedStart = localStartMs.clamp(0, segmentDuration);
+    final clampedEnd = localEndMs.clamp(0, segmentDuration);
+    if (clampedEnd <= clampedStart) {
+      return null;
+    }
+
+    final segmentSourceDuration = (sourceEnd - sourceStart).toDouble();
+    final ratioStart = clampedStart / segmentDuration;
+    final ratioEnd = clampedEnd / segmentDuration;
+    final mappedStart =
+        (sourceStart + (segmentSourceDuration * ratioStart)).round();
+    final mappedEnd =
+        (sourceStart + (segmentSourceDuration * ratioEnd)).round();
+    return _SegmentSourceWindow(mappedStart, mappedEnd);
+  }
+
   ProxyManifestData copy() {
     final copy = ProxyManifestData(
       segmentDurationMs: segmentDurationMs,
@@ -283,11 +520,25 @@ class ProxyManifestData {
       fps: fps,
       hasAudio: hasAudio,
       durationMs: durationMs,
+      sourceStartMs: sourceStartMs,
+      sourceEndMs: sourceEndMs,
+      orientation: orientation,
+      videoCodec: videoCodec,
+      audioCodec: audioCodec,
+      matchesSourceVideoCodec: matchesSourceVideoCodec,
+      matchesSourceAudioCodec: matchesSourceAudioCodec,
     );
     copy.segments.addAll(segments);
     copy.keyframes.addAll(keyframes);
     return copy;
   }
+}
+
+class _SegmentSourceWindow {
+  const _SegmentSourceWindow(this.startMs, this.endMs);
+
+  final int startMs;
+  final int endMs;
 }
 
 class VideoProxySession {
@@ -422,17 +673,24 @@ class VideoProxyService {
       'version': 1,
       'segmentDurationMs': manifestData.segmentDurationMs,
       'segments': manifestData.segments
-          .map((s) => {
-                'index': s.index,
-                'path': p.basename(s.path),
-                'durationMs': s.durationMs,
-              })
+          .map((s) {
+            final data = Map<String, Object?>.from(s.toJson());
+            data['path'] = p.basename(s.path);
+            return data;
+          })
           .toList(),
       'width': manifestData.width,
       'height': manifestData.height,
       'fps': manifestData.fps,
       'hasAudio': manifestData.hasAudio,
       'durationMs': manifestData.durationMs,
+      'sourceStartMs': manifestData.sourceStartMs,
+      'sourceEndMs': manifestData.sourceEndMs,
+      'orientation': manifestData.orientation,
+      'videoCodec': manifestData.videoCodec,
+      'audioCodec': manifestData.audioCodec,
+      'matchesSourceVideoCodec': manifestData.matchesSourceVideoCodec,
+      'matchesSourceAudioCodec': manifestData.matchesSourceAudioCodec,
       'keyframes': manifestData.keyframes.map((k) => k.toJson()).toList(),
     };
     await manifestFile
@@ -572,6 +830,19 @@ class VideoProxyService {
         final metaHeight =
             (metadataPayload['height'] as num?)?.toInt() ?? event.height;
         final metaHasAudio = metadataPayload['hasAudio'];
+        final metaSourceStart =
+            (metadataPayload['sourceStartMs'] as num?)?.toInt();
+        final metaSourceEnd =
+            (metadataPayload['sourceEndMs'] as num?)?.toInt();
+        final metaOrientation = metadataPayload['orientation']?.toString();
+        final metaVideoCodec = metadataPayload['videoCodec']?.toString();
+        final metaAudioCodec = metadataPayload['audioCodec']?.toString();
+        final metaMatchesVideo = metadataPayload.containsKey('matchesSourceVideoCodec')
+            ? metadataPayload['matchesSourceVideoCodec'] == true
+            : null;
+        final metaMatchesAudio = metadataPayload.containsKey('matchesSourceAudioCodec')
+            ? metadataPayload['matchesSourceAudioCodec'] == true
+            : null;
         manifest.mergeMetadata(
           segmentDurationMs: metaSegmentDuration,
           width: metaWidth,
@@ -579,6 +850,13 @@ class VideoProxyService {
           fps: metaFps,
           hasAudio: metaHasAudio is bool ? metaHasAudio : null,
           durationMs: metaDuration ?? event.durationMs,
+          sourceStartMs: metaSourceStart,
+          sourceEndMs: metaSourceEnd,
+          orientation: metaOrientation,
+          videoCodec: metaVideoCodec,
+          audioCodec: metaAudioCodec,
+          matchesSourceVideoCodec: metaMatchesVideo,
+          matchesSourceAudioCodec: metaMatchesAudio,
         );
         final metadataKeyframes = metadataPayload['keyframes'];
         if (metadataKeyframes is List) {
@@ -625,15 +903,35 @@ class VideoProxyService {
             fps: fps,
             hasAudio: event.hasAudio,
             durationMs: event.totalDurationMs,
+            sourceStartMs: event.sourceStartMs,
+            sourceEndMs: event.sourceEndMs,
+            orientation: event.orientation,
+            videoCodec: event.videoCodec,
+            audioCodec: event.audioCodec,
+            matchesSourceVideoCodec: event.matchesSourceVideoCodec,
+            matchesSourceAudioCodec: event.matchesSourceAudioCodec,
           );
 
+          final resolvedDuration =
+              event.durationMs ?? manifest.segmentDurationMs;
+          final segmentSourceEnd = event.sourceEndMs ??
+              ((event.sourceStartMs != null && resolvedDuration > 0)
+                  ? event.sourceStartMs! + resolvedDuration
+                  : null);
           final segment = ProxySegment(
             index: event.segmentIndex!,
             path: event.path!,
-            durationMs: event.durationMs ?? manifest.segmentDurationMs,
+            durationMs: resolvedDuration,
             width: width,
             height: height,
             hasAudio: event.hasAudio ?? manifest.hasAudio,
+            sourceStartMs: event.sourceStartMs,
+            sourceEndMs: segmentSourceEnd,
+            orientation: event.orientation,
+            videoCodec: event.videoCodec,
+            audioCodec: event.audioCodec,
+            matchesSourceVideoCodec: event.matchesSourceVideoCodec,
+            matchesSourceAudioCodec: event.matchesSourceAudioCodec,
           );
           manifest.addSegment(segment);
           manifestChanged = true;
@@ -698,6 +996,14 @@ class VideoProxyService {
           durationMs: manifest.durationMs,
           frameRate: manifest.fps,
           keyframes: List.unmodifiable(manifest.keyframes),
+          segments: List.unmodifiable(manifest.segments),
+          sourceStartMs: manifest.sourceStartMs,
+          sourceEndMs: manifest.sourceEndMs,
+          orientation: manifest.orientation,
+          videoCodec: manifest.videoCodec,
+          audioCodec: manifest.audioCodec,
+          matchesSourceVideoCodec: manifest.matchesSourceVideoCodec,
+          matchesSourceAudioCodec: manifest.matchesSourceAudioCodec,
         ));
       }
     });
@@ -914,14 +1220,6 @@ class VideoProxyService {
           required String filePath,
           required VideoProxyMetadata metadata,
         }) async {
-          manifest.mergeMetadata(
-            width: metadata.width,
-            height: metadata.height,
-            fps: metadata.frameRate,
-            durationMs: metadata.durationMs,
-          );
-          await _updateManifest(jobId, manifest);
-
           final tierResults = parseTierResults(tierResponses, metadata, filePath);
 
           final timelineMappings = <VideoProxyTimelineMapping>[];
@@ -932,6 +1230,10 @@ class VideoProxyService {
           String? sourceVideoCodec = request.sourceVideoCodec;
           String? sourceOrientation = request.sourceOrientation;
           bool? sourceMirrored = request.sourceMirrored;
+          bool? matchesSourceVideoCodec = manifest.matchesSourceVideoCodec;
+          bool? matchesSourceAudioCodec = manifest.matchesSourceAudioCodec;
+          final responseVideoCodec = response?['videoCodec']?.toString();
+          final responseAudioCodec = response?['audioCodec']?.toString();
 
           void mergeTimeline(Map<String, dynamic> json) {
             if (json.containsKey('sourceStartMs')) {
@@ -953,6 +1255,12 @@ class VideoProxyService {
             }
             if (json.containsKey('sourceMirrored')) {
               sourceMirrored = json['sourceMirrored'] as bool?;
+            }
+            if (json.containsKey('matchesSourceVideoCodec')) {
+              matchesSourceVideoCodec = json['matchesSourceVideoCodec'] == true;
+            }
+            if (json.containsKey('matchesSourceAudioCodec')) {
+              matchesSourceAudioCodec = json['matchesSourceAudioCodec'] == true;
             }
             final mappings = json['mappings'];
             if (mappings is List) {
@@ -1009,6 +1317,14 @@ class VideoProxyService {
           if (response?['sourceMirrored'] != null) {
             sourceMirrored = response?['sourceMirrored'] as bool?;
           }
+          if (response?['matchesSourceVideoCodec'] != null) {
+            matchesSourceVideoCodec =
+                response?['matchesSourceVideoCodec'] == true;
+          }
+          if (response?['matchesSourceAudioCodec'] != null) {
+            matchesSourceAudioCodec =
+                response?['matchesSourceAudioCodec'] == true;
+          }
 
           if (timelineMappings.isEmpty) {
             final defaultQuality = tierResults.isNotEmpty
@@ -1023,6 +1339,27 @@ class VideoProxyService {
               proxyDurationMs: metadata.durationMs,
             ));
           }
+
+          final computedSourceEnd = (sourceStartMs != null &&
+                  sourceDurationMs != null &&
+                  sourceDurationMs! >= 0)
+              ? sourceStartMs! + sourceDurationMs!
+              : null;
+
+          manifest.mergeMetadata(
+            width: metadata.width,
+            height: metadata.height,
+            fps: metadata.frameRate,
+            durationMs: metadata.durationMs,
+            sourceStartMs: sourceStartMs,
+            sourceEndMs: computedSourceEnd,
+            orientation: sourceOrientation,
+            videoCodec: sourceVideoCodec ?? responseVideoCodec,
+            audioCodec: responseAudioCodec,
+            matchesSourceVideoCodec: matchesSourceVideoCodec,
+            matchesSourceAudioCodec: matchesSourceAudioCodec,
+          );
+          await _updateManifest(jobId, manifest);
 
           return VideoProxyResult(
             filePath: filePath,
