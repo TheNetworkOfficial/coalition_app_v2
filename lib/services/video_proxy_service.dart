@@ -34,7 +34,13 @@ class _NativeProxyEvent {
     this.totalDurationMs,
     this.portraitPreferred,
     this.proxyBounding,
-  });
+    this.metadataPayload,
+    this.keyframePayload,
+    this.previewPayload,
+    this.timelinePayload,
+    this.qualityLabel,
+    Map<String, dynamic>? raw,
+  }) : raw = raw ?? const {};
 
   final String jobId;
   final String type;
@@ -50,25 +56,66 @@ class _NativeProxyEvent {
   final int? totalDurationMs;
   final bool? portraitPreferred;
   final String? proxyBounding;
+  final Map<String, dynamic>? metadataPayload;
+  final List<Map<String, dynamic>>? keyframePayload;
+  final Map<String, dynamic>? previewPayload;
+  final Map<String, dynamic>? timelinePayload;
+  final String? qualityLabel;
+  final Map<String, dynamic> raw;
 
   factory _NativeProxyEvent.fromDynamic(Object? value) {
     if (value is! Map) {
       throw ArgumentError('Invalid proxy event payload: $value');
     }
-    final jobId = value['jobId']?.toString();
-    final type = value['type']?.toString();
-    final progress = value['progress'];
-    final fallbackTriggered = value['fallbackTriggered'] == true;
-    final segmentIndex = (value['segmentIndex'] as num?)?.toInt();
-    final path = value['path']?.toString();
-    final durationMs = (value['durationMs'] as num?)?.toInt();
-    final width = (value['width'] as num?)?.toInt();
-    final height = (value['height'] as num?)?.toInt();
-    final hasAudio = value['hasAudio'] == true;
-    final totalSegments = (value['totalSegments'] as num?)?.toInt();
-    final totalDurationMs = (value['totalDurationMs'] as num?)?.toInt();
-    final portraitPreferred = value['portraitPreferred'] == true;
-    final proxyBounding = value['proxyBounding']?.toString();
+    final map = value.map((key, dynamic v) {
+      return MapEntry(key.toString(), v);
+    });
+    final jobId = map['jobId']?.toString();
+    final type = map['type']?.toString();
+    final progress = map['progress'];
+    final fallbackTriggered = map['fallbackTriggered'] == true;
+    final segmentIndex = (map['segmentIndex'] as num?)?.toInt();
+    final path = map['path']?.toString();
+    final durationMs = (map['durationMs'] as num?)?.toInt();
+    final width = (map['width'] as num?)?.toInt();
+    final height = (map['height'] as num?)?.toInt();
+    final hasAudio = map['hasAudio'] == true;
+    final totalSegments = (map['totalSegments'] as num?)?.toInt();
+    final totalDurationMs = (map['totalDurationMs'] as num?)?.toInt();
+    final portraitPreferred = map['portraitPreferred'] == true;
+    final proxyBounding = map['proxyBounding']?.toString();
+    Map<String, dynamic>? metadataPayload;
+    final metadata = map['metadata'];
+    if (metadata is Map) {
+      metadataPayload = metadata.map((key, dynamic v) {
+        return MapEntry(key.toString(), v);
+      });
+    }
+    List<Map<String, dynamic>>? keyframePayload;
+    final keyframes = map['keyframes'];
+    if (keyframes is List) {
+      keyframePayload = keyframes
+          .whereType<Map>()
+          .map((frame) => frame.map((key, dynamic v) {
+                return MapEntry(key.toString(), v);
+              }))
+          .toList();
+    }
+    Map<String, dynamic>? previewPayload;
+    final preview = map['preview'];
+    if (preview is Map) {
+      previewPayload = preview.map((key, dynamic v) {
+        return MapEntry(key.toString(), v);
+      });
+    }
+    Map<String, dynamic>? timelinePayload;
+    final timeline = map['timeline'];
+    if (timeline is Map) {
+      timelinePayload = timeline.map((key, dynamic v) {
+        return MapEntry(key.toString(), v);
+      });
+    }
+    final qualityLabel = map['quality']?.toString();
     return _NativeProxyEvent(
       jobId: jobId ?? '',
       type: type ?? 'unknown',
@@ -84,10 +131,23 @@ class _NativeProxyEvent {
       totalDurationMs: totalDurationMs,
       portraitPreferred: portraitPreferred,
       proxyBounding: proxyBounding,
+      metadataPayload: metadataPayload,
+      keyframePayload: keyframePayload,
+      previewPayload: previewPayload,
+      timelinePayload: timelinePayload,
+      qualityLabel: qualityLabel,
+      raw: map,
     );
   }
 
   bool get isProgress => type == 'progress';
+
+  String? get previewPath => previewPayload?['path']?.toString();
+
+  String? get previewQualityLabel {
+    final label = previewPayload?['quality'] ?? qualityLabel;
+    return label?.toString();
+  }
 }
 
 class VideoProxyProgress {
@@ -97,21 +157,189 @@ class VideoProxyProgress {
   final bool fallbackTriggered;
 }
 
-class ProxyManifestData {
-  ProxyManifestData({
-    required this.segmentDurationMs,
-    required this.width,
-    required this.height,
-    required this.fps,
-    required this.hasAudio,
+class ProxySessionMetadataEvent {
+  const ProxySessionMetadataEvent({
+    this.durationMs,
+    this.frameRate,
+    this.keyframes = const [],
   });
 
-  final int segmentDurationMs;
-  final int width;
-  final int height;
-  final double fps;
-  final bool hasAudio;
+  final int? durationMs;
+  final double? frameRate;
+  final List<ProxyKeyframe> keyframes;
+}
+
+class ProxyManifestData {
+  ProxyManifestData({
+    int? segmentDurationMs,
+    int? width,
+    int? height,
+    double? fps,
+    bool hasAudio = true,
+    int? durationMs,
+  })  : segmentDurationMs = segmentDurationMs ?? 0,
+        width = width,
+        height = height,
+        fps = fps,
+        hasAudio = hasAudio,
+        durationMs = durationMs;
+
+  int segmentDurationMs;
+  int? width;
+  int? height;
+  double? fps;
+  bool hasAudio;
+  int? durationMs;
   final List<ProxySegment> segments = [];
+  final List<ProxyKeyframe> keyframes = [];
+
+  void mergeMetadata({
+    int? segmentDurationMs,
+    int? width,
+    int? height,
+    double? fps,
+    bool? hasAudio,
+    int? durationMs,
+  }) {
+    if (segmentDurationMs != null && segmentDurationMs > 0) {
+      this.segmentDurationMs = segmentDurationMs;
+    }
+    if (width != null && width > 0) {
+      this.width = width;
+    }
+    if (height != null && height > 0) {
+      this.height = height;
+    }
+    if (fps != null && fps > 0) {
+      this.fps = fps;
+    }
+    if (hasAudio != null) {
+      this.hasAudio = hasAudio;
+    }
+    if (durationMs != null && durationMs >= 0) {
+      this.durationMs = durationMs;
+    }
+  }
+
+  void addSegment(ProxySegment segment) {
+    segments.removeWhere((existing) => existing.index == segment.index);
+    segments.add(segment);
+    segments.sort((a, b) => a.index.compareTo(b.index));
+    durationMs = segments.fold<int>(0, (sum, s) => sum + s.durationMs);
+    if (segment.durationMs > 0 && segmentDurationMs == 0) {
+      segmentDurationMs = segment.durationMs;
+    }
+    if (segment.width > 0) {
+      width = segment.width;
+    }
+    if (segment.height > 0) {
+      height = segment.height;
+    }
+    hasAudio = segment.hasAudio;
+  }
+
+  void addKeyframes(Iterable<ProxyKeyframe> frames) {
+    for (final frame in frames) {
+      final exists = keyframes.any((existing) =>
+          existing.timestampMs == frame.timestampMs &&
+          existing.fileOffsetBytes == frame.fileOffsetBytes);
+      if (!exists) {
+        keyframes.add(frame);
+      }
+    }
+    keyframes.sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
+  }
+
+  ProxySegment? segmentForTimestamp(int timestampMs) {
+    if (timestampMs < 0) return null;
+    var elapsed = 0;
+    final ordered = [...segments]..sort((a, b) => a.index.compareTo(b.index));
+    for (final segment in ordered) {
+      final start = elapsed;
+      final end = start + segment.durationMs;
+      if (timestampMs >= start && timestampMs < end) {
+        return segment;
+      }
+      elapsed = end;
+    }
+    return null;
+  }
+
+  List<ProxyKeyframe> keyframesInRange(int startMs, int endMs) {
+    if (endMs < startMs) {
+      return const [];
+    }
+    return keyframes
+        .where((frame) =>
+            frame.timestampMs >= startMs && frame.timestampMs <= endMs)
+        .toList(growable: false);
+  }
+
+  ProxyManifestData copy() {
+    final copy = ProxyManifestData(
+      segmentDurationMs: segmentDurationMs,
+      width: width,
+      height: height,
+      fps: fps,
+      hasAudio: hasAudio,
+      durationMs: durationMs,
+    );
+    copy.segments.addAll(segments);
+    copy.keyframes.addAll(keyframes);
+    return copy;
+  }
+}
+
+class VideoProxySession {
+  VideoProxySession._({
+    required this.jobId,
+    required this.request,
+    required Future<ProxyPreview> preview,
+    required Stream<ProxySessionMetadataEvent> metadataStream,
+    required Stream<VideoProxyProgress> progressStream,
+    required Future<VideoProxyResult> result,
+    required Future<void> Function() cancel,
+    required Future<void> Function(int, int, ProxyQuality) ensureSegment,
+    required ProxyManifestData? Function() manifestLookup,
+  })  : firstPreview = preview,
+        metadata = metadataStream,
+        progress = progressStream,
+        completed = result,
+        _cancel = cancel,
+        _ensureSegment = ensureSegment,
+        _manifestLookup = manifestLookup;
+
+  final String jobId;
+  final VideoProxyRequest request;
+  final Future<ProxyPreview> firstPreview;
+  final Stream<ProxySessionMetadataEvent> metadata;
+  final Stream<VideoProxyProgress> progress;
+  final Future<VideoProxyResult> completed;
+  final Future<void> Function() _cancel;
+  final Future<void> Function(int, int, ProxyQuality) _ensureSegment;
+  final ProxyManifestData? Function() _manifestLookup;
+
+  Future<void> cancel() => _cancel();
+
+  Future<void> ensureSegment(int startMs, int endMs,
+      {ProxyQuality quality = ProxyQuality.preview}) {
+    return _ensureSegment(startMs, endMs, quality);
+  }
+
+  ProxyManifestData? get manifest => _manifestLookup()?.copy();
+
+  ProxySegment? segmentForTimestamp(int timestampMs) {
+    final manifest = _manifestLookup();
+    return manifest?.segmentForTimestamp(timestampMs);
+  }
+
+  List<ProxyKeyframe> keyframesInRange(int startMs, int endMs) {
+    final manifest = _manifestLookup();
+    if (manifest == null) {
+      return const [];
+    }
+    return manifest.keyframesInRange(startMs, endMs);
+  }
 }
 
 class VideoProxyJob {
@@ -119,11 +347,13 @@ class VideoProxyJob {
     required this.future,
     required this.progress,
     required Future<void> Function() cancel,
+    this.session,
   }) : _cancel = cancel;
 
   final Future<VideoProxyResult> future;
   final Stream<VideoProxyProgress> progress;
   final Future<void> Function() _cancel;
+  final VideoProxySession? session;
 
   Future<void> cancel() => _cancel();
 }
@@ -143,6 +373,26 @@ class VideoProxyService {
 
   final Stream<_NativeProxyEvent> _progressEvents;
   final Map<String, ProxyManifestData> _manifests = {};
+
+  ProxyManifestData? manifestForJob(String jobId) {
+    final manifest = _manifests[jobId];
+    return manifest?.copy();
+  }
+
+  ProxySegment? manifestSegmentFor(String jobId, int timestampMs) {
+    return _manifests[jobId]?.segmentForTimestamp(timestampMs);
+  }
+
+  List<ProxyKeyframe> manifestKeyframesFor(
+      String jobId, int startMs, int endMs) {
+    final manifest = _manifests[jobId];
+    if (manifest == null) return const [];
+    return manifest.keyframesInRange(startMs, endMs);
+  }
+
+  ProxyManifestData _manifestForJob(String jobId) {
+    return _manifests.putIfAbsent(jobId, () => ProxyManifestData());
+  }
 
   /// Returns a stream of raw native proxy events for a specific jobId.
   Stream<_NativeProxyEvent> nativeEventsFor(String jobId) {
@@ -182,6 +432,8 @@ class VideoProxyService {
       'height': manifestData.height,
       'fps': manifestData.fps,
       'hasAudio': manifestData.hasAudio,
+      'durationMs': manifestData.durationMs,
+      'keyframes': manifestData.keyframes.map((k) => k.toJson()).toList(),
     };
     await manifestFile
         .writeAsString(JsonEncoder.withIndent('  ').convert(json));
@@ -196,7 +448,7 @@ class VideoProxyService {
     }
   }
 
-  VideoProxyJob createJob({
+  VideoProxySession createSession({
     required VideoProxyRequest request,
     bool enableLogging = true,
     void Function(String jobId)? onJobCreated,
@@ -210,13 +462,20 @@ class VideoProxyService {
       }
     }
     final progressController = StreamController<VideoProxyProgress>.broadcast();
-    final completer = Completer<VideoProxyResult>();
+    final metadataController =
+        StreamController<ProxySessionMetadataEvent>.broadcast();
+    final previewCompleter = Completer<ProxyPreview>();
+    final resultCompleter = Completer<VideoProxyResult>();
     final stopwatch = Stopwatch()..start();
     var cancelled = false;
     var autoFallbackRequested = request.forceFallback;
     Timer? timeoutTimer;
     Timer? stallTimer;
     var fallbackScheduled = request.forceFallback;
+    var finalized = false;
+    Map<String, dynamic>? lastTimelinePayload;
+
+    _manifestForJob(jobId);
 
     void cancelTimers() {
       timeoutTimer?.cancel();
@@ -271,8 +530,10 @@ class VideoProxyService {
     subscription = _progressEvents
         .where((event) => event.jobId == jobId)
         .listen((event) async {
-      debugPrint(
-          '[VideoProxyService] native event for job $jobId: type=${event.type} segmentIndex=${event.segmentIndex} path=${event.path} progress=${event.progress}');
+      if (enableLogging) {
+        debugPrint(
+            '[VideoProxyService] native event for job $jobId: type=${event.type} segmentIndex=${event.segmentIndex} path=${event.path} progress=${event.progress}');
+      }
       if (cancelled) return;
       resetStallTimer();
 
@@ -291,27 +552,80 @@ class VideoProxyService {
         return;
       }
 
+      final manifest = _manifestForJob(jobId);
+      var manifestChanged = false;
+
+      if (event.timelinePayload != null) {
+        lastTimelinePayload = event.timelinePayload;
+      }
+
+      final metadataPayload = event.metadataPayload;
+      if (metadataPayload != null) {
+        final metaDuration = (metadataPayload['durationMs'] as num?)?.toInt();
+        final metaFps =
+            (metadataPayload['frameRate'] as num?)?.toDouble() ??
+                (metadataPayload['fps'] as num?)?.toDouble();
+        final metaSegmentDuration =
+            (metadataPayload['segmentDurationMs'] as num?)?.toInt();
+        final metaWidth =
+            (metadataPayload['width'] as num?)?.toInt() ?? event.width;
+        final metaHeight =
+            (metadataPayload['height'] as num?)?.toInt() ?? event.height;
+        final metaHasAudio = metadataPayload['hasAudio'];
+        manifest.mergeMetadata(
+          segmentDurationMs: metaSegmentDuration,
+          width: metaWidth,
+          height: metaHeight,
+          fps: metaFps,
+          hasAudio: metaHasAudio is bool ? metaHasAudio : null,
+          durationMs: metaDuration ?? event.durationMs,
+        );
+        final metadataKeyframes = metadataPayload['keyframes'];
+        if (metadataKeyframes is List) {
+          final frames = metadataKeyframes.whereType<Map>().map((frame) {
+            final casted = frame.map((key, dynamic value) {
+              return MapEntry(key.toString(), value);
+            });
+            return ProxyKeyframe.fromJson(casted);
+          });
+          manifest.addKeyframes(frames);
+        }
+        manifestChanged = true;
+      }
+
+      final keyframePayload = event.keyframePayload;
+      if (keyframePayload != null && keyframePayload.isNotEmpty) {
+        manifest.addKeyframes(
+          keyframePayload.map(ProxyKeyframe.fromJson),
+        );
+        manifestChanged = true;
+      }
+
       if (event.type == 'segment_ready' &&
           event.segmentIndex != null &&
           event.path != null) {
         try {
           // Ensure job manifest exists
-          final width = event.width ?? request.targetWidth;
-          final height = event.height ?? request.targetHeight;
-          final fps = (event.totalDurationMs != null &&
-                  event.totalSegments != null &&
-                  event.totalSegments! > 0)
-              ? ((event.totalDurationMs! / 1000.0) / event.totalSegments!)
-              : (request.frameRateHint?.toDouble() ?? 24.0);
-          final manifest = _manifests.putIfAbsent(
-              jobId,
-              () => ProxyManifestData(
-                    segmentDurationMs: 10000,
-                    width: width,
-                    height: height,
-                    fps: fps,
-                    hasAudio: event.hasAudio ?? true,
-                  ));
+          final width =
+              event.width ?? manifest.width ?? request.targetWidth;
+          final height =
+              event.height ?? manifest.height ?? request.targetHeight;
+          final fps = manifest.fps ??
+              ((event.totalDurationMs != null &&
+                      event.totalSegments != null &&
+                      event.totalSegments! > 0)
+                  ? ((event.totalDurationMs! / 1000.0) / event.totalSegments!)
+                  : (request.frameRateHint?.toDouble() ?? 24.0));
+          manifest.mergeMetadata(
+            segmentDurationMs: manifest.segmentDurationMs == 0
+                ? event.durationMs
+                : manifest.segmentDurationMs,
+            width: width,
+            height: height,
+            fps: fps,
+            hasAudio: event.hasAudio,
+            durationMs: event.totalDurationMs,
+          );
 
           final segment = ProxySegment(
             index: event.segmentIndex!,
@@ -319,10 +633,10 @@ class VideoProxyService {
             durationMs: event.durationMs ?? manifest.segmentDurationMs,
             width: width,
             height: height,
-            hasAudio: event.hasAudio ?? true,
+            hasAudio: event.hasAudio ?? manifest.hasAudio,
           );
-          manifest.segments.add(segment);
-          await _updateManifest(jobId, manifest);
+          manifest.addSegment(segment);
+          manifestChanged = true;
 
           // Emit a small progress update based on segments available if total known
           if (event.totalSegments != null && event.totalDurationMs != null) {
@@ -334,26 +648,68 @@ class VideoProxyService {
           debugPrint(
               '[VideoProxyService] Failed handling segment_ready: $e\n$st');
         }
-        return;
+      }
+
+      if (event.type == 'preview_ready' || event.type == 'poster_ready') {
+        final previewPath = event.previewPath ?? event.path;
+        if (previewPath != null && previewPath.isNotEmpty) {
+          final width =
+              event.width ?? manifest.width ?? request.targetWidth;
+          final height =
+              event.height ?? manifest.height ?? request.targetHeight;
+          final durationMs = event.durationMs ??
+              manifest.durationMs ??
+              request.estimatedDurationMs ??
+              0;
+          final frameRate = manifest.fps ??
+              request.frameRateHint?.toDouble();
+          final metadata = VideoProxyMetadata(
+            width: width,
+            height: height,
+            durationMs: durationMs,
+            frameRate: frameRate,
+            resolution: () {
+              final maxEdge = width >= height ? width : height;
+              if (maxEdge <= 640) return VideoProxyResolution.p360;
+              if (maxEdge <= 960) return VideoProxyResolution.p540;
+              if (maxEdge <= 1280) return VideoProxyResolution.hd720;
+              return VideoProxyResolution.hd1080;
+            }(),
+            rotationBaked: true,
+          );
+          if (!previewCompleter.isCompleted) {
+            previewCompleter.complete(ProxyPreview(
+              quality: proxyQualityFromLabel(event.previewQualityLabel),
+              filePath: previewPath,
+              metadata: metadata,
+              segmentIndex: event.segmentIndex,
+            ));
+          }
+        }
       }
 
       if (event.type == 'completed') {
-        try {
-          // finalize manifest if present
-          final manifest = _manifests[jobId];
-          if (manifest != null) {
-            await _updateManifest(jobId, manifest);
-          }
-        } catch (e, st) {
-          debugPrint('[VideoProxyService] Failed finalizing manifest: $e\n$st');
-        }
-        return;
+        manifestChanged = true;
+      }
+
+      if (manifestChanged) {
+        await _updateManifest(jobId, manifest);
+        metadataController.add(ProxySessionMetadataEvent(
+          durationMs: manifest.durationMs,
+          frameRate: manifest.fps,
+          keyframes: List.unmodifiable(manifest.keyframes),
+        ));
       }
     });
 
     Future<void> finalize() async {
+      if (finalized) {
+        return;
+      }
+      finalized = true;
       await subscription?.cancel();
       await progressController.close();
+      await metadataController.close();
     }
 
     Future<void> emitSourceSummary() async {
@@ -407,8 +763,12 @@ class VideoProxyService {
         Map<String, dynamic>? response;
 
         if (cancelled) {
-          if (!completer.isCompleted) {
-            completer.completeError(const VideoProxyCancelException());
+          final error = const VideoProxyCancelException();
+          if (!resultCompleter.isCompleted) {
+            resultCompleter.completeError(error);
+          }
+          if (!previewCompleter.isCompleted) {
+            previewCompleter.completeError(error);
           }
           return;
         }
@@ -433,8 +793,12 @@ class VideoProxyService {
           final code = response?['code']?.toString();
 
           if (cancelled) {
-            if (!completer.isCompleted) {
-              completer.completeError(const VideoProxyCancelException());
+            final error = const VideoProxyCancelException();
+            if (!resultCompleter.isCompleted) {
+              resultCompleter.completeError(error);
+            }
+            if (!previewCompleter.isCompleted) {
+              previewCompleter.completeError(error);
             }
             return;
           }
@@ -445,212 +809,407 @@ class VideoProxyService {
           }
 
           if (code == 'cancelled') {
-            if (!completer.isCompleted) {
-              completer.completeError(const VideoProxyCancelException());
+            final error = const VideoProxyCancelException();
+            if (!resultCompleter.isCompleted) {
+              resultCompleter.completeError(error);
+            }
+            if (!previewCompleter.isCompleted) {
+              previewCompleter.completeError(error);
             }
             return;
           }
 
           final message = response?['message']?.toString() ?? 'Unknown error';
-          if (!completer.isCompleted) {
-            completer.completeError(VideoProxyException(message, code: code));
+          final error = VideoProxyException(message, code: code);
+          if (!resultCompleter.isCompleted) {
+            resultCompleter.completeError(error);
+          }
+          if (!previewCompleter.isCompleted) {
+            previewCompleter.completeError(error);
           }
           return;
         }
 
-        final proxyPath = response['proxyPath']?.toString();
-        if ((proxyPath == null || proxyPath.isEmpty) &&
-            currentRequest.segmentedPreview) {
-          // Segmented preview flow: native may not return a single proxyPath.
-          // Instead, it emits segment_ready/completed events and writes a
-          // per-job manifest to the cache directory. Wait for that manifest to
-          // appear and use it as the proxy result.
-          try {
-            final cacheDir = await _ensureCacheDirectory();
-            final jobDir = Directory(p.join(cacheDir.path, jobId));
-            final manifestFile = File(p.join(jobDir.path, 'manifest.json'));
+        final manifest = _manifestForJob(jobId);
+        final usedFallbackFlag = response?['usedFallback720p'] == true;
 
-            // Wait for manifest to be written by the event handler. Give a
-            // generous timeout for segmented jobs.
-            var waited = 0;
-            const pollMs = 500;
-            const maxWaitMs = 180000; // 3 minutes
-            while (!await manifestFile.exists()) {
-              if (cancelled) {
-                if (!completer.isCompleted) {
-                  completer.completeError(const VideoProxyCancelException());
-                }
-                return;
-              }
-              if (waited >= maxWaitMs) {
-                if (!completer.isCompleted) {
-                  completer.completeError(const VideoProxyException(
-                      'Timed out waiting for segmented preview manifest'));
-                }
-                return;
-              }
-              await Future.delayed(const Duration(milliseconds: pollMs));
-              waited += pollMs;
-            }
-
-            // Manifest should be available in our in-memory manifests map from
-            // the event handler; if not, parse the file as a fallback.
-            final manifestData = _manifests[jobId];
-            int width, height, durationMs;
-            double fps;
-            if (manifestData != null) {
-              width = manifestData.width;
-              height = manifestData.height;
-              fps = manifestData.fps;
-              durationMs = manifestData.segments
-                  .fold<int>(0, (a, s) => a + s.durationMs);
-            } else {
-              // Parse manifest.json as a fallback
-              try {
-                final content = await manifestFile.readAsString();
-                final json = jsonDecode(content) as Map<String, dynamic>;
-                width = (json['width'] as num?)?.toInt() ?? request.targetWidth;
-                height =
-                    (json['height'] as num?)?.toInt() ?? request.targetHeight;
-                fps = (json['fps'] as num?)?.toDouble() ??
-                    (request.frameRateHint?.toDouble() ?? 24.0);
-                final segs = (json['segments'] as List<dynamic>?) ?? [];
-                durationMs = segs.fold<int>(
-                    0,
-                    (a, s) =>
-                        a + ((s as Map)['durationMs'] as num? ?? 0).toInt());
-              } catch (e) {
-                if (!completer.isCompleted) {
-                  completer.completeError(VideoProxyException(
-                      'Failed to read segmented manifest: $e'));
-                }
-                return;
-              }
-            }
-
-            final frameRate = fps;
-            final rotationBaked = true;
-            final usedFallbackFlag = response['usedFallback720p'] == true;
-            final transcodeDurationMs =
-                (response['transcodeDurationMs'] as num?)?.toInt() ??
-                    stopwatch.elapsedMilliseconds;
-
-            final metadata = VideoProxyMetadata(
-              width: width,
-              height: height,
-              durationMs: durationMs,
-              frameRate: frameRate,
-              resolution: request.resolution,
-              rotationBaked: rotationBaked,
-            );
-
-            final result = VideoProxyResult(
-              filePath: manifestFile.path,
-              metadata: metadata,
-              request: request,
-              transcodeDurationMs: transcodeDurationMs,
-              usedFallback720p: usedFallbackFlag || autoFallbackRequested,
-            );
-
-            if (!completer.isCompleted) {
-              completer.complete(result);
-            }
-            return;
-          } catch (e, st) {
-            debugPrint(
-                '[VideoProxyService] Error handling segmented response: $e\n$st');
-            if (!completer.isCompleted) {
-              completer.completeError(VideoProxyException(
-                  'Failed to handle segmented proxy response: $e'));
-            }
-            return;
-          }
-        }
-
-        // Non-segmented single-file proxy path handling
-        if (proxyPath == null || proxyPath.isEmpty) {
-          if (!completer.isCompleted) {
-            completer.completeError(
-              const VideoProxyException('Proxy path missing from response'),
-            );
-          }
-          return;
-        }
-
-        final width =
-            (response['width'] as num?)?.toInt() ?? request.targetWidth;
-        final height =
-            (response['height'] as num?)?.toInt() ?? request.targetHeight;
-        final durationMs = (response['durationMs'] as num?)?.toInt() ??
-            request.estimatedDurationMs ??
-            0;
-        final frameRate = (response['frameRate'] as num?)?.toDouble();
-        final rotationBaked = response['rotationBaked'] != false;
-        final usedFallbackFlag = response['usedFallback720p'] == true;
-        final transcodeDurationMs =
-            (response['transcodeDurationMs'] as num?)?.toInt() ??
-                stopwatch.elapsedMilliseconds;
-
-        final maxEdge = width >= height ? width : height;
-        final resolution = () {
-          if (maxEdge <= 640) return VideoProxyResolution.p360;
-          if (maxEdge <= 960) return VideoProxyResolution.p540;
-          if (maxEdge <= 1280) return VideoProxyResolution.hd720;
-          return VideoProxyResolution.hd1080;
-        }();
-
-        final metadata = VideoProxyMetadata(
-          width: width,
-          height: height,
-          durationMs: durationMs,
-          frameRate: frameRate,
-          resolution: resolution,
-          rotationBaked: rotationBaked,
-        );
-
-        final result = VideoProxyResult(
-          filePath: proxyPath,
-          metadata: metadata,
-          request: request,
-          transcodeDurationMs: transcodeDurationMs,
-          usedFallback720p: usedFallbackFlag || autoFallbackRequested,
-        );
-
-        if (enableLogging) {
-          debugPrint(
-            '[VideoProxyService] Proxy ready ${metadata.width}x${metadata.height} '
-            '(${metadata.resolution}) in ${result.transcodeDurationMs} ms '
-            '(fallback=$usedFallbackFlag)',
+        VideoProxyMetadata buildMetadata({
+          required int width,
+          required int height,
+          required int durationMs,
+          double? frameRate,
+          bool rotationBaked = true,
+        }) {
+          final maxEdge = width >= height ? width : height;
+          final resolution = () {
+            if (maxEdge <= 640) return VideoProxyResolution.p360;
+            if (maxEdge <= 960) return VideoProxyResolution.p540;
+            if (maxEdge <= 1280) return VideoProxyResolution.hd720;
+            return VideoProxyResolution.hd1080;
+          }();
+          return VideoProxyMetadata(
+            width: width,
+            height: height,
+            durationMs: durationMs,
+            frameRate: frameRate,
+            resolution: resolution,
+            rotationBaked: rotationBaked,
           );
         }
 
-        if (!completer.isCompleted) {
-          completer.complete(result);
+        List<Map<String, dynamic>> tierResponses =
+            (response?['tiers'] as List?)
+                    ?.whereType<Map>()
+                    .map((tier) => tier.map((key, dynamic value) {
+                          return MapEntry(key.toString(), value);
+                        }))
+                    .toList() ??
+                const <Map<String, dynamic>>[];
+
+        List<ProxyTierResult> parseTierResults(
+          List<Map<String, dynamic>> tiers,
+          VideoProxyMetadata fallbackMetadata,
+          String fallbackPath,
+        ) {
+          final results = <ProxyTierResult>[];
+          for (final tier in tiers) {
+            final tierPath = tier['filePath']?.toString() ?? fallbackPath;
+            final tierWidth =
+                (tier['width'] as num?)?.toInt() ?? fallbackMetadata.width;
+            final tierHeight =
+                (tier['height'] as num?)?.toInt() ?? fallbackMetadata.height;
+            final tierDuration =
+                (tier['durationMs'] as num?)?.toInt() ??
+                    fallbackMetadata.durationMs;
+            final tierFrameRate =
+                (tier['frameRate'] as num?)?.toDouble() ??
+                    fallbackMetadata.frameRate;
+            final tierMetadata = buildMetadata(
+              width: tierWidth,
+              height: tierHeight,
+              durationMs: tierDuration,
+              frameRate: tierFrameRate,
+            );
+            results.add(ProxyTierResult(
+              quality:
+                  proxyQualityFromLabel(tier['quality']?.toString()),
+              filePath: tierPath,
+              metadata: tierMetadata,
+            ));
+          }
+          if (results.every((tier) => tier.filePath != fallbackPath)) {
+            results.insert(
+              0,
+              ProxyTierResult(
+                quality: ProxyQuality.proxy,
+                filePath: fallbackPath,
+                metadata: fallbackMetadata,
+              ),
+            );
+          }
+          return results;
+        }
+
+        Future<VideoProxyResult> buildResult({
+          required String filePath,
+          required VideoProxyMetadata metadata,
+        }) async {
+          manifest.mergeMetadata(
+            width: metadata.width,
+            height: metadata.height,
+            fps: metadata.frameRate,
+            durationMs: metadata.durationMs,
+          );
+          await _updateManifest(jobId, manifest);
+
+          final tierResults = parseTierResults(tierResponses, metadata, filePath);
+
+          final timelineMappings = <VideoProxyTimelineMapping>[];
+          int? sourceStartMs = request.sourceStartMs;
+          int? sourceDurationMs =
+              request.sourceDurationMs ?? metadata.durationMs;
+          int? sourceRotationDegrees = request.sourceRotationDegrees;
+          String? sourceVideoCodec = request.sourceVideoCodec;
+          String? sourceOrientation = request.sourceOrientation;
+          bool? sourceMirrored = request.sourceMirrored;
+
+          void mergeTimeline(Map<String, dynamic> json) {
+            if (json.containsKey('sourceStartMs')) {
+              sourceStartMs = (json['sourceStartMs'] as num?)?.toInt();
+            }
+            if (json.containsKey('sourceDurationMs')) {
+              sourceDurationMs =
+                  (json['sourceDurationMs'] as num?)?.toInt();
+            }
+            if (json.containsKey('sourceRotationDegrees')) {
+              sourceRotationDegrees =
+                  (json['sourceRotationDegrees'] as num?)?.toInt();
+            }
+            if (json.containsKey('sourceVideoCodec')) {
+              sourceVideoCodec = json['sourceVideoCodec']?.toString();
+            }
+            if (json.containsKey('sourceOrientation')) {
+              sourceOrientation = json['sourceOrientation']?.toString();
+            }
+            if (json.containsKey('sourceMirrored')) {
+              sourceMirrored = json['sourceMirrored'] as bool?;
+            }
+            final mappings = json['mappings'];
+            if (mappings is List) {
+              for (final mapping in mappings.whereType<Map>()) {
+                final casted = mapping.map((key, dynamic value) {
+                  return MapEntry(key.toString(), value);
+                });
+                timelineMappings
+                    .add(VideoProxyTimelineMapping.fromJson(casted));
+              }
+            }
+          }
+
+          void mergeTimelineValue(Object? value) {
+            if (value is Map) {
+              final casted = value.map((key, dynamic v) {
+                return MapEntry(key.toString(), v);
+              });
+              mergeTimeline(casted);
+            }
+          }
+
+          mergeTimelineValue(response?['timeline']);
+          mergeTimelineValue(lastTimelinePayload);
+          final responseMappings = response?['timelineMappings'];
+          if (responseMappings is List) {
+            for (final mapping in responseMappings.whereType<Map>()) {
+              final casted = mapping.map((key, dynamic value) {
+                return MapEntry(key.toString(), value);
+              });
+              timelineMappings
+                  .add(VideoProxyTimelineMapping.fromJson(casted));
+            }
+          }
+
+          if (response?['sourceStartMs'] != null) {
+            sourceStartMs =
+                (response?['sourceStartMs'] as num?)?.toInt();
+          }
+          if (response?['sourceDurationMs'] != null) {
+            sourceDurationMs =
+                (response?['sourceDurationMs'] as num?)?.toInt();
+          }
+          if (response?['sourceRotationDegrees'] != null) {
+            sourceRotationDegrees =
+                (response?['sourceRotationDegrees'] as num?)?.toInt();
+          }
+          if (response?['sourceVideoCodec'] != null) {
+            sourceVideoCodec = response?['sourceVideoCodec']?.toString();
+          }
+          if (response?['sourceOrientation'] != null) {
+            sourceOrientation = response?['sourceOrientation']?.toString();
+          }
+          if (response?['sourceMirrored'] != null) {
+            sourceMirrored = response?['sourceMirrored'] as bool?;
+          }
+
+          if (timelineMappings.isEmpty) {
+            final defaultQuality = tierResults.isNotEmpty
+                ? tierResults.first.quality
+                : ProxyQuality.proxy;
+            timelineMappings.add(VideoProxyTimelineMapping(
+              quality: defaultQuality,
+              sourceStartMs: sourceStartMs ?? request.sourceStartMs,
+              sourceDurationMs:
+                  sourceDurationMs ?? metadata.durationMs,
+              proxyStartMs: 0,
+              proxyDurationMs: metadata.durationMs,
+            ));
+          }
+
+          return VideoProxyResult(
+            filePath: filePath,
+            metadata: metadata,
+            request: request,
+            transcodeDurationMs:
+                (response?['transcodeDurationMs'] as num?)?.toInt() ??
+                    stopwatch.elapsedMilliseconds,
+            usedFallback720p: usedFallbackFlag || autoFallbackRequested,
+            sourceStartMs: sourceStartMs,
+            sourceDurationMs: sourceDurationMs,
+            sourceRotationDegrees: sourceRotationDegrees,
+            sourceVideoCodec: sourceVideoCodec,
+            sourceOrientation: sourceOrientation,
+            sourceMirrored: sourceMirrored,
+            tiers: tierResults,
+            timelineMappings: timelineMappings,
+          );
+        }
+
+        Future<VideoProxyResult> buildSegmentedResult() async {
+          final cacheDir = await _ensureCacheDirectory();
+          final jobDir = Directory(p.join(cacheDir.path, jobId));
+          final manifestFile = File(p.join(jobDir.path, 'manifest.json'));
+
+          var waited = 0;
+          const pollMs = 500;
+          const maxWaitMs = 180000;
+          while (!await manifestFile.exists()) {
+            if (cancelled) {
+              throw const VideoProxyCancelException();
+            }
+            if (waited >= maxWaitMs) {
+              throw const VideoProxyException(
+                  'Timed out waiting for segmented preview manifest');
+            }
+            await Future.delayed(const Duration(milliseconds: pollMs));
+            waited += pollMs;
+          }
+
+          var width = manifest.width ?? request.targetWidth;
+          var height = manifest.height ?? request.targetHeight;
+          var durationMs = manifest.durationMs ??
+              manifest.segments.fold<int>(0, (sum, seg) => sum + seg.durationMs);
+          var fps = manifest.fps ?? request.frameRateHint?.toDouble();
+
+          if (manifest.segments.isEmpty) {
+            try {
+              final content = await manifestFile.readAsString();
+              final json = jsonDecode(content) as Map<String, dynamic>;
+              width = (json['width'] as num?)?.toInt() ?? width;
+              height = (json['height'] as num?)?.toInt() ?? height;
+              fps = (json['fps'] as num?)?.toDouble() ?? fps;
+              durationMs = (json['durationMs'] as num?)?.toInt() ?? durationMs;
+            } catch (error) {
+              throw VideoProxyException(
+                  'Failed to read segmented manifest: $error');
+            }
+          }
+
+          manifest.mergeMetadata(
+            width: width,
+            height: height,
+            fps: fps,
+            durationMs: durationMs,
+          );
+
+          final metadata = buildMetadata(
+            width: width,
+            height: height,
+            durationMs: durationMs,
+            frameRate: fps,
+          );
+
+          return buildResult(
+            filePath: manifestFile.path,
+            metadata: metadata,
+          );
+        }
+
+        Future<VideoProxyResult> buildSingleResult() async {
+          final path = response?['proxyPath']?.toString();
+          if (path == null || path.isEmpty) {
+            throw const VideoProxyException('Proxy path missing from response');
+          }
+          final width =
+              (response?['width'] as num?)?.toInt() ?? request.targetWidth;
+          final height =
+              (response?['height'] as num?)?.toInt() ?? request.targetHeight;
+          final durationMs =
+              (response?['durationMs'] as num?)?.toInt() ??
+                  request.estimatedDurationMs ??
+                  0;
+          final frameRate = (response?['frameRate'] as num?)?.toDouble();
+          final rotationBaked = response?['rotationBaked'] != false;
+          final metadata = buildMetadata(
+            width: width,
+            height: height,
+            durationMs: durationMs,
+            frameRate: frameRate,
+            rotationBaked: rotationBaked,
+          );
+          return buildResult(filePath: path, metadata: metadata);
+        }
+
+        final result =
+            (response?['proxyPath'] == null ||
+                    (response?['proxyPath'] as String?)?.isEmpty == true) &&
+                    currentRequest.segmentedPreview
+                ? await buildSegmentedResult()
+                : await buildSingleResult();
+
+        if (enableLogging) {
+          debugPrint(
+            '[VideoProxyService] Proxy ready ${result.metadata.width}x${result.metadata.height} '
+            '(${result.metadata.resolution}) in ${result.transcodeDurationMs} ms '
+            '(fallback=${result.usedFallback720p})',
+          );
+        }
+
+        if (!previewCompleter.isCompleted) {
+          final primaryTier =
+              result.tiers.isNotEmpty ? result.tiers.first : null;
+          previewCompleter.complete(ProxyPreview(
+            quality: primaryTier?.quality ?? ProxyQuality.proxy,
+            filePath: result.filePath,
+            metadata: primaryTier?.metadata ?? result.metadata,
+          ));
+        }
+
+        if (!resultCompleter.isCompleted) {
+          resultCompleter.complete(result);
         }
       } on PlatformException catch (error) {
         if (cancelled) {
-          if (!completer.isCompleted) {
-            completer.completeError(const VideoProxyCancelException());
+          final cancelError = const VideoProxyCancelException();
+          if (!resultCompleter.isCompleted) {
+            resultCompleter.completeError(cancelError);
+          }
+          if (!previewCompleter.isCompleted) {
+            previewCompleter.completeError(cancelError);
           }
           return;
         }
         final code = error.code;
         final message = error.message ?? 'Proxy generation failed';
-        if (!completer.isCompleted) {
-          completer.completeError(VideoProxyException(message, code: code));
+        final proxyError = VideoProxyException(message, code: code);
+        if (!resultCompleter.isCompleted) {
+          resultCompleter.completeError(proxyError);
+        }
+        if (!previewCompleter.isCompleted) {
+          previewCompleter.completeError(proxyError);
+        }
+      } on VideoProxyException catch (error) {
+        if (!resultCompleter.isCompleted) {
+          resultCompleter.completeError(error);
+        }
+        if (!previewCompleter.isCompleted) {
+          previewCompleter.completeError(error);
+        }
+      } on VideoProxyCancelException catch (error) {
+        if (!resultCompleter.isCompleted) {
+          resultCompleter.completeError(error);
+        }
+        if (!previewCompleter.isCompleted) {
+          previewCompleter.completeError(error);
         }
       } catch (error, stackTrace) {
         if (cancelled) {
-          if (!completer.isCompleted) {
-            completer.completeError(const VideoProxyCancelException());
+          final cancelError = const VideoProxyCancelException();
+          if (!resultCompleter.isCompleted) {
+            resultCompleter.completeError(cancelError);
+          }
+          if (!previewCompleter.isCompleted) {
+            previewCompleter.completeError(cancelError);
           }
           return;
         }
         debugPrint(
             '[VideoProxyService] Proxy generation error: $error\n$stackTrace');
-        if (!completer.isCompleted) {
-          completer.completeError(
-              VideoProxyException('Failed to prepare proxy: $error'));
+        final proxyError =
+            VideoProxyException('Failed to prepare proxy: $error');
+        if (!resultCompleter.isCompleted) {
+          resultCompleter.completeError(proxyError);
+        }
+        if (!previewCompleter.isCompleted) {
+          previewCompleter.completeError(proxyError);
         }
       } finally {
         cancelTimers();
@@ -659,11 +1218,13 @@ class VideoProxyService {
       }
     }
 
-    unawaited(startJob());
-
-    return VideoProxyJob(
-      future: completer.future,
-      progress: progressController.stream,
+    final session = VideoProxySession._(
+      jobId: jobId,
+      request: request,
+      preview: previewCompleter.future,
+      metadataStream: metadataController.stream,
+      progressStream: progressController.stream,
+      result: resultCompleter.future,
       cancel: () async {
         if (cancelled) {
           return;
@@ -677,7 +1238,52 @@ class VideoProxyService {
           debugPrint(
               '[VideoProxyService] Failed to cancel proxy job $jobId: $error');
         }
+        if (!previewCompleter.isCompleted) {
+          previewCompleter
+              .completeError(const VideoProxyCancelException());
+        }
       },
+      ensureSegment: (startMs, endMs, quality) async {
+        if (cancelled) {
+          throw const VideoProxyCancelException();
+        }
+        try {
+          await _methodChannel.invokeMethod('ensureSegment', {
+            'jobId': jobId,
+            'startMs': startMs,
+            'endMs': endMs,
+            'quality': quality.platformLabel,
+          });
+        } on PlatformException catch (error) {
+          throw VideoProxyException(
+            error.message ?? 'Failed to ensure segment',
+            code: error.code,
+          );
+        }
+      },
+      manifestLookup: () => _manifests[jobId],
+    );
+
+    unawaited(startJob());
+
+    return session;
+  }
+
+  VideoProxyJob createJob({
+    required VideoProxyRequest request,
+    bool enableLogging = true,
+    void Function(String jobId)? onJobCreated,
+  }) {
+    final session = createSession(
+      request: request,
+      enableLogging: enableLogging,
+      onJobCreated: onJobCreated,
+    );
+    return VideoProxyJob(
+      future: session.completed,
+      progress: session.progress,
+      cancel: session.cancel,
+      session: session,
     );
   }
 }

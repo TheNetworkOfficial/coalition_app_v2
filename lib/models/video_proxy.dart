@@ -9,6 +9,57 @@ enum VideoProxyResolution {
 
 enum VideoProxyPreviewQuality { fast, quality }
 
+enum ProxyQuality { preview, proxy, mezzanine }
+
+ProxyQuality proxyQualityFromLabel(String? label,
+    {ProxyQuality fallback = ProxyQuality.preview}) {
+  switch (label?.toLowerCase()) {
+    case 'proxy':
+      return ProxyQuality.proxy;
+    case 'mezzanine':
+    case 'high':
+      return ProxyQuality.mezzanine;
+    default:
+      return fallback;
+  }
+}
+
+extension ProxyQualityPlatformLabel on ProxyQuality {
+  String get platformLabel {
+    switch (this) {
+      case ProxyQuality.preview:
+        return 'PREVIEW';
+      case ProxyQuality.proxy:
+        return 'PROXY';
+      case ProxyQuality.mezzanine:
+        return 'MEZZANINE';
+    }
+  }
+}
+
+class ProxyTierDescription {
+  const ProxyTierDescription({
+    required this.quality,
+    this.maxLongEdge,
+    this.videoBitrateKbps,
+    this.audioBitrateKbps,
+  });
+
+  final ProxyQuality quality;
+  final int? maxLongEdge;
+  final int? videoBitrateKbps;
+  final int? audioBitrateKbps;
+
+  Map<String, Object?> toJson() {
+    return {
+      'quality': quality.platformLabel,
+      'maxLongEdge': maxLongEdge,
+      'videoBitrateKbps': videoBitrateKbps,
+      'audioBitrateKbps': audioBitrateKbps,
+    };
+  }
+}
+
 class VideoProxyRequest {
   const VideoProxyRequest({
     required this.sourcePath,
@@ -21,6 +72,13 @@ class VideoProxyRequest {
     this.previewQuality = VideoProxyPreviewQuality.fast,
     this.forceFallback = false,
     this.segmentedPreview = false,
+    this.sourceStartMs = 0,
+    this.sourceDurationMs,
+    this.sourceRotationDegrees,
+    this.sourceVideoCodec,
+    this.sourceOrientation,
+    this.sourceMirrored,
+    this.tiers = const [],
   })  : assert(targetWidth > 0),
         assert(targetHeight > 0);
 
@@ -37,6 +95,13 @@ class VideoProxyRequest {
   /// When true, request a segmented preview where the native side emits
   /// segment_ready/progress/completed events and writes per-job cache dir.
   final bool segmentedPreview;
+  final int sourceStartMs;
+  final int? sourceDurationMs;
+  final int? sourceRotationDegrees;
+  final String? sourceVideoCodec;
+  final String? sourceOrientation;
+  final bool? sourceMirrored;
+  final List<ProxyTierDescription> tiers;
 
   bool get isPortraitCanvas => targetHeight >= targetWidth;
 
@@ -77,6 +142,13 @@ class VideoProxyRequest {
       'previewQuality': previewQuality.name.toUpperCase(),
       'forceFallback': forceFallback,
       'segmentedPreview': segmentedPreview,
+      'sourceStartMs': sourceStartMs,
+      'sourceDurationMs': sourceDurationMs,
+      'sourceRotationDegrees': sourceRotationDegrees,
+      'sourceVideoCodec': sourceVideoCodec,
+      'sourceOrientation': sourceOrientation,
+      'sourceMirrored': sourceMirrored,
+      'tiers': tiers.map((tier) => tier.toJson()).toList(),
     };
   }
 
@@ -91,6 +163,13 @@ class VideoProxyRequest {
     VideoProxyPreviewQuality? previewQuality,
     bool? forceFallback,
     bool? segmentedPreview,
+    int? sourceStartMs,
+    int? sourceDurationMs,
+    int? sourceRotationDegrees,
+    String? sourceVideoCodec,
+    String? sourceOrientation,
+    bool? sourceMirrored,
+    List<ProxyTierDescription>? tiers,
   }) {
     return VideoProxyRequest(
       sourcePath: sourcePath ?? this.sourcePath,
@@ -104,6 +183,14 @@ class VideoProxyRequest {
       previewQuality: previewQuality ?? this.previewQuality,
       forceFallback: forceFallback ?? this.forceFallback,
       segmentedPreview: segmentedPreview ?? this.segmentedPreview,
+      sourceStartMs: sourceStartMs ?? this.sourceStartMs,
+      sourceDurationMs: sourceDurationMs ?? this.sourceDurationMs,
+      sourceRotationDegrees:
+          sourceRotationDegrees ?? this.sourceRotationDegrees,
+      sourceVideoCodec: sourceVideoCodec ?? this.sourceVideoCodec,
+      sourceOrientation: sourceOrientation ?? this.sourceOrientation,
+      sourceMirrored: sourceMirrored ?? this.sourceMirrored,
+      tiers: tiers ?? this.tiers,
     );
   }
 
@@ -118,6 +205,13 @@ class VideoProxyRequest {
       previewQuality: VideoProxyPreviewQuality.fast,
       forceFallback: true,
       segmentedPreview: true,
+      sourceStartMs: sourceStartMs,
+      sourceDurationMs: sourceDurationMs,
+      sourceRotationDegrees: sourceRotationDegrees,
+      sourceVideoCodec: sourceVideoCodec,
+      sourceOrientation: sourceOrientation,
+      sourceMirrored: sourceMirrored,
+      tiers: tiers,
     );
   }
 }
@@ -149,6 +243,8 @@ class ProxyManifest {
     required this.height,
     required this.fps,
     required this.hasAudio,
+    this.keyframes = const [],
+    this.durationMs,
   });
 
   final int version;
@@ -158,6 +254,8 @@ class ProxyManifest {
   final int height;
   final double fps;
   final bool hasAudio;
+  final List<ProxyKeyframe> keyframes;
+  final int? durationMs;
 }
 
 class VideoProxyMetadata {
@@ -189,6 +287,14 @@ class VideoProxyResult {
     required this.request,
     required this.transcodeDurationMs,
     this.usedFallback720p = false,
+    this.sourceStartMs,
+    this.sourceDurationMs,
+    this.sourceRotationDegrees,
+    this.sourceVideoCodec,
+    this.sourceOrientation,
+    this.sourceMirrored,
+    this.tiers = const [],
+    this.timelineMappings = const [],
   });
 
   final String filePath;
@@ -196,9 +302,26 @@ class VideoProxyResult {
   final VideoProxyRequest request;
   final int transcodeDurationMs;
   final bool usedFallback720p;
+  final int? sourceStartMs;
+  final int? sourceDurationMs;
+  final int? sourceRotationDegrees;
+  final String? sourceVideoCodec;
+  final String? sourceOrientation;
+  final bool? sourceMirrored;
+  final List<ProxyTierResult> tiers;
+  final List<VideoProxyTimelineMapping> timelineMappings;
 
   bool get usedFallback =>
       usedFallback720p || metadata.resolution == VideoProxyResolution.p360;
+
+  ProxyTierResult? tierForQuality(ProxyQuality quality) {
+    for (final tier in tiers) {
+      if (tier.quality == quality) {
+        return tier;
+      }
+    }
+    return null;
+  }
 }
 
 class VideoProxyException implements Exception {
@@ -215,4 +338,98 @@ class VideoProxyException implements Exception {
 class VideoProxyCancelException extends VideoProxyException {
   const VideoProxyCancelException()
       : super('Video proxy generation canceled', code: 'cancelled');
+}
+
+class ProxyTierResult {
+  const ProxyTierResult({
+    required this.quality,
+    required this.filePath,
+    required this.metadata,
+  });
+
+  final ProxyQuality quality;
+  final String filePath;
+  final VideoProxyMetadata metadata;
+}
+
+class ProxyPreview {
+  const ProxyPreview({
+    required this.quality,
+    required this.filePath,
+    required this.metadata,
+    this.segmentIndex,
+  });
+
+  final ProxyQuality quality;
+  final String filePath;
+  final VideoProxyMetadata metadata;
+  final int? segmentIndex;
+}
+
+class ProxyKeyframe {
+  const ProxyKeyframe({
+    required this.timestampMs,
+    this.fileOffsetBytes,
+    this.byteLength,
+    this.isPoster = false,
+  });
+
+  final int timestampMs;
+  final int? fileOffsetBytes;
+  final int? byteLength;
+  final bool isPoster;
+
+  Map<String, Object?> toJson() {
+    return {
+      'timestampMs': timestampMs,
+      'fileOffsetBytes': fileOffsetBytes,
+      'byteLength': byteLength,
+      'isPoster': isPoster,
+    };
+  }
+
+  factory ProxyKeyframe.fromJson(Map<String, dynamic> json) {
+    return ProxyKeyframe(
+      timestampMs: (json['timestampMs'] as num?)?.toInt() ?? 0,
+      fileOffsetBytes: (json['fileOffsetBytes'] as num?)?.toInt(),
+      byteLength: (json['byteLength'] as num?)?.toInt(),
+      isPoster: json['isPoster'] == true,
+    );
+  }
+}
+
+class VideoProxyTimelineMapping {
+  const VideoProxyTimelineMapping({
+    required this.quality,
+    required this.sourceStartMs,
+    required this.sourceDurationMs,
+    this.proxyStartMs = 0,
+    this.proxyDurationMs,
+  });
+
+  final ProxyQuality quality;
+  final int sourceStartMs;
+  final int sourceDurationMs;
+  final int proxyStartMs;
+  final int? proxyDurationMs;
+
+  Map<String, Object?> toJson() {
+    return {
+      'quality': quality.platformLabel,
+      'sourceStartMs': sourceStartMs,
+      'sourceDurationMs': sourceDurationMs,
+      'proxyStartMs': proxyStartMs,
+      'proxyDurationMs': proxyDurationMs,
+    };
+  }
+
+  factory VideoProxyTimelineMapping.fromJson(Map<String, dynamic> json) {
+    return VideoProxyTimelineMapping(
+      quality: proxyQualityFromLabel(json['quality']?.toString()),
+      sourceStartMs: (json['sourceStartMs'] as num?)?.toInt() ?? 0,
+      sourceDurationMs: (json['sourceDurationMs'] as num?)?.toInt() ?? 0,
+      proxyStartMs: (json['proxyStartMs'] as num?)?.toInt() ?? 0,
+      proxyDurationMs: (json['proxyDurationMs'] as num?)?.toInt(),
+    );
+  }
 }
