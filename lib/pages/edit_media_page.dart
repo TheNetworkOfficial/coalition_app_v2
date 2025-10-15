@@ -73,9 +73,13 @@ class _EditMediaPageState extends State<EditMediaPage> {
   Timer? _trimSeekDebounce;
   bool _segmentedSnackShown = false;
   StreamSubscription<VideoProxyProgress>? _sessionProgressSub;
+  StreamSubscription<ProxySessionMetadataEvent>? _sessionMetadataSub;
   bool _isBuffering = false;
   String? _bufferingMessage;
   final List<String> _proxyDiagnostics = [];
+  ProxySessionQualityTier? _sessionQualityTier;
+  bool _variableFrameRateDetected = false;
+  bool _hardwareDecodeWarning = false;
 
   double? _imageWidth;
   double? _imageHeight;
@@ -178,6 +182,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
       jobId: session.jobId,
       session: session,
       initialPreview: initialPreview,
+      syntheticEvents: VideoProxyService().syntheticEventsFor(session.jobId),
     );
     playlist.onReady = _handlePlaylistReady;
     playlist.onSegmentAppended = _handlePlaylistSegmentAppended;
@@ -201,9 +206,13 @@ class _EditMediaPageState extends State<EditMediaPage> {
     _sessionProgressSub = session.progress.listen((event) {
       if (!mounted) return;
       if (event.fallbackTriggered) {
-        _handleFallbackDiagnostics('Preview temporarily downgraded for faster playback.');
+        _handleFallbackDiagnostics(
+          'Preview temporarily downgraded while higher tiers encode.',
+        );
       }
     });
+    _sessionMetadataSub?.cancel();
+    _sessionMetadataSub = session.metadata.listen(_handleSessionMetadata);
 
     session.completed.then((result) {
       if (!mounted) return;
@@ -251,6 +260,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
       }
     }
     _sessionProgressSub?.cancel();
+    _sessionMetadataSub?.cancel();
     _trimSeekDebounce?.cancel();
     super.dispose();
   }
@@ -323,7 +333,10 @@ class _EditMediaPageState extends State<EditMediaPage> {
       request: request,
       onJobCreated: (jobId) {
         if (_playlistController == null) {
-          final controller = ProxyPlaylistController(jobId: jobId);
+          final controller = ProxyPlaylistController(
+            jobId: jobId,
+            syntheticEvents: VideoProxyService().syntheticEventsFor(jobId),
+          );
           controller.onReady = _handlePlaylistReady;
           controller.onSegmentAppended = _handlePlaylistSegmentAppended;
           controller.onSegmentUpgraded = _handlePlaylistSegmentUpgraded;
@@ -511,6 +524,33 @@ class _EditMediaPageState extends State<EditMediaPage> {
     setState(() {
       _proxyDiagnostics.add(message);
     });
+  }
+
+  void _handleSessionMetadata(ProxySessionMetadataEvent event) {
+    final newQuality = event.activeQuality;
+    if (newQuality != null && newQuality != _sessionQualityTier) {
+      setState(() {
+        _sessionQualityTier = newQuality;
+      });
+      if (newQuality == ProxySessionQualityTier.medium ||
+          newQuality == ProxySessionQualityTier.full) {
+        _handleFallbackDiagnostics(
+          'Preview upgraded to ${newQuality.name} session quality.',
+        );
+      }
+    }
+    if (event.variableFrameRate && !_variableFrameRateDetected) {
+      _variableFrameRateDetected = true;
+      _handleFallbackDiagnostics(
+        'Source uses variable frame rate—may require full transcode.',
+      );
+    }
+    if (event.hardwareDecodeUnsupported && !_hardwareDecodeWarning) {
+      _hardwareDecodeWarning = true;
+      _handleFallbackDiagnostics(
+        'Hardware decode unavailable—legacy transcode path will be used if needed.',
+      );
+    }
   }
 
   void _handlePlaylistError(Object error) {

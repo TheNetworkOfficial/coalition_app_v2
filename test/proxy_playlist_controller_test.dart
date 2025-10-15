@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:coalition_app_v2/models/video_proxy.dart';
 import 'package:coalition_app_v2/services/proxy_playlist_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -193,6 +194,59 @@ void main() {
 
     await controller.dispose();
     await events.close();
+  });
+
+  test('synthetic segment_upgraded events upgrade existing segments', () async {
+    final jobId = 'test-job-upgrade';
+    final events = StreamController<dynamic>();
+    final synthetic = StreamController<dynamic>();
+    final factory = _TestEditorFactory();
+    final controller = ProxyPlaylistController(
+      jobId: jobId,
+      events: events.stream,
+      syntheticEvents: synthetic.stream,
+      editorBuilder: factory.call,
+    );
+
+    events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 0,
+      'path': '/tmp/segment_low.mp4',
+      'durationMs': 1200,
+      'width': 360,
+      'height': 640,
+      'quality': 'PREVIEW',
+    });
+
+    await Future.delayed(const Duration(milliseconds: 20));
+    expect(controller.segments.single.path, '/tmp/segment_low.mp4');
+
+    var upgradeNotified = false;
+    controller.onSegmentUpgraded = (segment) {
+      upgradeNotified = true;
+      expect(segment.path, '/tmp/segment_high.mp4');
+      expect(segment.quality, ProxyQuality.proxy);
+    };
+
+    synthetic.add({
+      'type': 'segment_upgraded',
+      'segmentIndex': 0,
+      'path': '/tmp/segment_high.mp4',
+      'durationMs': 1200,
+      'width': 720,
+      'height': 1280,
+      'quality': 'PROXY',
+    });
+
+    await Future.delayed(const Duration(milliseconds: 40));
+
+    expect(upgradeNotified, isTrue);
+    expect(controller.segments.single.path, '/tmp/segment_high.mp4');
+    expect(controller.segments.single.quality, ProxyQuality.proxy);
+
+    await controller.dispose();
+    await events.close();
+    await synthetic.close();
   });
 
   test('playback completion advances to the next segment', () async {

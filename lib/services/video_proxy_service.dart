@@ -19,6 +19,9 @@ const _kProxyProgressChannelName = 'coalition/video_proxy/progress';
 const _methodChannel = MethodChannel(_kProxyChannelName);
 const _progressChannel = EventChannel(_kProxyProgressChannelName);
 
+const int _kCacheQuotaBytes = 512 * 1024 * 1024;
+const Duration _kSegmentRetention = Duration(minutes: 20);
+
 class _NativeProxyEvent {
   const _NativeProxyEvent({
     required this.jobId,
@@ -205,6 +208,10 @@ class ProxySessionMetadataEvent {
     this.audioCodec,
     this.matchesSourceVideoCodec,
     this.matchesSourceAudioCodec,
+    this.activeQuality,
+    this.availableQualities = const <ProxySessionQualityTier>{},
+    this.variableFrameRate = false,
+    this.hardwareDecodeUnsupported = false,
   });
 
   final int? durationMs;
@@ -218,6 +225,10 @@ class ProxySessionMetadataEvent {
   final String? audioCodec;
   final bool? matchesSourceVideoCodec;
   final bool? matchesSourceAudioCodec;
+  final ProxySessionQualityTier? activeQuality;
+  final Set<ProxySessionQualityTier> availableQualities;
+  final bool variableFrameRate;
+  final bool hardwareDecodeUnsupported;
 }
 
 class ProxySourceRange {
@@ -279,6 +290,17 @@ class ProxyManifestData {
   final List<ProxySegment> segments = [];
   final List<ProxyKeyframe> keyframes = [];
 
+  static int _qualityRank(ProxyQuality quality) {
+    switch (quality) {
+      case ProxyQuality.preview:
+        return 0;
+      case ProxyQuality.proxy:
+        return 1;
+      case ProxyQuality.mezzanine:
+        return 2;
+    }
+  }
+
   void mergeMetadata({
     int? segmentDurationMs,
     int? width,
@@ -335,9 +357,18 @@ class ProxyManifestData {
     }
   }
 
-  void addSegment(ProxySegment segment) {
-    segments.removeWhere((existing) => existing.index == segment.index);
-    segments.add(segment);
+  bool addSegment(ProxySegment segment) {
+    final existingIndex =
+        segments.indexWhere((existing) => existing.index == segment.index);
+    if (existingIndex >= 0) {
+      final existing = segments[existingIndex];
+      if (_qualityRank(segment.quality) < _qualityRank(existing.quality)) {
+        return false;
+      }
+      segments[existingIndex] = segment;
+    } else {
+      segments.add(segment);
+    }
     segments.sort((a, b) => a.index.compareTo(b.index));
     durationMs = segments.fold<int>(0, (sum, s) => sum + s.durationMs);
     if (segment.durationMs > 0 && segmentDurationMs == 0) {
@@ -377,6 +408,29 @@ class ProxyManifestData {
       matchesSourceAudioCodec = (matchesSourceAudioCodec ?? true) &&
           segment.matchesSourceAudioCodec!;
     }
+    return true;
+  }
+
+  bool removeSegment({required int index, String? path}) {
+    final originalLength = segments.length;
+    segments.removeWhere((segment) {
+      final matchesIndex = segment.index == index;
+      final matchesPath = path == null || segment.path == path;
+      return matchesIndex && matchesPath;
+    });
+    if (segments.length == originalLength) {
+      return false;
+    }
+    segments.sort((a, b) => a.index.compareTo(b.index));
+    durationMs = segments.fold<int>(0, (sum, s) => sum + s.durationMs);
+    if (segments.isEmpty) {
+      width = null;
+      height = null;
+    } else {
+      width ??= segments.last.width;
+      height ??= segments.last.height;
+    }
+    return true;
   }
 
   void addKeyframes(Iterable<ProxyKeyframe> frames) {
@@ -532,6 +586,26 @@ class ProxyManifestData {
     copy.keyframes.addAll(keyframes);
     return copy;
   }
+
+  ProxyQuality? bestAvailableQuality() {
+    if (segments.isEmpty) {
+      return null;
+    }
+    return segments
+        .map((segment) => segment.quality)
+        .reduce((a, b) =>
+            _qualityRank(a) >= _qualityRank(b) ? a : b);
+  }
+
+  Set<ProxySessionQualityTier> availableQualityTiers() {
+    if (segments.isEmpty) {
+      return const <ProxySessionQualityTier>{};
+    }
+    final tiers = segments
+        .map((segment) => proxySessionTierForQuality(segment.quality))
+        .toSet();
+    return Set<ProxySessionQualityTier>.unmodifiable(tiers);
+  }
 }
 
 class _SegmentSourceWindow {
@@ -539,6 +613,30 @@ class _SegmentSourceWindow {
 
   final int startMs;
   final int endMs;
+}
+
+class _CachedSegmentRecord {
+  _CachedSegmentRecord({
+    required this.path,
+    required this.segmentIndex,
+    required this.quality,
+    required this.generatedAt,
+    required this.sizeBytes,
+  }) : lastAccessed = generatedAt;
+
+  final String path;
+  final int segmentIndex;
+  final ProxyQuality quality;
+  final DateTime generatedAt;
+  final int sizeBytes;
+  DateTime lastAccessed;
+}
+
+class _CacheEntry {
+  _CacheEntry(this.jobId, this.record);
+
+  final String jobId;
+  final _CachedSegmentRecord record;
 }
 
 class VideoProxySession {
@@ -624,10 +722,39 @@ class VideoProxyService {
 
   final Stream<_NativeProxyEvent> _progressEvents;
   final Map<String, ProxyManifestData> _manifests = {};
+  final Map<String, StreamController<Map<String, dynamic>>>
+      _syntheticEventControllers = {};
+  final Map<String, List<_CachedSegmentRecord>> _cachedSegments = {};
 
   ProxyManifestData? manifestForJob(String jobId) {
     final manifest = _manifests[jobId];
     return manifest?.copy();
+  }
+
+  Stream<Map<String, dynamic>> syntheticEventsFor(String jobId) {
+    return _syntheticEventControllerFor(jobId).stream;
+  }
+
+  StreamController<Map<String, dynamic>> _syntheticEventControllerFor(
+      String jobId) {
+    return _syntheticEventControllers.putIfAbsent(
+      jobId,
+      () => StreamController<Map<String, dynamic>>.broadcast(),
+    );
+  }
+
+  void _emitSyntheticEvent(String jobId, Map<String, dynamic> event) {
+    final controller = _syntheticEventControllers[jobId];
+    if (controller != null && !controller.isClosed) {
+      controller.add(event);
+    }
+  }
+
+  Future<void> _closeSyntheticEvents(String jobId) async {
+    final controller = _syntheticEventControllers.remove(jobId);
+    if (controller != null && !controller.isClosed) {
+      await controller.close();
+    }
   }
 
   ProxySegment? manifestSegmentFor(String jobId, int timestampMs) {
@@ -643,6 +770,13 @@ class VideoProxyService {
 
   ProxyManifestData _manifestForJob(String jobId) {
     return _manifests.putIfAbsent(jobId, () => ProxyManifestData());
+  }
+
+  Future<void> releaseJob(String jobId) async {
+    await _cleanupCacheForJob(jobId);
+    _cachedSegments.remove(jobId);
+    _manifests.remove(jobId);
+    await _closeSyntheticEvents(jobId);
   }
 
   /// Returns a stream of raw native proxy events for a specific jobId.
@@ -697,6 +831,151 @@ class VideoProxyService {
         .writeAsString(JsonEncoder.withIndent('  ').convert(json));
   }
 
+  Future<void> _cleanupCacheForJob(String jobId) async {
+    final records = _cachedSegments.remove(jobId);
+    if (records != null) {
+      for (final record in records) {
+        await _deleteSegmentFile(record.path);
+      }
+    }
+    try {
+      final cacheDir = await _ensureCacheDirectory();
+      final jobDir = Directory(p.join(cacheDir.path, jobId));
+      if (await jobDir.exists()) {
+        await jobDir.delete(recursive: true);
+      }
+    } catch (error) {
+      debugPrint(
+          '[VideoProxyService] Failed to cleanup cache for job $jobId: $error');
+    }
+  }
+
+  Future<void> _registerSegmentFile(String jobId, ProxySegment segment,
+      {ProxySegment? replaced}) async {
+    final records =
+        _cachedSegments.putIfAbsent(jobId, () => <_CachedSegmentRecord>[]);
+    records.removeWhere((record) => record.segmentIndex == segment.index);
+    if (replaced != null) {
+      records.removeWhere((record) => record.path == replaced.path);
+    }
+
+    var sizeBytes = 0;
+    try {
+      final file = File(segment.path);
+      if (await file.exists()) {
+        final stat = await file.stat();
+        sizeBytes = stat.size;
+      }
+    } catch (error) {
+      debugPrint('[VideoProxyService] Failed to stat segment '
+          '${segment.path}: $error');
+    }
+
+    records.add(_CachedSegmentRecord(
+      path: segment.path,
+      segmentIndex: segment.index,
+      quality: segment.quality,
+      generatedAt: DateTime.now(),
+      sizeBytes: sizeBytes,
+    ));
+
+    await _pruneExpiredSegments(jobId);
+    await _enforceCacheQuota();
+
+    if (replaced != null && replaced.path != segment.path) {
+      await _deleteSegmentFile(replaced.path);
+    }
+  }
+
+  Future<void> _pruneExpiredSegments(String jobId) async {
+    final records = _cachedSegments[jobId];
+    if (records == null || records.isEmpty) {
+      return;
+    }
+    final manifest = _manifests[jobId];
+    if (manifest == null) {
+      return;
+    }
+    final cutoff = DateTime.now().subtract(_kSegmentRetention);
+    final expired =
+        records.where((record) => record.generatedAt.isBefore(cutoff)).toList();
+    if (expired.isEmpty) {
+      return;
+    }
+    var manifestUpdated = false;
+    for (final record in expired) {
+      await _deleteSegmentFile(record.path);
+      if (manifest.removeSegment(
+          index: record.segmentIndex, path: record.path)) {
+        manifestUpdated = true;
+      }
+    }
+    records.removeWhere((record) => record.generatedAt.isBefore(cutoff));
+    if (manifestUpdated) {
+      await _updateManifest(jobId, manifest);
+    }
+  }
+
+  Future<void> _enforceCacheQuota() async {
+    var totalSize = _currentCacheSize;
+    if (totalSize <= _kCacheQuotaBytes) {
+      return;
+    }
+    final entries = <_CacheEntry>[];
+    _cachedSegments.forEach((jobId, records) {
+      for (final record in records) {
+        entries.add(_CacheEntry(jobId, record));
+      }
+    });
+    entries.sort((a, b) =>
+        a.record.generatedAt.compareTo(b.record.generatedAt));
+    final manifestNeedsUpdate = <String, bool>{};
+    for (final entry in entries) {
+      if (totalSize <= _kCacheQuotaBytes) {
+        break;
+      }
+      await _deleteSegmentFile(entry.record.path);
+      final manifest = _manifests[entry.jobId];
+      if (manifest != null &&
+          manifest.removeSegment(
+              index: entry.record.segmentIndex,
+              path: entry.record.path)) {
+        manifestNeedsUpdate[entry.jobId] = true;
+      }
+      final records = _cachedSegments[entry.jobId];
+      records?.remove(entry.record);
+      totalSize -= entry.record.sizeBytes;
+    }
+    for (final jobId in manifestNeedsUpdate.keys) {
+      final manifest = _manifests[jobId];
+      if (manifest != null) {
+        await _updateManifest(jobId, manifest);
+      }
+    }
+  }
+
+  int get _currentCacheSize {
+    var total = 0;
+    for (final records in _cachedSegments.values) {
+      for (final record in records) {
+        total += record.sizeBytes;
+      }
+    }
+    return total;
+  }
+
+  Future<void> _deleteSegmentFile(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (error) {
+      debugPrint(
+          '[VideoProxyService] Failed to delete cached segment at $path: $error');
+    }
+  }
+
   Future<void> deleteProxy(String path) async {
     try {
       final file = File(path);
@@ -712,6 +991,8 @@ class VideoProxyService {
     void Function(String jobId)? onJobCreated,
   }) {
     final jobId = _uuid.v4();
+    var variableFrameRateDetected = false;
+    var hardwareDecodeUnsupported = false;
     if (onJobCreated != null) {
       try {
         onJobCreated(jobId);
@@ -879,9 +1160,9 @@ class VideoProxyService {
         manifestChanged = true;
       }
 
-      if (event.type == 'segment_ready' &&
-          event.segmentIndex != null &&
-          event.path != null) {
+      final isSegmentEvent =
+          (event.type == 'segment_ready' || event.type == 'segment_upgraded');
+      if (isSegmentEvent && event.segmentIndex != null && event.path != null) {
         try {
           // Ensure job manifest exists
           final width =
@@ -894,6 +1175,14 @@ class VideoProxyService {
                       event.totalSegments! > 0)
                   ? ((event.totalDurationMs! / 1000.0) / event.totalSegments!)
                   : (request.frameRateHint?.toDouble() ?? 24.0));
+          final existingIndex =
+              manifest.segments.indexWhere((s) => s.index == event.segmentIndex);
+          final previousSegment =
+              existingIndex >= 0 ? manifest.segments[existingIndex] : null;
+          final incomingQuality = proxyQualityFromLabel(
+            event.qualityLabel,
+            fallback: previousSegment?.quality ?? ProxyQuality.preview,
+          );
           manifest.mergeMetadata(
             segmentDurationMs: manifest.segmentDurationMs == 0
                 ? event.durationMs
@@ -925,6 +1214,7 @@ class VideoProxyService {
             width: width,
             height: height,
             hasAudio: event.hasAudio ?? manifest.hasAudio,
+            quality: incomingQuality,
             sourceStartMs: event.sourceStartMs,
             sourceEndMs: segmentSourceEnd,
             orientation: event.orientation,
@@ -933,8 +1223,32 @@ class VideoProxyService {
             matchesSourceVideoCodec: event.matchesSourceVideoCodec,
             matchesSourceAudioCodec: event.matchesSourceAudioCodec,
           );
-          manifest.addSegment(segment);
+          final added = manifest.addSegment(segment);
+          if (!added) {
+            return;
+          }
           manifestChanged = true;
+
+          final isUpgrade = previousSegment != null &&
+              ProxyManifestData._qualityRank(segment.quality) >
+                  ProxyManifestData._qualityRank(previousSegment.quality);
+          await _registerSegmentFile(
+            jobId,
+            segment,
+            replaced: isUpgrade ? previousSegment : null,
+          );
+
+          if (isUpgrade || event.type == 'segment_upgraded') {
+            _emitSyntheticEvent(jobId, {
+              'type': 'segment_upgraded',
+              'segmentIndex': segment.index,
+              'path': segment.path,
+              'durationMs': segment.durationMs,
+              'width': segment.width,
+              'height': segment.height,
+              'quality': segment.quality.platformLabel,
+            });
+          }
 
           // Emit a small progress update based on segments available if total known
           if (event.totalSegments != null && event.totalDurationMs != null) {
@@ -991,6 +1305,10 @@ class VideoProxyService {
       }
 
       if (manifestChanged) {
+        final bestQuality = manifest.bestAvailableQuality();
+        final availableTiers = manifest.availableQualityTiers();
+        final activeTier =
+            bestQuality != null ? proxySessionTierForQuality(bestQuality) : null;
         await _updateManifest(jobId, manifest);
         metadataController.add(ProxySessionMetadataEvent(
           durationMs: manifest.durationMs,
@@ -1004,6 +1322,10 @@ class VideoProxyService {
           audioCodec: manifest.audioCodec,
           matchesSourceVideoCodec: manifest.matchesSourceVideoCodec,
           matchesSourceAudioCodec: manifest.matchesSourceAudioCodec,
+          activeQuality: activeTier,
+          availableQualities: availableTiers,
+          variableFrameRate: variableFrameRateDetected,
+          hardwareDecodeUnsupported: hardwareDecodeUnsupported,
         ));
       }
     });
@@ -1029,6 +1351,32 @@ class VideoProxyService {
         );
         if (response == null || response['ok'] == false) {
           return;
+        }
+        final frameRateMode =
+            response['frameRateMode']?.toString().toLowerCase();
+        if (frameRateMode == 'vfr' || frameRateMode == 'variable') {
+          variableFrameRateDetected = true;
+        }
+        if (response['variableFrameRate'] == true) {
+          variableFrameRateDetected = true;
+        }
+        if (response['hardwareDecodeSupported'] == false ||
+            response['decodeSupported'] == false ||
+            response['hardwareDecodeCapable'] == false) {
+          hardwareDecodeUnsupported = true;
+        }
+        final warnings = response['warnings'];
+        if (warnings is List) {
+          for (final warning in warnings) {
+            final text = warning.toString().toLowerCase();
+            if (text.contains('hardware decode') ||
+                text.contains('hw decode')) {
+              hardwareDecodeUnsupported = true;
+            }
+            if (text.contains('variable frame')) {
+              variableFrameRateDetected = true;
+            }
+          }
         }
         debugPrint(
           '[VideoProxyService] Source summary: '
@@ -1097,6 +1445,14 @@ class VideoProxyService {
           }
 
           final code = response?['code']?.toString();
+
+          if (code == 'hardware_decode_failed' ||
+              code == 'hardware_decode_unsupported') {
+            hardwareDecodeUnsupported = true;
+            currentRequest = currentRequest.fallbackPreview();
+            autoFallbackRequested = true;
+            continue;
+          }
 
           if (cancelled) {
             final error = const VideoProxyCancelException();
