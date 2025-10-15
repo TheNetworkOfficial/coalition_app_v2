@@ -76,6 +76,7 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
   private let syncQueue = DispatchQueue(label: "com.example.coalition.videoProxy")
   private var activeJobs: [String: ProxyJob] = [:]
   private var activeSegmentWriters: [String: () -> Void] = [:]
+  private var activeSessions: [String: ProxySession] = [:]
 
   init(messenger: FlutterBinaryMessenger) {
     super.init()
@@ -95,6 +96,8 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
       cancelProxy(call.arguments, result: result)
     case "probeSource":
       probeSource(call.arguments, result: result)
+    case "ensureSegment":
+      ensureSegment(call.arguments, result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -163,11 +166,55 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
       }
       self.activeJobs[jobId] = job
       if segmentedPreview {
-        self.startSegmentedExport(job, segmentDurationMs: segmentDurationMs)
+        self.startProxySession(job, segmentDurationMs: segmentDurationMs)
       } else {
         self.startExport(job)
       }
     }
+  }
+
+  private func startProxySession(_ job: ProxyJob, segmentDurationMs: Int64) {
+    let sourceURL = URL(fileURLWithPath: job.sourcePath)
+    let asset = AVURLAsset(url: sourceURL)
+    let session = ProxySession(
+      job: job,
+      asset: asset,
+      segmentDurationMs: segmentDurationMs,
+      eventEmitter: { [weak self] event in
+        guard let self else { return }
+        DispatchQueue.main.async {
+          self.eventSink?(event)
+        }
+      },
+      completion: { [weak self] payload in
+        guard let self else { return }
+        self.complete(jobId: job.jobId, payload: payload)
+      },
+      fallback: { [weak self] error in
+        guard let self else { return }
+        if job.enableLogging {
+          print("[VideoProxyChannel] Session fallback for job=\(job.jobId) reason=\(error.localizedDescription)")
+        }
+        self.syncQueue.async {
+          self.activeSessions.removeValue(forKey: job.jobId)
+          self.activeSegmentWriters.removeValue(forKey: job.jobId)
+          self.startSegmentedExport(job, segmentDurationMs: segmentDurationMs)
+        }
+      },
+      teardown: { [weak self] in
+        self?.syncQueue.async {
+          self?.activeSessions.removeValue(forKey: job.jobId)
+          self?.activeSegmentWriters.removeValue(forKey: job.jobId)
+        }
+      }
+    )
+
+    activeSessions[job.jobId] = session
+    activeSegmentWriters[job.jobId] = { [weak session] in
+      session?.cancelActiveTasks()
+    }
+
+    session.start()
   }
 
   private func startSegmentedExport(_ job: ProxyJob, segmentDurationMs: Int64) {
@@ -499,6 +546,43 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
     }
   }
 
+  private func ensureSegment(_ arguments: Any?, result: @escaping FlutterResult) {
+    guard
+      let args = arguments as? [String: Any],
+      let jobId = args["jobId"] as? String,
+      let startMsNumber = args["startMs"] as? NSNumber,
+      let endMsNumber = args["endMs"] as? NSNumber
+    else {
+      result(["ok": false, "code": "invalid_args", "message": "Missing arguments", "recoverable": true])
+      return
+    }
+
+    let qualityLabel = (args["quality"] as? String) ?? ProxySession.SegmentQuality.preview.rawValue
+    let startMs = startMsNumber.int64Value
+    let endMs = endMsNumber.int64Value
+
+    syncQueue.async {
+      guard let session = self.activeSessions[jobId] else {
+        DispatchQueue.main.async {
+          result(FlutterError(code: "no_session", message: "Proxy session not ready", details: nil))
+        }
+        return
+      }
+
+      session.ensureSegment(startMs: startMs, endMs: endMs, qualityLabel: qualityLabel) { outcome in
+        DispatchQueue.main.async {
+          switch outcome {
+          case .success:
+            result(["ok": true])
+          case let .failure(error):
+            let nsError = error as NSError
+            result(FlutterError(code: nsError.domain, message: nsError.localizedDescription, details: nsError.code))
+          }
+        }
+      }
+    }
+  }
+
   private func cancelProxy(_ arguments: Any?, result: @escaping FlutterResult) {
     guard
       let args = arguments as? [String: Any],
@@ -513,6 +597,9 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
         job.progressTimer?.cancel()
         job.exportSession?.cancelExport()
         try? FileManager.default.removeItem(at: job.outputURL)
+      }
+      if let session = self.activeSessions.removeValue(forKey: jobId) {
+        session.cancel()
       }
       // Cancel any active per-segment writer/reader
       if let cancelClosure = self.activeSegmentWriters[jobId] {
@@ -584,6 +671,675 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
     eventSink = nil
     return nil
+  }
+
+  private final class ProxySession {
+    enum SegmentQuality: String, CaseIterable {
+      case preview = "PREVIEW"
+      case proxy = "PROXY"
+      case mezzanine = "MEZZANINE"
+
+      var rank: Int {
+        switch self {
+        case .preview: return 0
+        case .proxy: return 1
+        case .mezzanine: return 2
+        }
+      }
+
+      var exportPreset: String {
+        switch self {
+        case .preview:
+          return AVAssetExportPresetLowQuality
+        case .proxy:
+          return AVAssetExportPreset960x540
+        case .mezzanine:
+          return AVAssetExportPreset1280x720
+        }
+      }
+
+      static func from(label: String) -> SegmentQuality {
+        let normalized = label.uppercased()
+        return SegmentQuality(rawValue: normalized) ?? .preview
+      }
+    }
+
+    private enum EmitReason {
+      case ensure
+      case upgrade
+    }
+
+    private struct SegmentKey: Hashable {
+      let startMs: Int64
+      let endMs: Int64
+      let quality: SegmentQuality
+
+      var durationMs: Int {
+        return max(1, Int(endMs - startMs))
+      }
+
+      func segmentIndex(segmentDurationMs: Int64) -> Int {
+        guard segmentDurationMs > 0 else { return 0 }
+        return Int(startMs / segmentDurationMs)
+      }
+
+      func timeRange(maxDurationMs: Int) -> CMTimeRange {
+        let upperBound = Int64(max(0, maxDurationMs))
+        let clampedStart = max(0, min(startMs, upperBound))
+        let limitedEnd = min(endMs, upperBound)
+        var clampedEnd = max(clampedStart + 1, limitedEnd)
+        clampedEnd = min(clampedEnd, upperBound)
+        let duration = max(1, clampedEnd - clampedStart)
+        return CMTimeRange(
+          start: CMTime(value: clampedStart, timescale: 1000),
+          duration: CMTime(value: duration, timescale: 1000)
+        )
+      }
+    }
+
+    private struct CacheEntry {
+      let key: SegmentKey
+      let url: URL
+      let fileSize: Int64
+    }
+
+    private let job: ProxyJob
+    private let asset: AVURLAsset
+    private let segmentDurationMs: Int64
+    private let eventEmitter: ([String: Any]) -> Void
+    private let completion: ([String: Any]) -> Void
+    private let fallback: (Error) -> Void
+    private let teardown: () -> Void
+    private let queue: DispatchQueue
+    private let queueKey = DispatchSpecificKey<Void>()
+    private let cacheDirectory: URL
+
+    private var cancelled = false
+    private var didTeardown = false
+    private var cache: [SegmentKey: CacheEntry] = [:]
+    private var lru: [SegmentKey] = []
+    private var totalBytes: Int64 = 0
+    private var pendingExports: [SegmentKey: AVAssetExportSession] = [:]
+    private var pendingUpgradeKeys: Set<SegmentKey> = []
+    private var previewURL: URL?
+    private var preparedVideoComposition: AVMutableVideoComposition?
+    private var videoWidth: Int = 0
+    private var videoHeight: Int = 0
+    private var frameRate: Double = 0
+    private var durationMs: Int = 0
+    private var totalSegments: Int = 0
+    private var hasAudio: Bool = false
+    private var startDate = Date()
+
+    private let maxCacheEntries = 12
+    private let maxCacheBytes: Int64 = 200 * 1024 * 1024
+
+    init(job: ProxyJob,
+         asset: AVURLAsset,
+         segmentDurationMs: Int64,
+         eventEmitter: @escaping ([String: Any]) -> Void,
+         completion: @escaping ([String: Any]) -> Void,
+         fallback: @escaping (Error) -> Void,
+         teardown: @escaping () -> Void) {
+      self.job = job
+      self.asset = asset
+      self.segmentDurationMs = segmentDurationMs
+      self.eventEmitter = eventEmitter
+      self.completion = completion
+      self.fallback = fallback
+      self.teardown = teardown
+      self.cacheDirectory = job.outputURL
+      self.queue = DispatchQueue(
+        label: "com.example.coalition.videoProxy.session.\(job.jobId)",
+        qos: .userInitiated
+      )
+      self.queue.setSpecific(key: queueKey, value: ())
+    }
+
+    func start() {
+      startDate = Date()
+      let keys = ["tracks", "duration"]
+      asset.loadValuesAsynchronously(forKeys: keys) { [weak self] in
+        guard let self else { return }
+        self.asyncOnQueue {
+          guard !self.cancelled else { return }
+          do {
+            try self.validateAsset(keys: keys)
+            try self.prepareSession()
+          } catch {
+            self.handleFatalError(error)
+          }
+        }
+      }
+    }
+
+    func ensureSegment(startMs: Int64,
+                       endMs: Int64,
+                       qualityLabel: String,
+                       completion: @escaping (Result<Void, Error>) -> Void) {
+      asyncOnQueue {
+        guard !self.cancelled else {
+          completion(.failure(self.makeError(code: -10, message: "Session cancelled")))
+          return
+        }
+
+        let quality = SegmentQuality.from(label: qualityLabel)
+        let assetDurationMs = Int64(self.durationMs)
+        var clampedStart = max(Int64(0), min(startMs, assetDurationMs))
+        var clampedEnd = max(clampedStart + 1, min(endMs, assetDurationMs))
+        if clampedStart >= assetDurationMs {
+          clampedStart = max(0, assetDurationMs - self.segmentDurationMs)
+          clampedEnd = assetDurationMs
+        } else if clampedEnd <= clampedStart {
+          clampedEnd = min(clampedStart + self.segmentDurationMs, assetDurationMs)
+        }
+
+        let key = SegmentKey(startMs: clampedStart, endMs: clampedEnd, quality: quality)
+
+        if let entry = self.cacheEntry(for: key) {
+          self.emitSegmentEvent(entry: entry, reason: .ensure)
+          completion(.success(()))
+          self.scheduleUpgrades(for: key, producedQuality: quality)
+          return
+        }
+
+        self.produceSegment(key: key, quality: quality, reason: .ensure) { result in
+          switch result {
+          case let .success(entry):
+            self.emitSegmentEvent(entry: entry, reason: .ensure)
+            completion(.success(()))
+            self.scheduleUpgrades(for: key, producedQuality: quality)
+          case let .failure(error):
+            completion(.failure(error))
+          }
+        }
+      }
+    }
+
+    func cancelActiveTasks() {
+      asyncOnQueue {
+        for export in self.pendingExports.values {
+          export.cancelExport()
+        }
+        self.pendingExports.removeAll()
+        self.pendingUpgradeKeys.removeAll()
+      }
+    }
+
+    func cancel() {
+      asyncOnQueue {
+        guard !self.cancelled else { return }
+        self.cancelled = true
+        for export in self.pendingExports.values {
+          export.cancelExport()
+        }
+        self.pendingExports.removeAll()
+        self.pendingUpgradeKeys.removeAll()
+        self.cleanupFiles()
+        self.performTeardownIfNeeded()
+      }
+    }
+
+    private func validateAsset(keys: [String]) throws {
+      for key in keys {
+        var error: NSError?
+        let status = asset.statusOfValue(forKey: key, error: &error)
+        if status != .loaded {
+          throw error ?? makeError(code: -2, message: "Unable to load asset key \(key)")
+        }
+      }
+    }
+
+    private func prepareSession() throws {
+      guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+        throw makeError(code: -3, message: "Video track missing")
+      }
+
+      durationMs = Int((CMTimeGetSeconds(asset.duration) * 1000.0).rounded())
+      if durationMs <= 0 {
+        durationMs = Int(segmentDurationMs)
+      }
+
+      frameRate = Double(videoTrack.nominalFrameRate)
+      if frameRate <= 0, job.frameRateHint > 0 {
+        frameRate = Double(job.frameRateHint)
+      }
+
+      videoWidth = Int(max(1, job.targetSize.width))
+      videoHeight = Int(max(1, job.targetSize.height))
+      hasAudio = !asset.tracks(withMediaType: .audio).isEmpty
+      if segmentDurationMs > 0 {
+        totalSegments = Int((Int64(durationMs) + segmentDurationMs - 1) / segmentDurationMs)
+      }
+
+      preparedVideoComposition = makeVideoComposition(for: videoTrack)
+
+      var metadata: [String: Any] = [
+        "durationMs": durationMs,
+        "width": videoWidth,
+        "height": videoHeight,
+        "frameRate": frameRate,
+        "fps": frameRate,
+        "segmentDurationMs": Int(segmentDurationMs),
+        "hasAudio": hasAudio
+      ]
+
+      do {
+        let keyframeTimes = try collectKeyframes(from: videoTrack)
+        if !keyframeTimes.isEmpty {
+          metadata["keyframes"] = keyframeTimes.map { ["timestampMs": $0] }
+        }
+      } catch {
+        if job.enableLogging {
+          print("[VideoProxyChannel] Failed to collect keyframes for job=\(job.jobId): \(error.localizedDescription)")
+        }
+      }
+
+      emit([
+        "jobId": job.jobId,
+        "type": "metadata_ready",
+        "metadata": metadata
+      ])
+
+      let elapsed = Int(Date().timeIntervalSince(startDate) * 1000)
+      completion([
+        "ok": true,
+        "jobId": job.jobId,
+        "proxyPath": "",
+        "durationMs": durationMs,
+        "width": videoWidth,
+        "height": videoHeight,
+        "frameRate": frameRate,
+        "transcodeDurationMs": elapsed
+      ])
+
+      generatePreviewGop(videoTrack: videoTrack, metadata: metadata)
+    }
+
+    private func collectKeyframes(from track: AVAssetTrack) throws -> [Int] {
+      let reader = try AVAssetReader(asset: asset)
+      let settings: [String: Any] = [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+      ]
+      let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+      output.alwaysCopiesSampleData = false
+      reader.add(output)
+      guard reader.startReading() else {
+        throw reader.error ?? makeError(code: -4, message: "Failed to start keyframe reader")
+      }
+
+      var keyframes: [Int] = []
+      let maxFrames = 512
+      while let sample = output.copyNextSampleBuffer() {
+        if cancelled {
+          reader.cancelReading()
+          break
+        }
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[CFString: Any]],
+           attachments.first?[kCMSampleAttachmentKey_NotSync] == nil {
+          let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+          let ms = Int((CMTimeGetSeconds(pts) * 1000.0).rounded())
+          keyframes.append(ms)
+        }
+        CMSampleBufferInvalidate(sample)
+        if keyframes.count >= maxFrames {
+          break
+        }
+      }
+      reader.cancelReading()
+      return keyframes
+    }
+
+    private func generatePreviewGop(videoTrack: AVAssetTrack, metadata: [String: Any]) {
+      asyncOnQueue {
+        guard !self.cancelled else { return }
+
+        let previewURL = self.cacheDirectory.appendingPathComponent("preview_\(self.job.jobId).mp4")
+        let previewDuration = min(Int64(self.durationMs), max(self.segmentDurationMs, Int64(2000)))
+        let timeRange = CMTimeRange(
+          start: .zero,
+          duration: CMTime(value: previewDuration, timescale: 1000)
+        )
+
+        guard let composition = self.preparedVideoComposition else { return }
+
+        do {
+          let reader = try AVAssetReader(asset: self.asset)
+          reader.timeRange = timeRange
+
+          let writer = try AVAssetWriter(outputURL: previewURL, fileType: .mp4)
+
+          let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: self.videoWidth,
+            AVVideoHeightKey: self.videoHeight,
+            AVVideoCompressionPropertiesKey: [
+              AVVideoAverageBitRateKey: 600_000,
+              AVVideoMaxKeyFrameIntervalKey: 24,
+              AVVideoProfileLevelKey: AVVideoProfileLevelH264BaselineAutoLevel
+            ]
+          ]
+
+          let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+          writerInput.expectsMediaDataInRealTime = false
+          writerInput.transform = .identity
+          let readerOutput = AVAssetReaderVideoCompositionOutput(videoTracks: [videoTrack], videoSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+          ])
+          readerOutput.alwaysCopiesSampleData = false
+          readerOutput.videoComposition = composition
+          reader.add(readerOutput)
+
+          writer.add(writerInput)
+
+          let writingQueue = DispatchQueue(label: "com.example.coalition.videoProxy.preview.\(self.job.jobId)")
+          let finishGroup = DispatchGroup()
+          finishGroup.enter()
+
+          var finished = false
+          writerInput.requestMediaDataWhenReady(on: writingQueue) {
+            if finished { return }
+            while writerInput.isReadyForMoreMediaData {
+              if self.cancelled {
+                finished = true
+                writerInput.markAsFinished()
+                finishGroup.leave()
+                return
+              }
+              guard let sample = readerOutput.copyNextSampleBuffer() else {
+                finished = true
+                writerInput.markAsFinished()
+                finishGroup.leave()
+                return
+              }
+              writerInput.append(sample)
+            }
+          }
+
+          guard reader.startReading() else {
+            throw reader.error ?? self.makeError(code: -5, message: "Preview reader failed")
+          }
+
+          writer.startWriting()
+          writer.startSession(atSourceTime: .zero)
+
+          finishGroup.wait()
+
+          let writerGroup = DispatchGroup()
+          writerGroup.enter()
+          writer.finishWriting {
+            writerGroup.leave()
+          }
+          writerGroup.wait()
+
+          if self.cancelled || writer.status != .completed || reader.status != .completed {
+            throw writer.error ?? reader.error ?? self.makeError(code: -6, message: "Preview export failed")
+          }
+
+          self.previewURL = previewURL
+
+          self.emit([
+            "jobId": self.job.jobId,
+            "type": "preview_ready",
+            "path": previewURL.path,
+            "durationMs": Int(previewDuration),
+            "width": self.videoWidth,
+            "height": self.videoHeight,
+            "previewQualityLabel": SegmentQuality.preview.rawValue,
+            "metadata": metadata
+          ])
+        } catch {
+          try? FileManager.default.removeItem(at: previewURL)
+          if self.job.enableLogging {
+            print("[VideoProxyChannel] Preview generation failed for job=\(self.job.jobId): \(error.localizedDescription)")
+          }
+        }
+      }
+    }
+
+    private func produceSegment(key: SegmentKey,
+                                quality: SegmentQuality,
+                                reason: EmitReason,
+                                completion: ((Result<CacheEntry, Error>) -> Void)?) {
+      if cancelled {
+        completion?(.failure(makeError(code: -10, message: "Session cancelled")))
+        return
+      }
+
+      if let existing = cacheEntry(for: key) {
+        completion?(.success(existing))
+        return
+      }
+
+      guard let exportSession = AVAssetExportSession(asset: asset, presetName: quality.exportPreset) else {
+        completion?(.failure(makeError(code: -7, message: "Unable to create export session")))
+        return
+      }
+
+      let outputURL = segmentURL(for: key)
+      try? FileManager.default.removeItem(at: outputURL)
+
+      exportSession.outputURL = outputURL
+      exportSession.outputFileType = .mp4
+      exportSession.timeRange = key.timeRange(maxDurationMs: durationMs)
+      exportSession.shouldOptimizeForNetworkUse = true
+      if let composition = preparedVideoComposition {
+        exportSession.videoComposition = composition
+      }
+
+      pendingExports[key] = exportSession
+
+      exportSession.exportAsynchronously { [weak self] in
+        guard let self else { return }
+        self.asyncOnQueue {
+          self.pendingExports.removeValue(forKey: key)
+
+          if self.cancelled {
+            try? FileManager.default.removeItem(at: outputURL)
+            completion?(.failure(self.makeError(code: -10, message: "Session cancelled")))
+            return
+          }
+
+          switch exportSession.status {
+          case .completed:
+            let attributes = try? FileManager.default.attributesOfItem(atPath: outputURL.path)
+            let sizeValue = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+            let entry = CacheEntry(key: key, url: outputURL, fileSize: sizeValue)
+            self.storeCacheEntry(entry)
+            if reason == .upgrade {
+              self.emitSegmentEvent(entry: entry, reason: .upgrade)
+            }
+            completion?(.success(entry))
+          case .cancelled:
+            try? FileManager.default.removeItem(at: outputURL)
+            completion?(.failure(self.makeError(code: -8, message: "Segment export cancelled")))
+          default:
+            let error = exportSession.error ?? self.makeError(code: -9, message: "Segment export failed")
+            try? FileManager.default.removeItem(at: outputURL)
+            completion?(.failure(error))
+          }
+        }
+      }
+    }
+
+    private func scheduleUpgrades(for key: SegmentKey, producedQuality: SegmentQuality) {
+      for candidate in SegmentQuality.allCases where candidate.rank > producedQuality.rank {
+        let upgradeKey = SegmentKey(startMs: key.startMs, endMs: key.endMs, quality: candidate)
+        if cache[upgradeKey] != nil { continue }
+        if pendingExports[upgradeKey] != nil { continue }
+        if pendingUpgradeKeys.contains(upgradeKey) { continue }
+        pendingUpgradeKeys.insert(upgradeKey)
+
+        produceSegment(key: upgradeKey, quality: candidate, reason: .upgrade) { [weak self] _ in
+          guard let self else { return }
+          self.asyncOnQueue {
+            self.pendingUpgradeKeys.remove(upgradeKey)
+          }
+        }
+      }
+    }
+
+    private func emit(_ payload: [String: Any]) {
+      if cancelled { return }
+      eventEmitter(payload)
+    }
+
+    private func emitSegmentEvent(entry: CacheEntry, reason: EmitReason) {
+      var payload: [String: Any] = [
+        "jobId": job.jobId,
+        "path": entry.url.path,
+        "durationMs": entry.key.durationMs,
+        "segmentIndex": entry.key.segmentIndex(segmentDurationMs: segmentDurationMs),
+        "width": videoWidth,
+        "height": videoHeight,
+        "hasAudio": hasAudio,
+        "quality": entry.key.quality.rawValue,
+        "metadata": [
+          "segmentDurationMs": Int(segmentDurationMs),
+          "width": videoWidth,
+          "height": videoHeight,
+          "frameRate": frameRate,
+          "fps": frameRate,
+          "durationMs": durationMs,
+          "hasAudio": hasAudio
+        ]
+      ]
+
+      if reason == .ensure {
+        payload["type"] = "segment_ready"
+        payload["totalSegments"] = totalSegments
+        payload["totalDurationMs"] = durationMs
+      } else {
+        payload["type"] = "segment_upgraded"
+      }
+
+      emit(payload)
+    }
+
+    private func cacheEntry(for key: SegmentKey) -> CacheEntry? {
+      guard let entry = cache[key] else { return nil }
+      if !FileManager.default.fileExists(atPath: entry.url.path) {
+        cache.removeValue(forKey: key)
+        lru.removeAll { $0 == key }
+        totalBytes = max(0, totalBytes - entry.fileSize)
+        return nil
+      }
+      touch(key)
+      return entry
+    }
+
+    private func storeCacheEntry(_ entry: CacheEntry) {
+      if let existing = cache[entry.key] {
+        totalBytes = max(0, totalBytes - existing.fileSize)
+      }
+      cache[entry.key] = entry
+      touch(entry.key)
+      totalBytes += entry.fileSize
+      trimCacheIfNeeded()
+    }
+
+    private func touch(_ key: SegmentKey) {
+      lru.removeAll { $0 == key }
+      lru.append(key)
+    }
+
+    private func trimCacheIfNeeded() {
+      while (cache.count > maxCacheEntries || totalBytes > maxCacheBytes), let oldest = lru.first {
+        lru.removeFirst()
+        if let removed = cache.removeValue(forKey: oldest) {
+          totalBytes = max(0, totalBytes - removed.fileSize)
+          try? FileManager.default.removeItem(at: removed.url)
+        }
+      }
+    }
+
+    private func segmentURL(for key: SegmentKey) -> URL {
+      let filename = String(
+        format: "segment_%010lld_%010lld_%@.mp4",
+        key.startMs,
+        key.endMs,
+        key.quality.rawValue.lowercased()
+      )
+      return cacheDirectory.appendingPathComponent(filename)
+    }
+
+    private func makeVideoComposition(for track: AVAssetTrack) -> AVMutableVideoComposition {
+      let composition = AVMutableVideoComposition()
+      composition.renderSize = job.targetSize
+      let timescale = max(1, job.frameRateHint)
+      composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(timescale))
+
+      let instruction = AVMutableVideoCompositionInstruction()
+      instruction.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+
+      let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+      let transform = transformForTrack(track)
+      layerInstruction.setTransform(transform, at: .zero)
+      instruction.layerInstructions = [layerInstruction]
+      composition.instructions = [instruction]
+      return composition
+    }
+
+    private func transformForTrack(_ track: AVAssetTrack) -> CGAffineTransform {
+      let preferredTransform = track.preferredTransform
+      let naturalSize = track.naturalSize
+      let rawRect = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
+      let boundingRect = CGRect(
+        x: min(rawRect.minX, rawRect.maxX),
+        y: min(rawRect.minY, rawRect.maxY),
+        width: abs(rawRect.width),
+        height: abs(rawRect.height)
+      )
+      let rotatedSize = boundingRect.size
+      let scale = min(job.targetSize.width / max(rotatedSize.width, 1), job.targetSize.height / max(rotatedSize.height, 1))
+      let scaledSize = CGSize(width: rotatedSize.width * scale, height: rotatedSize.height * scale)
+      let translateX = (job.targetSize.width - scaledSize.width) / 2 - boundingRect.minX * scale
+      let translateY = (job.targetSize.height - scaledSize.height) / 2 - boundingRect.minY * scale
+
+      var finalTransform = preferredTransform
+      finalTransform = finalTransform.concatenating(CGAffineTransform(translationX: -boundingRect.minX, y: -boundingRect.minY))
+      finalTransform = finalTransform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+      finalTransform = finalTransform.concatenating(CGAffineTransform(translationX: translateX, y: translateY))
+      return finalTransform
+    }
+
+    private func cleanupFiles() {
+      if let previewURL, FileManager.default.fileExists(atPath: previewURL.path) {
+        try? FileManager.default.removeItem(at: previewURL)
+      }
+      for entry in cache.values {
+        try? FileManager.default.removeItem(at: entry.url)
+      }
+      cache.removeAll()
+      lru.removeAll()
+      totalBytes = 0
+    }
+
+    private func performTeardownIfNeeded() {
+      if didTeardown { return }
+      didTeardown = true
+      teardown()
+    }
+
+    private func handleFatalError(_ error: Error) {
+      if job.enableLogging {
+        print("[VideoProxyChannel] Proxy session failed for job=\(job.jobId): \(error.localizedDescription)")
+      }
+      cancel()
+      fallback(error)
+    }
+
+    private func makeError(code: Int, message: String) -> NSError {
+      return NSError(domain: "VideoProxySession", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private func asyncOnQueue(_ block: @escaping () -> Void) {
+      if DispatchQueue.getSpecific(key: queueKey) != nil {
+        block()
+      } else {
+        queue.async(execute: block)
+      }
+    }
   }
 
   private final class ProxyJob {
