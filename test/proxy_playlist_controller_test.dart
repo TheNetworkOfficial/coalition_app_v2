@@ -1,77 +1,235 @@
 import 'dart:async';
 
-import 'package:flutter_test/flutter_test.dart';
 import 'package:coalition_app_v2/services/proxy_playlist_controller.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:video_editor_2/video_editor.dart';
+import 'package:video_player/video_player.dart';
 
-// Note: This test uses the real ProxyPlaylistController but replaces the
-// VideoProxyService().nativeEventsFor(...) stream by injecting events via
-// the VideoProxyService global. For simplicity, we'll simulate the event
-// stream by directly calling the controller's internal handler via a
-// workaround: creating a controller and adding segments via the expected
-// event map.
+class _MockVideoEditorController extends Mock
+    implements VideoEditorController {}
+
+class _MockVideoPlayerController extends Mock
+    implements VideoPlayerController {}
+
+class _ControllerState {
+  _ControllerState({
+    required this.editor,
+    required this.video,
+    required this.setValue,
+    required this.getValue,
+  });
+
+  final _MockVideoEditorController editor;
+  final _MockVideoPlayerController video;
+  VoidCallback? listener;
+  final void Function(VideoPlayerValue value) setValue;
+  final VideoPlayerValue Function() getValue;
+
+  void update(VideoPlayerValue value) => setValue(value);
+}
+
+class _TestEditorFactory {
+  final List<_ControllerState> states = [];
+
+  VideoEditorController call(PlaylistSegment segment) {
+    final editor = _MockVideoEditorController();
+    final video = _MockVideoPlayerController();
+    final durationMs = segment.durationMs > 0 ? segment.durationMs : 1000;
+    VideoPlayerValue currentValue = VideoPlayerValue(
+      duration: Duration(milliseconds: durationMs),
+      position: Duration.zero,
+      isInitialized: true,
+    );
+
+    late _ControllerState state;
+
+    when(() => editor.initialize(aspectRatio: any(named: 'aspectRatio')))
+        .thenAnswer((_) async {});
+    when(() => editor.dispose()).thenAnswer((_) async {});
+    when(() => editor.addListener(any())).thenAnswer((invocation) {
+      final listener = invocation.positionalArguments.first as VoidCallback;
+      state.listener = listener;
+    });
+    when(() => editor.removeListener(any())).thenAnswer((invocation) {
+      final listener = invocation.positionalArguments.first as VoidCallback;
+      if (state.listener == listener) {
+        state.listener = null;
+      }
+    });
+    when(() => editor.video).thenReturn(video);
+
+    when(() => video.value).thenAnswer((_) => currentValue);
+    when(() => video.play()).thenAnswer((_) async {});
+    when(() => video.pause()).thenAnswer((_) async {});
+    when(() => video.seekTo(any())).thenAnswer((_) async {});
+    when(() => video.dispose()).thenAnswer((_) async {});
+
+    state = _ControllerState(
+      editor: editor,
+      video: video,
+      setValue: (value) {
+        currentValue = value;
+      },
+      getValue: () => currentValue,
+    );
+    states.add(state);
+    return editor;
+  }
+}
 
 void main() {
-  test('ProxyPlaylistController appends first segment and initializes',
-      () async {
-    final jobId = 'test-job-1';
-    final firstController = StreamController<dynamic>();
-    final controller =
-        ProxyPlaylistController(jobId: jobId, events: firstController.stream);
+  TestWidgetsFlutterBinding.ensureInitialized();
 
-    // Simulate a segment_ready event
-    final event = {
+  setUpAll(() {
+    registerFallbackValue(Duration.zero);
+    registerFallbackValue(0.0);
+  });
+
+  test('segment_ready initializes the editor and notifies ready', () async {
+    final jobId = 'test-job-1';
+    final events = StreamController<dynamic>();
+    final factory = _TestEditorFactory();
+    final controller = ProxyPlaylistController(
+      jobId: jobId,
+      events: events.stream,
+      editorBuilder: factory.call,
+    );
+
+    var readyCalled = false;
+    controller.onReady = () {
+      readyCalled = true;
+    };
+
+    events.add({
       'type': 'segment_ready',
       'segmentIndex': 0,
       'path': '/tmp/segment_000.mp4',
-      'durationMs': 10000,
+      'durationMs': 1200,
       'width': 360,
       'height': 640,
-    };
+    });
 
-    firstController.add(event);
-    // give the controller a moment to process the stream event
-    await Future.delayed(Duration(milliseconds: 50));
+    await Future.delayed(const Duration(milliseconds: 20));
 
-    expect(controller.segments.length, 1);
-    expect(controller.segments.first.index, 0);
+    expect(factory.states.length, 1);
+    expect(controller.segments, hasLength(1));
+    expect(controller.editor, same(factory.states.first.editor));
+    expect(controller.isReady, isTrue);
+    expect(readyCalled, isTrue);
+    verify(() => factory.states.first.editor
+        .initialize(aspectRatio: any(named: 'aspectRatio'))).called(1);
 
     await controller.dispose();
-    await firstController.close();
+    await events.close();
   });
 
-  test('ProxyPlaylistController appends multiple segments and can switch',
-      () async {
+  test('playback completion advances to the next segment', () async {
     final jobId = 'test-job-2';
-    final multiController = StreamController<dynamic>();
-    final controller2 =
-        ProxyPlaylistController(jobId: jobId, events: multiController.stream);
+    final events = StreamController<dynamic>();
+    final factory = _TestEditorFactory();
+    final controller = ProxyPlaylistController(
+      jobId: jobId,
+      events: events.stream,
+      editorBuilder: factory.call,
+    );
 
-    final multiEvents = [
-      {
-        'type': 'segment_ready',
-        'segmentIndex': 0,
-        'path': '/tmp/segment_000.mp4',
-        'durationMs': 10000,
-        'width': 360,
-        'height': 640,
-      },
-      {
-        'type': 'segment_ready',
-        'segmentIndex': 1,
-        'path': '/tmp/segment_001.mp4',
-        'durationMs': 10000,
-        'width': 360,
-        'height': 640,
-      }
-    ];
-    for (final e in multiEvents) {
-      multiController.add(e);
-    }
-    await Future.delayed(Duration(milliseconds: 50));
+    events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 0,
+      'path': '/tmp/segment_000.mp4',
+      'durationMs': 1000,
+      'width': 360,
+      'height': 640,
+    });
+    events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 1,
+      'path': '/tmp/segment_001.mp4',
+      'durationMs': 1000,
+      'width': 360,
+      'height': 640,
+    });
 
-    expect(controller2.segments.length, 2);
+    await Future.delayed(const Duration(milliseconds: 40));
 
-    await controller2.dispose();
-    await multiController.close();
+    expect(factory.states.length, 2);
+    final firstState = factory.states.first;
+    final secondState = factory.states[1];
+    expect(controller.editor, same(firstState.editor));
+
+    final current = firstState.getValue();
+    firstState.update(current.copyWith(
+      position: current.duration,
+      isInitialized: true,
+    ));
+    firstState.listener?.call();
+
+    await Future.delayed(const Duration(milliseconds: 40));
+
+    expect(controller.editor, same(secondState.editor));
+    verify(() => firstState.editor.dispose()).called(1);
+
+    await controller.dispose();
+    await events.close();
+  });
+
+  test('fallback progress clears existing segments and editor state', () async {
+    final jobId = 'test-job-3';
+    final events = StreamController<dynamic>();
+    final factory = _TestEditorFactory();
+    final controller = ProxyPlaylistController(
+      jobId: jobId,
+      events: events.stream,
+      editorBuilder: factory.call,
+    );
+
+    var bufferingCalls = 0;
+    controller.onBuffering = () {
+      bufferingCalls += 1;
+    };
+
+    events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 0,
+      'path': '/tmp/segment_000.mp4',
+      'durationMs': 800,
+      'width': 360,
+      'height': 640,
+    });
+
+    await Future.delayed(const Duration(milliseconds: 20));
+    expect(controller.segments, hasLength(1));
+    final firstState = factory.states.first;
+
+    events.add({
+      'type': 'progress',
+      'progress': 0.5,
+      'fallbackTriggered': true,
+    });
+
+    await Future.delayed(const Duration(milliseconds: 40));
+
+    expect(controller.segments, isEmpty);
+    expect(controller.editor, isNull);
+    expect(bufferingCalls, 1);
+    verify(() => firstState.editor.dispose()).called(1);
+
+    events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 0,
+      'path': '/tmp/segment_restart.mp4',
+      'durationMs': 900,
+      'width': 360,
+      'height': 640,
+    });
+
+    await Future.delayed(const Duration(milliseconds: 40));
+
+    expect(controller.segments, hasLength(1));
+    expect(controller.editor, same(factory.states.last.editor));
+
+    await controller.dispose();
+    await events.close();
   });
 }

@@ -22,8 +22,15 @@ class PlaylistSegment {
   final int height;
 }
 
+typedef PlaylistEditorBuilder = VideoEditorController Function(
+    PlaylistSegment segment);
+
 class ProxyPlaylistController {
-  ProxyPlaylistController({required this.jobId, Stream<dynamic>? events}) {
+  ProxyPlaylistController({
+    required this.jobId,
+    Stream<dynamic>? events,
+    PlaylistEditorBuilder? editorBuilder,
+  })  : _editorBuilder = editorBuilder ?? _defaultEditorBuilder {
     final source = events ?? VideoProxyService().nativeEventsFor(jobId);
     _eventsSub = source.listen(_handleEvent);
   }
@@ -34,9 +41,11 @@ class ProxyPlaylistController {
   VideoEditorController? _editorController;
   int _currentIndex = 0;
   StreamSubscription? _eventsSub;
+  final PlaylistEditorBuilder _editorBuilder;
   VoidCallback? onReady;
   VoidCallback? onBuffering;
   VoidCallback? onSegmentAppended;
+  bool _awaitingFallbackSegments = false;
 
   bool get isReady =>
       _editorController != null && _editorController!.video.value.isInitialized;
@@ -48,30 +57,37 @@ class ProxyPlaylistController {
       ctrl.removeListener(_onEditorUpdate);
       await ctrl.dispose();
     }
+    _editorController = null;
   }
 
   Future<void> _handleEvent(dynamic raw) async {
-    if (raw is! Map) return;
-    final event = raw;
-    final type = event['type']?.toString();
-    if (type == 'segment_ready') {
-      final idx = (event['segmentIndex'] as num?)?.toInt() ?? 0;
-      final path = event['path']?.toString();
-      final durationMs = (event['durationMs'] as num?)?.toInt() ?? 0;
-      final width = (event['width'] as num?)?.toInt() ?? 0;
-      final height = (event['height'] as num?)?.toInt() ?? 0;
+    final event = _ProxyPlaylistEvent.fromDynamic(raw);
+    if (event == null) return;
+
+    if (event.fallbackTriggered && !_awaitingFallbackSegments) {
+      _awaitingFallbackSegments = true;
+      await _handleFallbackTriggered();
+    }
+
+    if (event.type == 'segment_ready') {
+      _awaitingFallbackSegments = false;
+      final path = event.path;
       if (path == null) return;
-      final seg = PlaylistSegment(
-          index: idx,
-          path: path,
-          durationMs: durationMs,
-          width: width,
-          height: height);
+      final idx = event.segmentIndex ?? 0;
+      final durationMs = event.durationMs ?? 0;
+      final width = event.width ?? 0;
+      final height = event.height ?? 0;
       if (segments.any((s) => s.index == idx)) return; // dedupe
+      final seg = PlaylistSegment(
+        index: idx,
+        path: path,
+        durationMs: durationMs,
+        width: width,
+        height: height,
+      );
       segments.add(seg);
       segments.sort((a, b) => a.index.compareTo(b.index));
 
-      // If first segment, init player
       if (_editorController == null && segments.isNotEmpty) {
         await _initEditorForSegment(segments.first);
         onReady?.call();
@@ -82,8 +98,7 @@ class ProxyPlaylistController {
   }
 
   Future<void> _initEditorForSegment(PlaylistSegment seg) async {
-    final controller = VideoEditorController.file(XFile(seg.path),
-        maxDuration: Duration(days: 1), minDuration: Duration.zero);
+    final controller = _editorBuilder(seg);
     try {
       await controller.initialize();
     } catch (e) {
@@ -128,8 +143,7 @@ class ProxyPlaylistController {
       await old.dispose();
     }
 
-    final controller = VideoEditorController.file(XFile(nextSeg.path),
-        maxDuration: Duration(days: 1), minDuration: Duration.zero);
+    final controller = _editorBuilder(nextSeg);
     try {
       await controller.initialize();
     } catch (e) {
@@ -176,8 +190,7 @@ class ProxyPlaylistController {
       old.removeListener(_onEditorUpdate);
       await old.dispose();
     }
-    final controller = VideoEditorController.file(XFile(seg.path),
-        maxDuration: Duration(days: 1), minDuration: Duration.zero);
+    final controller = _editorBuilder(seg);
     try {
       await controller.initialize();
     } catch (e) {
@@ -190,5 +203,102 @@ class ProxyPlaylistController {
     _currentIndex = index;
     await controller.video.seekTo(Duration(milliseconds: seekMs));
     controller.video.play();
+  }
+
+  Future<void> _handleFallbackTriggered() async {
+    final old = _editorController;
+    _editorController = null;
+    if (old != null) {
+      old.removeListener(_onEditorUpdate);
+      await old.dispose();
+    }
+    segments.clear();
+    _currentIndex = 0;
+    onBuffering?.call();
+  }
+
+  static VideoEditorController _defaultEditorBuilder(PlaylistSegment seg) {
+    return VideoEditorController.file(
+      XFile(seg.path),
+      maxDuration: const Duration(days: 1),
+      minDuration: Duration.zero,
+    );
+  }
+}
+
+class _ProxyPlaylistEvent {
+  _ProxyPlaylistEvent({
+    required this.type,
+    this.segmentIndex,
+    this.path,
+    this.durationMs,
+    this.width,
+    this.height,
+    this.progress,
+    this.fallbackTriggered = false,
+  });
+
+  final String type;
+  final int? segmentIndex;
+  final String? path;
+  final int? durationMs;
+  final int? width;
+  final int? height;
+  final double? progress;
+  final bool fallbackTriggered;
+
+  static _ProxyPlaylistEvent? fromDynamic(dynamic raw) {
+    if (raw == null) return null;
+
+    dynamic read(String key) {
+      if (raw is Map) return raw[key];
+      try {
+        switch (key) {
+          case 'type':
+            return raw.type;
+          case 'segmentIndex':
+            return raw.segmentIndex;
+          case 'path':
+            return raw.path;
+          case 'durationMs':
+            return raw.durationMs;
+          case 'width':
+            return raw.width;
+          case 'height':
+            return raw.height;
+          case 'progress':
+            return raw.progress;
+          case 'fallbackTriggered':
+            return raw.fallbackTriggered;
+        }
+      } catch (_) {
+        return null;
+      }
+      return null;
+    }
+
+    final typeValue = read('type')?.toString();
+    if (typeValue == null) {
+      return null;
+    }
+
+    final segmentIndexValue = read('segmentIndex');
+    final pathValue = read('path');
+    final durationValue = read('durationMs');
+    final widthValue = read('width');
+    final heightValue = read('height');
+    final progressValue = read('progress');
+    final fallbackValue = read('fallbackTriggered');
+
+    return _ProxyPlaylistEvent(
+      type: typeValue,
+      segmentIndex: (segmentIndexValue as num?)?.toInt(),
+      path: pathValue?.toString(),
+      durationMs: (durationValue as num?)?.toInt(),
+      width: (widthValue as num?)?.toInt(),
+      height: (heightValue as num?)?.toInt(),
+      progress: (progressValue as num?)?.toDouble(),
+      fallbackTriggered: fallbackValue == true,
+    );
   }
 }
