@@ -7,9 +7,9 @@ const bool kAuthBypassEnabled =
 const bool kPreferVideoProxyUploads =
     bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: true);
 // Feature flag to enable segmented (chunked) preview proxying (10s segments).
-// Toggle with --dart-define=ENABLE_SEGMENTED_PREVIEW=true
+// Enabled by default; pass --dart-define=ENABLE_SEGMENTED_PREVIEW=false to opt out.
 const bool kEnableSegmentedPreview =
-    bool.fromEnvironment('ENABLE_SEGMENTED_PREVIEW', defaultValue: false);
+    bool.fromEnvironment('ENABLE_SEGMENTED_PREVIEW', defaultValue: true);
 
 String normalizeApiBaseUrl(String base) {
   if (base.isEmpty) {

@@ -19,5 +19,5 @@
 
 ## Video proxy feature flags
 
-- `--dart-define=ENABLE_SEGMENTED_PREVIEW=true` enables segmented preview proxying. When set, `CreateEntryPage` forwards the `VideoProxyRequest` directly to `EditMediaPage`, which starts the proxy job, streams early segments through `ProxyPlaylistController`, and enables progressive playback while the full proxy finalizes.
-- Omitting the flag (or setting it to `false`) keeps the legacy proxy flow: `CreateEntryPage` waits for a full `VideoProxyResult`, `EditMediaPage` initializes the traditional `VideoEditorController`, and fallbacks rely on `_prepareVideoProxy` dialogs to request smaller proxies when needed.
+- Segmented preview proxying is enabled by default. `CreateEntryPage` forwards the `VideoProxyRequest` directly to `EditMediaPage`, which starts the proxy job, streams early segments through `ProxyPlaylistController`, and enables progressive playback while the full proxy finalizes.
+- To force the legacy proxy flow, pass `--dart-define=ENABLE_SEGMENTED_PREVIEW=false`. In that mode, `CreateEntryPage` waits for a full `VideoProxyResult`, `EditMediaPage` initializes the traditional `VideoEditorController`, and fallbacks rely on `_prepareVideoProxy` dialogs to request smaller proxies when needed.
