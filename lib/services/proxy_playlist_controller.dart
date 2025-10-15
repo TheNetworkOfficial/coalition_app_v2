@@ -42,6 +42,7 @@ class ProxyPlaylistController {
   int _currentIndex = 0;
   StreamSubscription? _eventsSub;
   final PlaylistEditorBuilder _editorBuilder;
+  final Map<int, VideoEditorController> _preparedControllers = {};
   VoidCallback? onReady;
   VoidCallback? onBuffering;
   VoidCallback? onSegmentAppended;
@@ -58,6 +59,7 @@ class ProxyPlaylistController {
       await ctrl.dispose();
     }
     _editorController = null;
+    await _disposePreparedControllers();
   }
 
   Future<void> _handleEvent(dynamic raw) async {
@@ -91,6 +93,8 @@ class ProxyPlaylistController {
       if (_editorController == null && segments.isNotEmpty) {
         await _initEditorForSegment(segments.first);
         onReady?.call();
+      } else if (_editorController != null) {
+        await _prefetchNextSegment();
       }
 
       onSegmentAppended?.call();
@@ -98,22 +102,20 @@ class ProxyPlaylistController {
   }
 
   Future<void> _initEditorForSegment(PlaylistSegment seg) async {
-    final controller = _editorBuilder(seg);
-    try {
-      await controller.initialize();
-    } catch (e) {
-      debugPrint(
-          '[ProxyPlaylistController] Failed to init editor for first segment: $e');
-      return;
-    }
+    final index = segments.indexOf(seg);
+    if (index < 0) return;
+    final controller = await _acquireControllerForIndex(index,
+        failureLabel: 'first segment');
+    if (controller == null) return;
     controller.addListener(_onEditorUpdate);
     _editorController = controller;
-    _currentIndex = 0;
+    _currentIndex = index;
 
     // Autoplay
     if (controller.video.value.isInitialized) {
       controller.video.play();
     }
+    await _prefetchNextSegment();
   }
 
   void _onEditorUpdate() {
@@ -143,18 +145,16 @@ class ProxyPlaylistController {
       await old.dispose();
     }
 
-    final controller = _editorBuilder(nextSeg);
-    try {
-      await controller.initialize();
-    } catch (e) {
-      debugPrint(
-          '[ProxyPlaylistController] Failed to init editor for segment $nextIndex: $e');
+    final controller = await _acquireControllerForIndex(nextIndex,
+        failureLabel: 'segment ${nextSeg.index}');
+    if (controller == null) {
       return;
     }
     controller.addListener(_onEditorUpdate);
     _editorController = controller;
     _currentIndex = nextIndex;
     controller.video.play();
+    await _prefetchNextSegment();
   }
 
   VideoEditorController? get editor => _editorController;
@@ -190,19 +190,15 @@ class ProxyPlaylistController {
       old.removeListener(_onEditorUpdate);
       await old.dispose();
     }
-    final controller = _editorBuilder(seg);
-    try {
-      await controller.initialize();
-    } catch (e) {
-      debugPrint(
-          '[ProxyPlaylistController] Failed to init editor for segment $index: $e');
-      return;
-    }
+    final controller = await _acquireControllerForIndex(index,
+        failureLabel: 'segment ${seg.index}');
+    if (controller == null) return;
     controller.addListener(_onEditorUpdate);
     _editorController = controller;
     _currentIndex = index;
     await controller.video.seekTo(Duration(milliseconds: seekMs));
     controller.video.play();
+    await _prefetchNextSegment();
   }
 
   Future<void> _handleFallbackTriggered() async {
@@ -212,9 +208,72 @@ class ProxyPlaylistController {
       old.removeListener(_onEditorUpdate);
       await old.dispose();
     }
+    await _disposePreparedControllers();
     segments.clear();
     _currentIndex = 0;
     onBuffering?.call();
+  }
+
+  Future<VideoEditorController?> _acquireControllerForIndex(int index,
+      {required String failureLabel}) async {
+    if (index < 0 || index >= segments.length) return null;
+    final cached = _preparedControllers.remove(index);
+    if (cached != null) {
+      return cached;
+    }
+    return _createControllerForIndex(index, failureLabel: failureLabel);
+  }
+
+  Future<void> _prefetchNextSegment() async {
+    final nextIndex = _currentIndex + 1;
+    if (nextIndex >= segments.length) return;
+    await _prefetchControllerForIndex(nextIndex);
+  }
+
+  Future<void> _prefetchControllerForIndex(int index) async {
+    if (index < 0 || index >= segments.length) return;
+    if (_preparedControllers.containsKey(index)) return;
+    final seg = segments[index];
+    final controller = await _createControllerForIndex(index,
+        failureLabel: 'segment ${seg.index}');
+    if (controller != null) {
+      if (index < segments.length && identical(segments[index], seg)) {
+        _preparedControllers[index] = controller;
+      } else {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _disposePreparedControllers() async {
+    if (_preparedControllers.isEmpty) return;
+    final controllers = _preparedControllers.values.toList();
+    _preparedControllers.clear();
+    for (final controller in controllers) {
+      try {
+        await controller.dispose();
+      } catch (_) {}
+    }
+  }
+
+  Future<VideoEditorController?> _createControllerForIndex(int index,
+      {required String failureLabel}) async {
+    if (index < 0 || index >= segments.length) return null;
+    final seg = segments[index];
+    final controller = _editorBuilder(seg);
+    try {
+      await controller.initialize();
+      return controller;
+    } catch (e) {
+      debugPrint(
+          '[ProxyPlaylistController] Failed to init editor for $failureLabel: $e');
+      try {
+        await controller.dispose();
+      } catch (_) {}
+      return null;
+    }
   }
 
   static VideoEditorController _defaultEditorBuilder(PlaylistSegment seg) {

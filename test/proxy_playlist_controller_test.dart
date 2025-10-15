@@ -124,6 +124,46 @@ void main() {
     await events.close();
   });
 
+  test('segment_ready prefetches controller for upcoming segment', () async {
+    final jobId = 'test-job-prefetch';
+    final events = StreamController<dynamic>();
+    final factory = _TestEditorFactory();
+    final controller = ProxyPlaylistController(
+      jobId: jobId,
+      events: events.stream,
+      editorBuilder: factory.call,
+    );
+
+    events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 0,
+      'path': '/tmp/segment_000.mp4',
+      'durationMs': 1200,
+      'width': 360,
+      'height': 640,
+    });
+
+    await Future.delayed(const Duration(milliseconds: 20));
+    expect(factory.states.length, 1);
+
+    events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 1,
+      'path': '/tmp/segment_001.mp4',
+      'durationMs': 1400,
+      'width': 360,
+      'height': 640,
+    });
+
+    await Future.delayed(const Duration(milliseconds: 40));
+
+    expect(factory.states.length, 2);
+    expect(controller.editor, same(factory.states.first.editor));
+
+    await controller.dispose();
+    await events.close();
+  });
+
   test('playback completion advances to the next segment', () async {
     final jobId = 'test-job-2';
     final events = StreamController<dynamic>();
@@ -168,7 +208,11 @@ void main() {
     await Future.delayed(const Duration(milliseconds: 40));
 
     expect(controller.editor, same(secondState.editor));
+    expect(factory.states.length, 2);
     verify(() => firstState.editor.dispose()).called(1);
+    verify(() => secondState.editor
+            .initialize(aspectRatio: any(named: 'aspectRatio')))
+        .called(1);
 
     await controller.dispose();
     await events.close();
@@ -203,6 +247,19 @@ void main() {
     final firstState = factory.states.first;
 
     events.add({
+      'type': 'segment_ready',
+      'segmentIndex': 1,
+      'path': '/tmp/segment_001.mp4',
+      'durationMs': 900,
+      'width': 360,
+      'height': 640,
+    });
+
+    await Future.delayed(const Duration(milliseconds: 20));
+    expect(controller.segments, hasLength(2));
+    final secondState = factory.states[1];
+
+    events.add({
       'type': 'progress',
       'progress': 0.5,
       'fallbackTriggered': true,
@@ -214,6 +271,7 @@ void main() {
     expect(controller.editor, isNull);
     expect(bufferingCalls, 1);
     verify(() => firstState.editor.dispose()).called(1);
+    verify(() => secondState.editor.dispose()).called(1);
 
     events.add({
       'type': 'segment_ready',
@@ -227,6 +285,7 @@ void main() {
     await Future.delayed(const Duration(milliseconds: 40));
 
     expect(controller.segments, hasLength(1));
+    expect(factory.states.length, 3);
     expect(controller.editor, same(factory.states.last.editor));
 
     await controller.dispose();
