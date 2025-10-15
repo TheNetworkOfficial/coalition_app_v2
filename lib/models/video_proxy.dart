@@ -11,6 +11,19 @@ enum VideoProxyPreviewQuality { fast, quality }
 
 enum ProxyQuality { preview, proxy, mezzanine }
 
+enum ProxySessionQualityTier { low, medium, full }
+
+ProxySessionQualityTier proxySessionTierForQuality(ProxyQuality quality) {
+  switch (quality) {
+    case ProxyQuality.preview:
+      return ProxySessionQualityTier.low;
+    case ProxyQuality.proxy:
+      return ProxySessionQualityTier.medium;
+    case ProxyQuality.mezzanine:
+      return ProxySessionQualityTier.full;
+  }
+}
+
 ProxyQuality proxyQualityFromLabel(String? label,
     {ProxyQuality fallback = ProxyQuality.preview}) {
   switch (label?.toLowerCase()) {
@@ -224,6 +237,7 @@ class ProxySegment {
     required this.width,
     required this.height,
     required this.hasAudio,
+    this.quality = ProxyQuality.preview,
     this.sourceStartMs,
     this.sourceEndMs,
     this.orientation,
@@ -239,6 +253,7 @@ class ProxySegment {
   final int width;
   final int height;
   final bool hasAudio;
+  final ProxyQuality quality;
   final int? sourceStartMs;
   final int? sourceEndMs;
   final String? orientation;
@@ -255,6 +270,7 @@ class ProxySegment {
       'width': width,
       'height': height,
       'hasAudio': hasAudio,
+      'quality': quality.platformLabel,
       'sourceStartMs': sourceStartMs,
       'sourceEndMs': sourceEndMs,
       'orientation': orientation,

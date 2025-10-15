@@ -35,6 +35,7 @@ class ProxyPlaylistController {
     VideoProxySession? session,
     ProxyPreview? initialPreview,
     Stream<dynamic>? events,
+    Stream<dynamic>? syntheticEvents,
     PlaylistEditorBuilder? editorBuilder,
     Duration prefetchWindow = const Duration(seconds: 6),
   })  : jobId = session?.jobId ?? jobId,
@@ -43,6 +44,9 @@ class ProxyPlaylistController {
         _editorBuilder = editorBuilder ?? _defaultEditorBuilder {
     final source = events ?? VideoProxyService().nativeEventsFor(this.jobId);
     _eventsSub = source.listen(_handleEvent);
+    final synthetic =
+        syntheticEvents ?? VideoProxyService().syntheticEventsFor(this.jobId);
+    _syntheticEventsSub = synthetic.listen(_handleEvent);
     if (initialPreview != null) {
       final estimatedDuration = initialPreview.metadata.durationMs > 0
           ? initialPreview.metadata.durationMs
@@ -70,6 +74,7 @@ class ProxyPlaylistController {
   VideoEditorController? _editorController;
   int _currentIndex = 0;
   StreamSubscription? _eventsSub;
+  StreamSubscription? _syntheticEventsSub;
   final PlaylistEditorBuilder _editorBuilder;
   final Map<int, VideoEditorController> _preparedControllers = {};
   Future<void>? _initializingEditor;
@@ -100,6 +105,7 @@ class ProxyPlaylistController {
 
   Future<void> dispose() async {
     await _eventsSub?.cancel();
+    await _syntheticEventsSub?.cancel();
     final ctrl = _editorController;
     if (ctrl != null) {
       ctrl.removeListener(_onEditorUpdate);
@@ -107,6 +113,7 @@ class ProxyPlaylistController {
     }
     _editorController = null;
     await _disposePreparedControllers();
+    await VideoProxyService().releaseJob(jobId);
   }
 
   Future<void> _handleEvent(dynamic raw) async {
