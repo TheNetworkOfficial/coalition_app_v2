@@ -79,6 +79,7 @@ class _TestEditorFactory {
         (_) => Duration(milliseconds: (trimMax * durationMs).round()));
     when(() => editor.videoDuration)
         .thenReturn(Duration(milliseconds: durationMs));
+    when(() => editor.isRotated).thenReturn(false);
     when(() => editor.isTrimming).thenReturn(false);
     when(() => editor.isTrimming = any()).thenAnswer((invocation) {
       final val = invocation.positionalArguments.first as bool;
@@ -86,6 +87,7 @@ class _TestEditorFactory {
     });
 
     when(() => video.value).thenAnswer((_) => currentValue);
+    when(() => video.playerId).thenReturn(0);
     when(() => video.play()).thenAnswer((_) async {});
     when(() => video.pause()).thenAnswer((_) async {});
     when(() => video.seekTo(any())).thenAnswer((invocation) async {
