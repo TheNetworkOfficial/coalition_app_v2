@@ -5,6 +5,7 @@ import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart';
 import 'package:video_editor_2/video_editor.dart';
 
+import '../models/video_proxy.dart';
 import 'video_proxy_service.dart';
 
 class PlaylistSegment {
@@ -58,6 +59,14 @@ class ProxyPlaylistController {
 
   int get totalDurationMs =>
       segments.fold<int>(0, (sum, segment) => sum + segment.durationMs);
+
+  ProxySegment? manifestSegmentForTimestamp(int timestampMs) {
+    return VideoProxyService().manifestSegmentFor(jobId, timestampMs);
+  }
+
+  List<ProxyKeyframe> manifestKeyframesInRange(int startMs, int endMs) {
+    return VideoProxyService().manifestKeyframesFor(jobId, startMs, endMs);
+  }
 
   Future<void> dispose() async {
     await _eventsSub?.cancel();
