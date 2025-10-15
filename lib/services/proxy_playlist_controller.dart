@@ -459,7 +459,7 @@ class ProxyPlaylistController {
     if (_session == null || _prefetchWindowMs <= 0) {
       return;
     }
-    final manifest = _manifestData;
+    final manifest = _currentManifest;
     final startWindow = math.max(0, centerMs - _prefetchWindowMs);
     final endWindow = centerMs + _prefetchWindowMs;
 
@@ -537,7 +537,7 @@ class ProxyPlaylistController {
     if (_preparedControllers.isEmpty) {
       return;
     }
-    final manifest = _manifestData;
+    final manifest = _currentManifest;
     final removals = <int>[];
     for (final entry in _preparedControllers.entries) {
       final bounds = _segmentWindowForListIndex(entry.key, manifest: manifest);
@@ -560,7 +560,9 @@ class ProxyPlaylistController {
     }
   }
 
-  ProxyManifestData? get _manifestData {
+  ProxyManifestData? get manifest => _currentManifest;
+
+  ProxyManifestData? get _currentManifest {
     final manifest = _session?.manifest ??
         VideoProxyService().manifestForJob(jobId);
     return manifest;
@@ -574,7 +576,7 @@ class ProxyPlaylistController {
       return null;
     }
     final segIndex = segments[index].index;
-    manifest ??= _manifestData;
+    manifest ??= _currentManifest;
     if (manifest != null && manifest.segments.isNotEmpty) {
       var offset = 0;
       final ordered = [...manifest.segments]

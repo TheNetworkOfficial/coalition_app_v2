@@ -1100,11 +1100,24 @@ class _EditMediaPageState extends State<EditMediaPage> {
       if (start == 0 && end == total) {
         return null;
       }
-      final trimmed = (end - start).clamp(0, total);
+      final manifest = playlist.manifest;
+      int sourceStart = start;
+      int sourceEnd = end;
+      int trimmed = (end - start).clamp(0, total);
+      if (manifest != null) {
+        final mapped = manifest.sourceRangeForProxyRange(start, end);
+        if (mapped != null) {
+          sourceStart = mapped.startMs;
+          sourceEnd = mapped.endMs;
+          trimmed = mapped.durationMs.clamp(0, total);
+        }
+      }
       return VideoTrimData(
-        startMs: start,
-        endMs: end,
+        startMs: sourceStart,
+        endMs: sourceEnd,
         durationMs: trimmed,
+        proxyStartMs: start,
+        proxyEndMs: end,
       );
     }
     final controller = _videoController;
@@ -1126,6 +1139,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
       startMs: start,
       endMs: end,
       durationMs: durationMs,
+      proxyStartMs: start,
+      proxyEndMs: end,
     );
   }
 
@@ -1158,7 +1173,19 @@ class _EditMediaPageState extends State<EditMediaPage> {
     if (controller == null) {
       return null;
     }
-    return controller.selectedCoverVal?.timeMs;
+    final coverMs = controller.selectedCoverVal?.timeMs;
+    if (coverMs == null) {
+      return null;
+    }
+    final playlist = _playlistController;
+    if (playlist != null) {
+      final manifest = playlist.manifest;
+      final mapped = manifest?.sourceTimestampForProxy(coverMs);
+      if (mapped != null) {
+        return mapped;
+      }
+    }
+    return coverMs;
   }
 
   ImageCropData? _buildImageCrop() {

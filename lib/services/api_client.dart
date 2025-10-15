@@ -173,6 +173,8 @@ class ApiClient {
               'startMs': trim.startMs,
               'endMs': trim.endMs,
               'durationMs': trim.durationMs,
+              if (trim.proxyStartMs != null) 'proxyStartMs': trim.proxyStartMs,
+              if (trim.proxyEndMs != null) 'proxyEndMs': trim.proxyEndMs,
             },
       'coverFrameMs': coverFrameMs,
       'imageCrop': imageCrop == null
