@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
+import 'package:meta/meta.dart';
 import 'package:video_editor_2/video_editor.dart';
 
 import '../services/proxy_playlist_controller.dart';
@@ -36,9 +37,15 @@ class EditMediaData {
 }
 
 class EditMediaPage extends StatefulWidget {
-  const EditMediaPage({super.key, required this.media});
+  const EditMediaPage({
+    super.key,
+    required this.media,
+    this.playlistControllerOverride,
+  });
 
   final EditMediaData media;
+  @visibleForTesting
+  final ProxyPlaylistController? playlistControllerOverride;
 
   @override
   State<EditMediaPage> createState() => _EditMediaPageState();
@@ -58,6 +65,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
   Object? _videoInitError;
   Duration? _videoDuration;
   RangeValues? _videoTrimRangeMs;
+  RangeValues? _globalTrimMs;
   Timer? _trimSeekDebounce;
   bool _segmentedSnackShown = false;
 
@@ -73,6 +81,19 @@ class _EditMediaPageState extends State<EditMediaPage> {
   void initState() {
     super.initState();
     if (widget.media.type == 'video') {
+      final overridePlaylist = widget.playlistControllerOverride;
+      if (overridePlaylist != null) {
+        _playlistController = overridePlaylist;
+        overridePlaylist.onReady = _handlePlaylistReady;
+        overridePlaylist.onSegmentAppended =
+            _handlePlaylistSegmentAppended;
+        if (overridePlaylist.isReady) {
+          _handlePlaylistReady();
+        } else if (overridePlaylist.segments.isNotEmpty) {
+          _handlePlaylistSegmentAppended();
+        }
+        return;
+      }
       final proxy = widget.media.proxyResult;
       final request = widget.media.proxyRequest;
       if (proxy != null) {
@@ -282,13 +303,32 @@ class _EditMediaPageState extends State<EditMediaPage> {
       return total + segment.durationMs;
     });
 
+    final defaultRange = RangeValues(0, totalMs.toDouble());
+    final nextRange = _globalTrimMs == null
+        ? defaultRange
+        : RangeValues(
+            _globalTrimMs!.start.clamp(0, defaultRange.end),
+            _globalTrimMs!.end.clamp(
+                  _globalTrimMs!.start.clamp(0, defaultRange.end),
+                  defaultRange.end,
+                ),
+          );
+
     setState(() {
       _videoController = editor;
       _videoInitialized = true;
       _videoInitError = null;
       _videoDuration = Duration(milliseconds: totalMs);
-      _videoTrimRangeMs = RangeValues(0, totalMs.toDouble());
+      _globalTrimMs = nextRange;
+      _videoTrimRangeMs = nextRange;
     });
+
+    if (nextRange.end > nextRange.start) {
+      unawaited(playlist.updateGlobalTrim(
+        startMs: nextRange.start.round(),
+        endMs: nextRange.end.round(),
+      ));
+    }
   }
 
   void _handlePlaylistSegmentAppended() {
@@ -305,20 +345,31 @@ class _EditMediaPageState extends State<EditMediaPage> {
       return;
     }
 
-    final currentRange = _videoTrimRangeMs;
     final end = totalMs.toDouble();
-    final start = currentRange?.start ?? 0;
-    final startCandidate = start.clamp(0, end);
-    final clampedStart = startCandidate.toDouble();
-    final endCandidate = currentRange != null
-        ? currentRange.end.clamp(clampedStart, end)
-        : end;
-    final clampedEnd = endCandidate.toDouble();
+    final previousDuration = _videoDuration?.inMilliseconds.toDouble();
+    final previousRange = _globalTrimMs ??
+        RangeValues(0, (previousDuration ?? end).clamp(0, end));
+    final clampedStart = previousRange.start.clamp(0, end);
+    final wasUsingBufferedEnd = previousDuration == null
+        ? true
+        : (previousRange.end - previousDuration).abs() <= 0.5;
+    final endCandidate = wasUsingBufferedEnd
+        ? end
+        : previousRange.end.clamp(clampedStart, end);
+    final nextRange = RangeValues(clampedStart, endCandidate);
 
     setState(() {
       _videoDuration = Duration(milliseconds: totalMs);
-      _videoTrimRangeMs = RangeValues(clampedStart, clampedEnd);
+      _globalTrimMs = nextRange;
+      _videoTrimRangeMs = nextRange;
     });
+
+    if (nextRange.end > nextRange.start) {
+      unawaited(playlist.updateGlobalTrim(
+        startMs: nextRange.start.round(),
+        endMs: nextRange.end.round(),
+      ));
+    }
   }
 
   void _handlePlaylistError(Object error) {
@@ -829,6 +880,26 @@ class _EditMediaPageState extends State<EditMediaPage> {
     if (!_isVideo) {
       return null;
     }
+    final playlist = _playlistController;
+    if (playlist != null) {
+      final range = _globalTrimMs;
+      final duration = _videoDuration;
+      if (range == null || duration == null) {
+        return null;
+      }
+      final total = duration.inMilliseconds;
+      final start = range.start.round().clamp(0, total);
+      final end = range.end.round().clamp(start, total);
+      if (start == 0 && end == total) {
+        return null;
+      }
+      final trimmed = (end - start).clamp(0, total);
+      return VideoTrimData(
+        startMs: start,
+        endMs: end,
+        durationMs: trimmed,
+      );
+    }
     final controller = _videoController;
     if (controller == null) {
       return null;
@@ -850,6 +921,27 @@ class _EditMediaPageState extends State<EditMediaPage> {
       durationMs: durationMs,
     );
   }
+
+  @visibleForTesting
+  RangeValues? get debugVideoTrimRangeMs => _videoTrimRangeMs;
+
+  @visibleForTesting
+  RangeValues? get debugGlobalTrimRangeMs => _globalTrimMs;
+
+  @visibleForTesting
+  Duration? get debugVideoDuration => _videoDuration;
+
+  @visibleForTesting
+  void debugApplyTrimRange(RangeValues range) {
+    final duration = _videoDuration;
+    if (duration == null) {
+      return;
+    }
+    _onTrimChangeEnd(range, duration);
+  }
+
+  @visibleForTesting
+  VideoTrimData? debugBuildVideoTrim() => _buildVideoTrim();
 
   int? _buildCoverFrameMs() {
     if (!_isVideo) {
@@ -907,6 +999,27 @@ class _EditMediaPageState extends State<EditMediaPage> {
       values.start.clamp(0, totalMs),
       values.end.clamp(0, totalMs),
     );
+    final playlist = _playlistController;
+    if (playlist != null) {
+      setState(() {
+        _videoTrimRangeMs = clamped;
+        _globalTrimMs = clamped;
+      });
+
+      _trimSeekDebounce?.cancel();
+      _trimSeekDebounce = Timer(const Duration(milliseconds: 120), () {
+        unawaited(
+          playlist.seekTo(Duration(milliseconds: clamped.start.round())),
+        );
+      });
+
+      unawaited(playlist.updateGlobalTrim(
+        startMs: clamped.start.round(),
+        endMs: clamped.end.round(),
+      ));
+      return;
+    }
+
     setState(() {
       _videoTrimRangeMs = clamped;
     });
@@ -929,6 +1042,18 @@ class _EditMediaPageState extends State<EditMediaPage> {
     final clampedStart = values.start.clamp(0, totalMs);
     final clampedEnd = values.end.clamp(0, totalMs);
     if (clampedEnd <= clampedStart) {
+      return;
+    }
+    final playlist = _playlistController;
+    if (playlist != null) {
+      controller.isTrimming = false;
+      unawaited(playlist.updateGlobalTrim(
+        startMs: clampedStart.round(),
+        endMs: clampedEnd.round(),
+      ));
+      unawaited(
+        playlist.seekTo(Duration(milliseconds: clampedStart.round())),
+      );
       return;
     }
     final min = clampedStart / totalMs;
@@ -962,6 +1087,9 @@ class _EditMediaPageState extends State<EditMediaPage> {
 
   void _handleVideoControllerUpdate() {
     if (!mounted) return;
+    if (_playlistController != null) {
+      return;
+    }
     final controller = _videoController;
     final duration = _videoDuration;
     if (controller == null || duration == null) {
