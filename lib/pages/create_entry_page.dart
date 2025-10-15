@@ -17,6 +17,16 @@ import 'edit_media_page.dart';
 
 enum _ProxyRetryDecision { cancel, retry, fallback }
 
+class _SegmentedProxyBootstrap {
+  const _SegmentedProxyBootstrap({
+    required this.session,
+    required this.preview,
+  });
+
+  final VideoProxySession session;
+  final ProxyPreview preview;
+}
+
 class CreateEntryPage extends StatefulWidget {
   const CreateEntryPage({super.key});
 
@@ -110,6 +120,8 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
     final isVideo = asset.type == AssetType.video;
     VideoProxyResult? proxy;
     VideoProxyRequest? request;
+    ProxyPreview? initialPreview;
+    VideoProxySession? session;
     final originalDurationMs =
         isVideo ? Duration(seconds: asset.duration).inMilliseconds : null;
 
@@ -142,6 +154,16 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
         segmentedPreview: useSegmented,
       );
       if (videoRequest.segmentedPreview) {
+        final bootstrap = await _startSegmentedProxySession(
+          context,
+          videoRequest,
+          posterBytes: posterBytes,
+        );
+        if (bootstrap == null) {
+          return;
+        }
+        session = bootstrap.session;
+        initialPreview = bootstrap.preview;
         request = videoRequest;
       } else {
         final result = await _prepareVideoProxy(
@@ -165,6 +187,8 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
       proxyResult: proxy,
       proxyRequest: request,
       proxyPosterBytes: posterBytes,
+      proxySession: session,
+      initialPreview: initialPreview,
     );
 
     if (!mounted) {
@@ -176,6 +200,97 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
         builder: (_) => EditMediaPage(media: media),
       ),
     );
+  }
+
+  Future<_SegmentedProxyBootstrap?> _startSegmentedProxySession(
+    BuildContext context,
+    VideoProxyRequest request, {
+    Uint8List? posterBytes,
+  }) async {
+    final service = VideoProxyService();
+    final session = service.createSession(request: request);
+    var dialogOpen = true;
+    final job = VideoProxyJob(
+      future: session.completed,
+      progress: session.progress,
+      cancel: session.cancel,
+      session: session,
+    );
+
+    final dialogFuture = showDialog<VideoProxyDialogOutcome>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => VideoProxyProgressDialog(
+        job: job,
+        title: 'Preparing preview…',
+        allowCancel: true,
+        posterBytes: posterBytes,
+      ),
+    ).then((value) {
+      dialogOpen = false;
+      return value;
+    });
+
+    try {
+      final results = await Future.wait([
+        session.firstPreview,
+        session.metadata.firstWhere(
+          (event) => (event.durationMs ?? 0) > 0,
+        ),
+      ]);
+      if (!context.mounted) {
+        await session.cancel();
+        await dialogFuture;
+        return null;
+      }
+
+      final preview = results[0] as ProxyPreview;
+      final _ = results[1] as ProxySessionMetadataEvent;
+
+      if (dialogOpen) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      final outcome = await dialogFuture;
+      if (outcome != null) {
+        if (outcome.cancelled) {
+          return null;
+        }
+        if (outcome.error != null) {
+          final message = outcome.error is VideoProxyException
+              ? (outcome.error as VideoProxyException).message
+              : outcome.error.toString();
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Unable to prepare preview: $message')),
+            );
+          }
+          return null;
+        }
+      }
+
+      return _SegmentedProxyBootstrap(session: session, preview: preview);
+    } on VideoProxyCancelException {
+      await dialogFuture;
+      return null;
+    } catch (error) {
+      try {
+        await session.cancel();
+      } catch (_) {}
+      if (dialogOpen && context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      await dialogFuture;
+      if (context.mounted) {
+        final message = error is VideoProxyException
+            ? error.message
+            : error.toString();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to prepare preview: $message')),
+        );
+      }
+      return null;
+    }
   }
 
   Future<VideoProxyResult?> _prepareVideoProxy(

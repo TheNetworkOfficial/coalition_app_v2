@@ -25,6 +25,8 @@ class EditMediaData {
     this.proxyResult,
     this.proxyRequest,
     this.proxyPosterBytes,
+    this.proxySession,
+    this.initialPreview,
   }) : assert(type == 'image' || type == 'video');
 
   final String type;
@@ -34,6 +36,8 @@ class EditMediaData {
   final VideoProxyResult? proxyResult;
   final VideoProxyRequest? proxyRequest;
   final Uint8List? proxyPosterBytes;
+  final VideoProxySession? proxySession;
+  final ProxyPreview? initialPreview;
 }
 
 class EditMediaPage extends StatefulWidget {
@@ -68,6 +72,10 @@ class _EditMediaPageState extends State<EditMediaPage> {
   RangeValues? _globalTrimMs;
   Timer? _trimSeekDebounce;
   bool _segmentedSnackShown = false;
+  StreamSubscription<VideoProxyProgress>? _sessionProgressSub;
+  bool _isBuffering = false;
+  String? _bufferingMessage;
+  final List<String> _proxyDiagnostics = [];
 
   double? _imageWidth;
   double? _imageHeight;
@@ -86,6 +94,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
         _playlistController = overridePlaylist;
         overridePlaylist.onReady = _handlePlaylistReady;
         overridePlaylist.onSegmentAppended = _handlePlaylistSegmentAppended;
+        overridePlaylist.onSegmentUpgraded = _handlePlaylistSegmentUpgraded;
+        overridePlaylist.onBuffering = _handlePlaylistBuffering;
         if (overridePlaylist.isReady) {
           _handlePlaylistReady();
         } else if (overridePlaylist.segments.isNotEmpty) {
@@ -95,10 +105,20 @@ class _EditMediaPageState extends State<EditMediaPage> {
       }
       final proxy = widget.media.proxyResult;
       final request = widget.media.proxyRequest;
-      if (proxy != null) {
+      final session = widget.media.proxySession;
+      if (session != null) {
+        _showSegmentedPreviewNotice();
+        _attachProxySession(
+          session,
+          initialPreview: widget.media.initialPreview,
+        );
+      } else if (proxy != null) {
         _activeProxy = proxy;
         _usingFallbackProxy =
             proxy.metadata.resolution == VideoProxyResolution.p360;
+        if (_usingFallbackProxy) {
+          _handleFallbackDiagnostics('Playing fallback proxy (360p).');
+        }
         unawaited(_initVideoController());
       } else if (request != null &&
           (request.segmentedPreview || kEnableSegmentedPreview)) {
@@ -134,6 +154,79 @@ class _EditMediaPageState extends State<EditMediaPage> {
     }
   }
 
+  void _showSegmentedPreviewNotice() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _segmentedSnackShown) return;
+      _segmentedSnackShown = true;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Preparing segmented preview… edits unlock as soon as the first segment is ready.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    });
+  }
+
+  void _attachProxySession(
+    VideoProxySession session, {
+    ProxyPreview? initialPreview,
+  }) {
+    final playlist = ProxyPlaylistController(
+      jobId: session.jobId,
+      session: session,
+      initialPreview: initialPreview,
+    );
+    playlist.onReady = _handlePlaylistReady;
+    playlist.onSegmentAppended = _handlePlaylistSegmentAppended;
+    playlist.onSegmentUpgraded = _handlePlaylistSegmentUpgraded;
+    playlist.onBuffering = _handlePlaylistBuffering;
+    _playlistController = playlist;
+
+    final job = VideoProxyJob(
+      future: session.completed,
+      progress: session.progress,
+      cancel: session.cancel,
+      session: session,
+    );
+
+    setState(() {
+      _activeJob = job;
+      _videoInitError = null;
+    });
+
+    _sessionProgressSub?.cancel();
+    _sessionProgressSub = session.progress.listen((event) {
+      if (!mounted) return;
+      if (event.fallbackTriggered) {
+        _handleFallbackDiagnostics('Preview temporarily downgraded for faster playback.');
+      }
+    });
+
+    session.completed.then((result) {
+      if (!mounted) return;
+      setState(() {
+        _activeProxy = result;
+        _usingFallbackProxy = result.usedFallback;
+        _activeJob = null;
+      });
+      if (result.usedFallback) {
+        _handleFallbackDiagnostics(
+          'Preview temporarily using fallback quality while enhancements complete.',
+        );
+      }
+      _handlePlaylistSegmentAppended();
+    }).catchError((error) {
+      if (!mounted) return;
+      setState(() {
+        _activeJob = null;
+      });
+      _handlePlaylistError(error);
+    });
+  }
+
   @override
   void dispose() {
     final controller = _videoController;
@@ -157,6 +250,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
         unawaited(VideoProxyService().deleteProxy(proxy.filePath));
       }
     }
+    _sessionProgressSub?.cancel();
     _trimSeekDebounce?.cancel();
     super.dispose();
   }
@@ -232,6 +326,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
           final controller = ProxyPlaylistController(jobId: jobId);
           controller.onReady = _handlePlaylistReady;
           controller.onSegmentAppended = _handlePlaylistSegmentAppended;
+          controller.onSegmentUpgraded = _handlePlaylistSegmentUpgraded;
+          controller.onBuffering = _handlePlaylistBuffering;
           _playlistController = controller;
         }
       },
@@ -247,6 +343,9 @@ class _EditMediaPageState extends State<EditMediaPage> {
             result.metadata.resolution == VideoProxyResolution.p360;
         _activeJob = null;
       });
+      if (_usingFallbackProxy) {
+        _handleFallbackDiagnostics('Playing fallback proxy (360p).');
+      }
       _handlePlaylistSegmentAppended();
     }).catchError((error) {
       if (!mounted || showProgressDialog) {
@@ -328,6 +427,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
         endMs: nextRange.end.round(),
       ));
     }
+    _clearBuffering();
   }
 
   void _handlePlaylistSegmentAppended() {
@@ -369,6 +469,48 @@ class _EditMediaPageState extends State<EditMediaPage> {
         endMs: nextRange.end.round(),
       ));
     }
+    _clearBuffering();
+  }
+
+  void _handlePlaylistSegmentUpgraded(PlaylistSegment segment) {
+    if (segment.quality != ProxyQuality.preview && _usingFallbackProxy) {
+      setState(() {
+        _usingFallbackProxy = false;
+      });
+      _handleFallbackDiagnostics(
+        'Preview upgraded to ${segment.quality.name.toUpperCase()} quality.',
+      );
+    }
+    _clearBuffering();
+  }
+
+  void _handlePlaylistBuffering() {
+    if (_isBuffering) {
+      return;
+    }
+    setState(() {
+      _isBuffering = true;
+      _bufferingMessage = 'Fetching more preview segments…';
+    });
+  }
+
+  void _clearBuffering() {
+    if (!_isBuffering) {
+      return;
+    }
+    setState(() {
+      _isBuffering = false;
+      _bufferingMessage = null;
+    });
+  }
+
+  void _handleFallbackDiagnostics(String message) {
+    if (_proxyDiagnostics.contains(message)) {
+      return;
+    }
+    setState(() {
+      _proxyDiagnostics.add(message);
+    });
   }
 
   void _handlePlaylistError(Object error) {
@@ -377,6 +519,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
     if (!mounted) {
       return;
     }
+    _clearBuffering();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Unable to optimize video: $message')),
     );
@@ -465,6 +608,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
       _usingFallbackProxy = true;
       _videoInitError = null;
     });
+
+    _handleFallbackDiagnostics('Playing fallback proxy (360p).');
 
     debugPrint(
       '[EditMediaPage] Fallback proxy ready ${result.metadata.width}x${result.metadata.height} in ${result.transcodeDurationMs}ms',
@@ -591,17 +736,52 @@ class _EditMediaPageState extends State<EditMediaPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: Center(
-            child: AspectRatio(
-              aspectRatio: aspectRatio,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  color: Colors.black,
-                  child: CropGridViewer.preview(controller: controller),
+          child: Stack(
+            children: [
+              Center(
+                child: AspectRatio(
+                  aspectRatio: aspectRatio,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      color: Colors.black,
+                      child: CropGridViewer.preview(controller: controller),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              if (_isBuffering)
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.45),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(),
+                          if (_bufferingMessage != null) ...[
+                            const SizedBox(height: 12),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: Text(
+                                _bufferingMessage!,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
@@ -620,7 +800,36 @@ class _EditMediaPageState extends State<EditMediaPage> {
               ],
             ),
           ),
+        if (_proxyDiagnostics.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildProxyDiagnostics(),
+          ),
         _buildTrimControls(controller),
+      ],
+    );
+  }
+
+  Widget _buildProxyDiagnostics() {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Playback diagnostics',
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        for (final message in _proxyDiagnostics)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Text(
+              '• $message',
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
       ],
     );
   }
