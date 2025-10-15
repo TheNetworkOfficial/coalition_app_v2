@@ -196,22 +196,26 @@ class _EditMediaPageState extends State<EditMediaPage> {
     );
 
     // Show the existing progress dialog UX while background proxy runs.
-    unawaited(showDialog<VideoProxyDialogOutcome>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => VideoProxyProgressDialog(
-        job: job,
-        title: 'Preparing preview…',
-        allowCancel: true,
-      ),
-    ).then((outcome) {
-      if (outcome == null || outcome.cancelled) {
-        setState(() {
-          _videoInitError =
-              const VideoProxyException('Video optimization canceled');
-        });
-      }
-    }));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(showDialog<VideoProxyDialogOutcome>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => VideoProxyProgressDialog(
+          job: job,
+          title: 'Preparing preview…',
+          allowCancel: true,
+        ),
+      ).then((outcome) {
+        if (!mounted) return;
+        if (outcome == null || outcome.cancelled) {
+          setState(() {
+            _videoInitError =
+                const VideoProxyException('Video optimization canceled');
+          });
+        }
+      }));
+    });
   }
 
   Future<bool> _attemptFallback(Object error) async {
