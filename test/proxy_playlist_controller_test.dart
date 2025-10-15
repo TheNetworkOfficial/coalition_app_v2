@@ -25,8 +25,17 @@ class _ControllerState {
   void Function()? listener;
   final void Function(VideoPlayerValue value) setValue;
   final VideoPlayerValue Function() getValue;
+  double trimMinFraction = 0;
+  double trimMaxFraction = 1;
+  Duration? lastSeek;
 
   void update(VideoPlayerValue value) => setValue(value);
+
+  int get trimStartMs =>
+      (trimMinFraction * getValue().duration.inMilliseconds).round();
+
+  int get trimEndMs =>
+      (trimMaxFraction * getValue().duration.inMilliseconds).round();
 }
 
 class _TestEditorFactory {
@@ -58,11 +67,32 @@ class _TestEditorFactory {
       }
     });
     when(() => editor.video).thenReturn(video);
+    var trimMin = 0.0;
+    var trimMax = 1.0;
+    var isTrimming = false;
+    when(() => editor.updateTrim(any(), any())).thenAnswer((invocation) {
+      trimMin = invocation.positionalArguments[0] as double;
+      trimMax = invocation.positionalArguments[1] as double;
+      state.trimMinFraction = trimMin;
+      state.trimMaxFraction = trimMax;
+    });
+    when(() => editor.startTrim)
+        .thenAnswer((_) => Duration(milliseconds: (trimMin * durationMs).round()));
+    when(() => editor.endTrim)
+        .thenAnswer((_) => Duration(milliseconds: (trimMax * durationMs).round()));
+    when(() => editor.videoDuration)
+        .thenReturn(Duration(milliseconds: durationMs));
+    when(() => editor.isTrimming).thenAnswer((_) => isTrimming);
+    when(() => editor.isTrimming = any()).thenAnswer((invocation) {
+      isTrimming = invocation.positionalArguments.first as bool;
+    });
 
     when(() => video.value).thenAnswer((_) => currentValue);
     when(() => video.play()).thenAnswer((_) async {});
     when(() => video.pause()).thenAnswer((_) async {});
-    when(() => video.seekTo(any())).thenAnswer((_) async {});
+    when(() => video.seekTo(any())).thenAnswer((invocation) async {
+      state.lastSeek = invocation.positionalArguments.first as Duration;
+    });
     when(() => video.dispose()).thenAnswer((_) async {});
 
     state = _ControllerState(
@@ -287,6 +317,95 @@ void main() {
     expect(controller.segments, hasLength(1));
     expect(factory.states.length, 3);
     expect(controller.editor, same(factory.states.last.editor));
+
+    await controller.dispose();
+    await events.close();
+  });
+
+  test('updateGlobalTrim applies offsets to active and prepared controllers',
+      () async {
+    final jobId = 'trim-job-1';
+    final events = StreamController<dynamic>();
+    final factory = _TestEditorFactory();
+    final controller = ProxyPlaylistController(
+      jobId: jobId,
+      events: events.stream,
+      editorBuilder: factory.call,
+    );
+
+    events
+      ..add({
+        'type': 'segment_ready',
+        'segmentIndex': 0,
+        'path': '/tmp/segment_000.mp4',
+        'durationMs': 6000,
+        'width': 360,
+        'height': 640,
+      })
+      ..add({
+        'type': 'segment_ready',
+        'segmentIndex': 1,
+        'path': '/tmp/segment_001.mp4',
+        'durationMs': 5000,
+        'width': 360,
+        'height': 640,
+      });
+
+    await Future.delayed(const Duration(milliseconds: 60));
+
+    expect(factory.states.length, 2);
+    await controller.updateGlobalTrim(startMs: 2000, endMs: 9000);
+
+    expect(controller.editor, same(factory.states.first.editor));
+    expect(factory.states.first.trimStartMs, inInclusiveRange(1999, 2001));
+    expect(factory.states.first.trimEndMs, equals(6000));
+    expect(factory.states.first.lastSeek,
+        equals(const Duration(milliseconds: 2000)));
+    expect(factory.states[1].trimStartMs, equals(0));
+    expect(factory.states[1].trimEndMs, inInclusiveRange(2999, 3001));
+
+    await controller.dispose();
+    await events.close();
+  });
+
+  test('updateGlobalTrim seeks into later segments with correct offsets',
+      () async {
+    final jobId = 'trim-job-2';
+    final events = StreamController<dynamic>();
+    final factory = _TestEditorFactory();
+    final controller = ProxyPlaylistController(
+      jobId: jobId,
+      events: events.stream,
+      editorBuilder: factory.call,
+    );
+
+    events
+      ..add({
+        'type': 'segment_ready',
+        'segmentIndex': 0,
+        'path': '/tmp/segment_000.mp4',
+        'durationMs': 6000,
+        'width': 360,
+        'height': 640,
+      })
+      ..add({
+        'type': 'segment_ready',
+        'segmentIndex': 1,
+        'path': '/tmp/segment_001.mp4',
+        'durationMs': 5000,
+        'width': 360,
+        'height': 640,
+      });
+
+    await Future.delayed(const Duration(milliseconds: 60));
+
+    await controller.updateGlobalTrim(startMs: 6500, endMs: 9000);
+
+    expect(controller.editor, same(factory.states[1].editor));
+    expect(factory.states[1].trimStartMs, inInclusiveRange(499, 501));
+    expect(factory.states[1].trimEndMs, inInclusiveRange(2999, 3001));
+    expect(factory.states[1].lastSeek,
+        equals(const Duration(milliseconds: 500)));
 
     await controller.dispose();
     await events.close();

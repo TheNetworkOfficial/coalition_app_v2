@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart';
@@ -47,9 +48,14 @@ class ProxyPlaylistController {
   VoidCallback? onBuffering;
   VoidCallback? onSegmentAppended;
   bool _awaitingFallbackSegments = false;
+  int? _globalStartMs;
+  int? _globalEndMs;
 
   bool get isReady =>
       _editorController != null && _editorController!.video.value.isInitialized;
+
+  int get totalDurationMs =>
+      segments.fold<int>(0, (sum, segment) => sum + segment.durationMs);
 
   Future<void> dispose() async {
     await _eventsSub?.cancel();
@@ -110,6 +116,7 @@ class ProxyPlaylistController {
     controller.addListener(_onEditorUpdate);
     _editorController = controller;
     _currentIndex = index;
+    await _applyTrimToController(index, controller, shouldSeek: true);
 
     // Autoplay
     if (controller.video.value.isInitialized) {
@@ -153,11 +160,42 @@ class ProxyPlaylistController {
     controller.addListener(_onEditorUpdate);
     _editorController = controller;
     _currentIndex = nextIndex;
+    await _applyTrimToController(nextIndex, controller, shouldSeek: true);
     controller.video.play();
     await _prefetchNextSegment();
   }
 
   VideoEditorController? get editor => _editorController;
+
+  Future<void> updateGlobalTrim({
+    required int startMs,
+    required int endMs,
+  }) async {
+    final total = totalDurationMs;
+    final clampedStart = segments.isEmpty
+        ? startMs
+        : startMs.clamp(0, total).toInt();
+    final rawEnd = segments.isEmpty
+        ? endMs
+        : endMs.clamp(0, total).toInt();
+    final adjustedEnd = rawEnd <= clampedStart
+        ? (segments.isEmpty ? rawEnd : math.min(total, clampedStart + 1))
+        : rawEnd;
+    _globalStartMs = clampedStart;
+    _globalEndMs = adjustedEnd;
+
+    if (_editorController != null && segments.isNotEmpty) {
+      await seekTo(Duration(milliseconds: clampedStart));
+    }
+
+    final current = _editorController;
+    if (current != null) {
+      await _applyTrimToController(_currentIndex, current, shouldSeek: false);
+    }
+    for (final entry in _preparedControllers.entries) {
+      await _applyTrimToController(entry.key, entry.value, shouldSeek: false);
+    }
+  }
 
   Future<void> seekTo(Duration position) async {
     var ms = position.inMilliseconds;
@@ -170,6 +208,10 @@ class ProxyPlaylistController {
           await _switchToSegmentIndex(i, seekMs: inSeg);
         } else {
           await editor?.video.seekTo(Duration(milliseconds: inSeg));
+          if (editor != null) {
+            await _applyTrimToController(i, editor,
+                shouldSeek: false);
+          }
         }
         return;
       }
@@ -196,6 +238,7 @@ class ProxyPlaylistController {
     controller.addListener(_onEditorUpdate);
     _editorController = controller;
     _currentIndex = index;
+    await _applyTrimToController(index, controller, shouldSeek: false);
     await controller.video.seekTo(Duration(milliseconds: seekMs));
     controller.video.play();
     await _prefetchNextSegment();
@@ -219,9 +262,15 @@ class ProxyPlaylistController {
     if (index < 0 || index >= segments.length) return null;
     final cached = _preparedControllers.remove(index);
     if (cached != null) {
+      await _applyTrimToController(index, cached, shouldSeek: false);
       return cached;
     }
-    return _createControllerForIndex(index, failureLabel: failureLabel);
+    final controller =
+        await _createControllerForIndex(index, failureLabel: failureLabel);
+    if (controller != null) {
+      await _applyTrimToController(index, controller, shouldSeek: false);
+    }
+    return controller;
   }
 
   Future<void> _prefetchNextSegment() async {
@@ -237,6 +286,7 @@ class ProxyPlaylistController {
     final controller = await _createControllerForIndex(index,
         failureLabel: 'segment ${seg.index}');
     if (controller != null) {
+      await _applyTrimToController(index, controller, shouldSeek: false);
       if (index < segments.length && identical(segments[index], seg)) {
         _preparedControllers[index] = controller;
       } else {
@@ -274,6 +324,68 @@ class ProxyPlaylistController {
       } catch (_) {}
       return null;
     }
+  }
+
+  Future<void> _applyTrimToController(
+    int index,
+    VideoEditorController controller, {
+    required bool shouldSeek,
+  }) async {
+    if (index < 0 || index >= segments.length) {
+      return;
+    }
+    final seg = segments[index];
+    final durationMs = seg.durationMs;
+    if (durationMs <= 0) {
+      controller.updateTrim(0, 1);
+      if (shouldSeek) {
+        await controller.video.seekTo(Duration.zero);
+      }
+      return;
+    }
+
+    final start = _globalStartMs;
+    final end = _globalEndMs;
+    if (start == null || end == null) {
+      controller.updateTrim(0, 1);
+      if (shouldSeek) {
+        await controller.video.seekTo(Duration.zero);
+      }
+      return;
+    }
+
+    final segStart = _segmentOffsetMs(index);
+    final segEnd = segStart + durationMs;
+    final overlapStart = math.max(start, segStart);
+    final overlapEnd = math.min(end, segEnd);
+    final hasOverlap = overlapEnd > overlapStart;
+
+    double minFraction = 0;
+    double maxFraction = 1;
+    int seekMs = 0;
+
+    if (hasOverlap) {
+      final localStart = overlapStart - segStart;
+      final localEnd = overlapEnd - segStart;
+      minFraction = (localStart / durationMs).clamp(0.0, 1.0);
+      maxFraction = (localEnd / durationMs).clamp(minFraction, 1.0);
+      seekMs = math.max(0, math.min(durationMs - 1, localStart));
+    }
+
+    controller.updateTrim(minFraction, maxFraction);
+
+    if (shouldSeek) {
+      final targetMs = hasOverlap ? seekMs : 0;
+      await controller.video.seekTo(Duration(milliseconds: targetMs));
+    }
+  }
+
+  int _segmentOffsetMs(int index) {
+    var offset = 0;
+    for (var i = 0; i < index && i < segments.length; i++) {
+      offset += segments[i].durationMs;
+    }
+    return offset;
   }
 
   static VideoEditorController _defaultEditorBuilder(PlaylistSegment seg) {
