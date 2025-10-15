@@ -60,30 +60,40 @@ class _VideoProxyProgressDialogState extends State<VideoProxyProgressDialog> {
   @override
   void initState() {
     super.initState();
-    _subscription = widget.job.progress.listen((event) {
+    // Defer subscription and future handlers until after the first frame so
+    // that InheritedWidget lookups (e.g. ScaffoldMessenger.of) succeed and we
+    // avoid DependOnInheritedWidgetOfExactTypeError when events fire very
+    // early (before the dialog is inserted into the element tree).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      setState(() {
-        _progress = event.fraction;
+      _subscription = widget.job.progress.listen((event) {
+        if (!mounted) return;
+        setState(() {
+          _progress = event.fraction;
+        });
+        if (event.fallbackTriggered && !_fallbackNotified) {
+          _fallbackNotified = true;
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          messenger?.showSnackBar(
+            const SnackBar(
+              content: Text('Optimizing for quick editing…'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
       });
-      if (event.fallbackTriggered && !_fallbackNotified) {
-        _fallbackNotified = true;
-        final messenger = ScaffoldMessenger.maybeOf(context);
-        messenger?.showSnackBar(
-          const SnackBar(
-            content: Text('Optimizing for quick editing…'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    });
-    widget.job.future.then((result) {
-      _pop(VideoProxyDialogOutcome.success(result));
-    }).catchError((error) {
-      if (error is VideoProxyCancelException) {
-        _pop(const VideoProxyDialogOutcome.cancelled());
-      } else {
-        _pop(VideoProxyDialogOutcome.error(error));
-      }
+
+      widget.job.future.then((result) {
+        if (!mounted) return;
+        _pop(VideoProxyDialogOutcome.success(result));
+      }).catchError((error) {
+        if (!mounted) return;
+        if (error is VideoProxyCancelException) {
+          _pop(const VideoProxyDialogOutcome.cancelled());
+        } else {
+          _pop(VideoProxyDialogOutcome.error(error));
+        }
+      });
     });
   }
 

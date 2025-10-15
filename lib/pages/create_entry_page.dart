@@ -9,6 +9,7 @@ import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../models/video_proxy.dart';
+import '../env.dart';
 import '../pickers/lightweight_asset_picker.dart';
 import '../services/video_proxy_service.dart';
 import '../widgets/video_proxy_dialog.dart';
@@ -127,15 +128,19 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
         debugPrint('[CreateEntryPage] Failed to create video poster: $error');
       }
 
+      // For segmented preview we request a small fast preview canvas (360x640)
+      final useSegmented =
+          true; // force segmented preview for faster progressive playback
       final videoRequest = VideoProxyRequest(
         sourcePath: file.path,
-        targetWidth: 540,
-        targetHeight: 960,
+        targetWidth: useSegmented ? 360 : 540,
+        targetHeight: useSegmented ? 640 : 960,
         estimatedDurationMs: originalDurationMs,
         frameRateHint: 24,
         keyframeIntervalSeconds: 1,
         audioBitrateKbps: 96,
         previewQuality: VideoProxyPreviewQuality.fast,
+        segmentedPreview: useSegmented,
       );
       final result = await _prepareVideoProxy(
         context,
@@ -220,8 +225,7 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
       final decision = await _showProxyErrorDialog(
         context,
         errorMessage: errorMessage,
-        allowFallback:
-            currentRequest.resolution != VideoProxyResolution.p360,
+        allowFallback: currentRequest.resolution != VideoProxyResolution.p360,
       );
 
       if (decision == _ProxyRetryDecision.retry) {

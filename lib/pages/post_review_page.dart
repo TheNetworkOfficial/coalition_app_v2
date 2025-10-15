@@ -40,12 +40,12 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
   @override
   void initState() {
     super.initState();
-    _descriptionController = TextEditingController(text: widget.draft.description);
+    _descriptionController =
+        TextEditingController(text: widget.draft.description);
 
     if (widget.draft.type == 'video') {
-      final initialCover = widget.draft.coverFrameMs ??
-          widget.draft.videoTrim?.startMs ??
-          0;
+      final initialCover =
+          widget.draft.coverFrameMs ?? widget.draft.videoTrim?.startMs ?? 0;
       _coverFrameMs = initialCover;
       if (!kIsWeb) {
         _initializeVideoPreview();
@@ -261,8 +261,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60);
     final seconds = duration.inSeconds.remainder(60);
-    final hoursPart =
-        hours > 0 ? '${hours.toString().padLeft(2, '0')}:' : '';
+    final hoursPart = hours > 0 ? '${hours.toString().padLeft(2, '0')}:' : '';
     final minutesPart = minutes.toString().padLeft(2, '0');
     final secondsPart = seconds.toString().padLeft(2, '0');
     return '$hoursPart$minutesPart:$secondsPart';
@@ -270,15 +269,11 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
 
   Future<void> _showCoverPicker() async {
     final controller = _videoController;
-    if (controller == null ||
-        !controller.value.isInitialized ||
-        kIsWeb) {
+    if (controller == null || !controller.value.isInitialized || kIsWeb) {
       return;
     }
-    final startMs =
-        (_trimStart ?? Duration.zero).inMilliseconds.toDouble();
-    final endDuration =
-        _trimEnd ?? _videoDuration ?? controller.value.duration;
+    final startMs = (_trimStart ?? Duration.zero).inMilliseconds.toDouble();
+    final endDuration = _trimEnd ?? _videoDuration ?? controller.value.duration;
     final endMs = endDuration.inMilliseconds.toDouble();
     double sliderValue =
         (_effectiveCoverFrameMs ?? startMs.toInt()).toDouble().clamp(
@@ -501,47 +496,47 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
                     color: Colors.black,
                     child: VideoPlayer(controller),
                   ),
-                Positioned(
-                  left: 12,
-                  bottom: 12,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Row(
-                      children: [
-                        _buildPlayPauseButton(),
-                        const SizedBox(width: 12),
-                        Padding(
-                          padding: const EdgeInsets.only(right: 12),
-                          child: ValueListenableBuilder<VideoPlayerValue>(
-                            valueListenable: controller,
-                            builder: (_, value, __) => Text(
-                              _formatMilliseconds(
-                                value.position.inMilliseconds,
+                  Positioned(
+                    left: 12,
+                    bottom: 12,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Row(
+                        children: [
+                          _buildPlayPauseButton(),
+                          const SizedBox(width: 12),
+                          Padding(
+                            padding: const EdgeInsets.only(right: 12),
+                            child: ValueListenableBuilder<VideoPlayerValue>(
+                              valueListenable: controller,
+                              builder: (_, value, __) => Text(
+                                _formatMilliseconds(
+                                  value.position.inMilliseconds,
+                                ),
+                                style: const TextStyle(color: Colors.white),
                               ),
-                              style: const TextStyle(color: Colors.white),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                Positioned(
-                  right: 12,
-                  bottom: 12,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      backgroundColor: Colors.black54,
+                  Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        backgroundColor: Colors.black54,
+                      ),
+                      onPressed: _isCoverLoading ? null : _showCoverPicker,
+                      icon: const Icon(Icons.photo),
+                      label: const Text('Edit cover'),
                     ),
-                    onPressed: _isCoverLoading ? null : _showCoverPicker,
-                    icon: const Icon(Icons.photo),
-                    label: const Text('Edit cover'),
                   ),
-                ),
                   if (_isCoverLoading)
                     const Positioned.fill(
                       child: ColoredBox(
@@ -621,9 +616,9 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
           icon: widget.draft.type == 'video'
               ? Icons.videocam_outlined
               : Icons.image_outlined,
-              label: 'Preview unavailable on this platform',
-            ),
-          );
+          label: 'Preview unavailable on this platform',
+        ),
+      );
     }
 
     final infoLines = <String>[];
@@ -700,7 +695,8 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
             const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _isPosting ? null : _handlePost,
-              style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              style: ElevatedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48)),
               child: _isPosting
                   ? const SizedBox(
                       height: 20,
@@ -741,7 +737,9 @@ class _PreviewPlaceholder extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 48, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            Icon(icon,
+                size: 48,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
             const SizedBox(height: 8),
             Text(
               label,

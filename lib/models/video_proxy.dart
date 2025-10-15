@@ -20,6 +20,7 @@ class VideoProxyRequest {
     this.audioBitrateKbps = 128,
     this.previewQuality = VideoProxyPreviewQuality.fast,
     this.forceFallback = false,
+    this.segmentedPreview = false,
   })  : assert(targetWidth > 0),
         assert(targetHeight > 0);
 
@@ -32,6 +33,10 @@ class VideoProxyRequest {
   final int audioBitrateKbps;
   final VideoProxyPreviewQuality previewQuality;
   final bool forceFallback;
+
+  /// When true, request a segmented preview where the native side emits
+  /// segment_ready/progress/completed events and writes per-job cache dir.
+  final bool segmentedPreview;
 
   bool get isPortraitCanvas => targetHeight >= targetWidth;
 
@@ -71,6 +76,7 @@ class VideoProxyRequest {
       'estimatedDurationMs': estimatedDurationMs,
       'previewQuality': previewQuality.name.toUpperCase(),
       'forceFallback': forceFallback,
+      'segmentedPreview': segmentedPreview,
     };
   }
 
@@ -84,6 +90,7 @@ class VideoProxyRequest {
     int? audioBitrateKbps,
     VideoProxyPreviewQuality? previewQuality,
     bool? forceFallback,
+    bool? segmentedPreview,
   }) {
     return VideoProxyRequest(
       sourcePath: sourcePath ?? this.sourcePath,
@@ -96,6 +103,7 @@ class VideoProxyRequest {
       audioBitrateKbps: audioBitrateKbps ?? this.audioBitrateKbps,
       previewQuality: previewQuality ?? this.previewQuality,
       forceFallback: forceFallback ?? this.forceFallback,
+      segmentedPreview: segmentedPreview ?? this.segmentedPreview,
     );
   }
 
@@ -109,8 +117,47 @@ class VideoProxyRequest {
       audioBitrateKbps: 96,
       previewQuality: VideoProxyPreviewQuality.fast,
       forceFallback: true,
+      segmentedPreview: true,
     );
   }
+}
+
+class ProxySegment {
+  const ProxySegment({
+    required this.index,
+    required this.path,
+    required this.durationMs,
+    required this.width,
+    required this.height,
+    required this.hasAudio,
+  });
+
+  final int index;
+  final String path;
+  final int durationMs;
+  final int width;
+  final int height;
+  final bool hasAudio;
+}
+
+class ProxyManifest {
+  const ProxyManifest({
+    required this.version,
+    required this.segmentDurationMs,
+    required this.segments,
+    required this.width,
+    required this.height,
+    required this.fps,
+    required this.hasAudio,
+  });
+
+  final int version;
+  final int segmentDurationMs;
+  final List<ProxySegment> segments;
+  final int width;
+  final int height;
+  final double fps;
+  final bool hasAudio;
 }
 
 class VideoProxyMetadata {
@@ -150,8 +197,8 @@ class VideoProxyResult {
   final int transcodeDurationMs;
   final bool usedFallback720p;
 
-  bool get usedFallback => usedFallback720p ||
-      metadata.resolution == VideoProxyResolution.p360;
+  bool get usedFallback =>
+      usedFallback720p || metadata.resolution == VideoProxyResolution.p360;
 }
 
 class VideoProxyException implements Exception {
@@ -161,9 +208,11 @@ class VideoProxyException implements Exception {
   final String? code;
 
   @override
-  String toString() => 'VideoProxyException($message${code != null ? ', code=$code' : ''})';
+  String toString() =>
+      'VideoProxyException($message${code != null ? ', code=$code' : ''})';
 }
 
 class VideoProxyCancelException extends VideoProxyException {
-  const VideoProxyCancelException() : super('Video proxy generation canceled', code: 'cancelled');
+  const VideoProxyCancelException()
+      : super('Video proxy generation canceled', code: 'cancelled');
 }

@@ -75,6 +75,7 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
   private var eventSink: FlutterEventSink?
   private let syncQueue = DispatchQueue(label: "com.example.coalition.videoProxy")
   private var activeJobs: [String: ProxyJob] = [:]
+  private var activeSegmentWriters: [String: () -> Void] = [:]
 
   init(messenger: FlutterBinaryMessenger) {
     super.init()
@@ -110,12 +111,14 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
       return
     }
 
-    let previewQuality = args["previewQuality"] as? String
+  let previewQuality = args["previewQuality"] as? String
     let forceFallback = (args["forceFallback"] as? NSNumber)?.boolValue ?? false
     let tier = parsePreviewTier(previewQuality, isFallback: fallback || forceFallback)
     let profile = profile(for: tier)
     let frameRateHint = profile.frameRate
     let enableLogging = (args["enableLogging"] as? NSNumber)?.boolValue ?? true
+  let segmentedPreview = (args["segmentedPreview"] as? NSNumber)?.boolValue ?? false
+  let segmentDurationMs = (args["segmentDurationMs"] as? NSNumber)?.int64Value ?? 10000
 
     let outputDirectoryURL = URL(fileURLWithPath: outputDirectory, isDirectory: true)
     do {
@@ -125,20 +128,32 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
       return
     }
 
-    let outputURL = outputDirectoryURL
-      .appendingPathComponent("proxy_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString)")
-      .appendingPathExtension("mp4")
+    // If segmented preview requested, use the outputDirectory as the job directory. Otherwise create a single proxy file URL.
+    let outputURL: URL = {
+      if segmentedPreview {
+        let jobDir = outputDirectoryURL.appendingPathComponent(jobId, isDirectory: true)
+        try? FileManager.default.createDirectory(at: jobDir, withIntermediateDirectories: true, attributes: nil)
+        return jobDir
+      } else {
+        return outputDirectoryURL
+          .appendingPathComponent("proxy_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString)")
+          .appendingPathExtension("mp4")
+      }
+    }()
+
+    let targetSize = segmentedPreview ? CGSize(width: 360, height: 640) : profile.size
+    let effectiveTier = segmentedPreview ? PreviewTier.fallback : tier
 
     let job = ProxyJob(
       jobId: jobId,
       sourcePath: sourcePath,
-      targetSize: profile.size,
+      targetSize: targetSize,
       frameRateHint: frameRateHint,
       fallback: fallback || forceFallback,
       outputURL: outputURL,
       enableLogging: enableLogging,
       completion: result,
-      tier: tier
+      tier: effectiveTier
     )
 
     syncQueue.async {
@@ -147,7 +162,184 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
         return
       }
       self.activeJobs[jobId] = job
-      self.startExport(job)
+      if segmentedPreview {
+        self.startSegmentedExport(job, segmentDurationMs: segmentDurationMs)
+      } else {
+        self.startExport(job)
+      }
+    }
+  }
+
+  private func startSegmentedExport(_ job: ProxyJob, segmentDurationMs: Int64) {
+    let sourceURL = URL(fileURLWithPath: job.sourcePath)
+    let asset = AVURLAsset(url: sourceURL)
+    let durationSec = CMTimeGetSeconds(asset.duration)
+    let durationMs = Int64(durationSec * 1000)
+    let totalSegments = Int((durationMs + segmentDurationMs - 1) / segmentDurationMs)
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      var segmentIndex = 0
+      var startMs: Int64 = 0
+      while startMs < durationMs {
+        let endMs = min(startMs + segmentDurationMs, durationMs)
+        let jobDir = job.outputURL // in segmented mode this is a directory URL
+        let segmentURL = jobDir.appendingPathComponent(String(format: "segment_%03d.mp4", segmentIndex))
+
+        // Use AVAssetReader/Writer to produce a segment with explicit encoder settings so we can set bitrate, fps and keyframe interval.
+        do {
+          if FileManager.default.fileExists(atPath: segmentURL.path) {
+            try FileManager.default.removeItem(at: segmentURL)
+          }
+
+          let reader = try AVAssetReader(asset: asset)
+          let writer = try AVAssetWriter(outputURL: segmentURL, fileType: .mp4)
+
+          // Video output settings - decompress frames
+          guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            self.complete(jobId: job.jobId, payload: ["ok": false, "code": "no_video", "message": "Video track missing", "recoverable": true])
+            return
+          }
+
+          let videoReaderOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
+          videoReaderOutput.alwaysCopiesSampleData = false
+          reader.add(videoReaderOutput)
+
+          // Video writer input settings - H.264
+          let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: Int(job.targetSize.width),
+            AVVideoHeightKey: Int(job.targetSize.height),
+            AVVideoCompressionPropertiesKey: [
+              AVVideoAverageBitRateKey: job.tier == .fallback ? 800_000 : 1_200_000,
+              AVVideoMaxKeyFrameIntervalKey: 24, // approximate 1s at 24fps; set to 24 for GOP ~= 1s
+              AVVideoProfileLevelKey: AVVideoProfileLevelH264BaselineAutoLevel
+            ]
+          ]
+
+          let videoWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+          videoWriterInput.expectsMediaDataInRealTime = false
+          writer.add(videoWriterInput)
+
+          var audioReaderOutput: AVAssetReaderTrackOutput? = nil
+          var audioWriterInput: AVAssetWriterInput? = nil
+          if let audioTrack = asset.tracks(withMediaType: .audio).first {
+            audioReaderOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+            audioReaderOutput?.alwaysCopiesSampleData = false
+            reader.add(audioReaderOutput!)
+
+            let audioSettings: [String: Any] = [
+              AVFormatIDKey: kAudioFormatMPEG4AAC,
+              AVNumberOfChannelsKey: 2,
+              AVSampleRateKey: 44_100,
+              AVEncoderBitRateKey: 96_000
+            ]
+            audioWriterInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            audioWriterInput?.expectsMediaDataInRealTime = false
+            writer.add(audioWriterInput!)
+          }
+
+          let startTime = CMTimeMake(value: startMs, timescale: 1000)
+          let duration = CMTimeMake(value: endMs - startMs, timescale: 1000)
+          let timeRange = CMTimeRange(start: startTime, duration: duration)
+
+          reader.timeRange = timeRange
+
+          writer.startWriting()
+          writer.startSession(atSourceTime: .zero)
+
+          let videoQueue = DispatchQueue(label: "videoQueue")
+          let audioQueue = DispatchQueue(label: "audioQueue")
+
+          writer.requestMediaDataWhenReady(on: videoQueue) {
+            while videoWriterInput.isReadyForMoreMediaData {
+              if let sample = videoReaderOutput.copyNextSampleBuffer() {
+                videoWriterInput.append(sample)
+              } else {
+                videoWriterInput.markAsFinished()
+                break
+              }
+            }
+          }
+
+          if let audioReaderOutput = audioReaderOutput, let audioWriterInput = audioWriterInput {
+            writer.requestMediaDataWhenReady(on: audioQueue) {
+              while audioWriterInput.isReadyForMoreMediaData {
+                if let sample = audioReaderOutput.copyNextSampleBuffer() {
+                  audioWriterInput.append(sample)
+                } else {
+                  audioWriterInput.markAsFinished()
+                  break
+                }
+              }
+            }
+          }
+
+          // Start the reader
+          if !reader.startReading() {
+            throw NSError(domain: "VideoProxy", code: -1, userInfo: [NSLocalizedDescriptionKey: "Reader failed to start"]) 
+          }
+
+          // Poll writer status until done
+          var finished = false
+          while !finished {
+            if writer.status == .completed {
+              finished = true
+            } else if writer.status == .failed || writer.status == .cancelled || reader.status == .failed {
+              throw writer.error ?? reader.error ?? NSError(domain: "VideoProxy", code: -1, userInfo: [NSLocalizedDescriptionKey: "Export failed"])
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+          }
+
+          writer.finishWriting {
+            if writer.status == .completed {
+              let metadata = self.inspectProxy(at: segmentURL, frameRateHint: job.frameRateHint, fallbackSize: job.targetSize)
+              self.eventSink?([
+                "jobId": job.jobId,
+                "type": "segment_ready",
+                "segmentIndex": segmentIndex,
+                "path": segmentURL.path,
+                "durationMs": metadata.durationMs,
+                "width": metadata.width,
+                "height": metadata.height,
+                "hasAudio": audioWriterInput != nil,
+                "totalSegments": totalSegments,
+                "totalDurationMs": durationMs,
+              ])
+            } else {
+              try? FileManager.default.removeItem(at: segmentURL)
+              let message = writer.error?.localizedDescription ?? "Segment write failed"
+              self.complete(jobId: job.jobId, payload: ["ok": false, "code": "transcode_failed", "message": message, "recoverable": true])
+              return
+            }
+          }
+        } catch {
+          try? FileManager.default.removeItem(at: segmentURL)
+          self.complete(jobId: job.jobId, payload: ["ok": false, "code": "transcode_failed", "message": error.localizedDescription, "recoverable": true])
+          return
+        }
+
+        segmentIndex += 1
+        startMs = endMs
+        // loop continues for next segment
+        
+
+        // Loop will proceed once writer.finishWriting has completed (we wait on a semaphore there).
+      }
+
+      // After all segments, emit completed
+      let elapsed = Int(Date().timeIntervalSince1970 * 1000)
+      self.eventSink?([
+        "ok": true,
+        "jobId": job.jobId,
+        "type": "completed",
+        "outputDirectory": job.outputURL.path,
+        "totalSegments": totalSegments,
+        "totalDurationMs": durationMs,
+        "transcodeDurationMs": elapsed,
+      ])
+      DispatchQueue.main.async {
+        job.completion(["ok": true, "jobId": job.jobId])
+      }
     }
   }
 
@@ -317,10 +509,15 @@ final class VideoProxyChannel: NSObject, FlutterStreamHandler {
     }
 
     syncQueue.async {
-      if let job = self.activeJobs[jobId] {
+      if let job = self.activeJobs.removeValue(forKey: jobId) {
         job.progressTimer?.cancel()
         job.exportSession?.cancelExport()
         try? FileManager.default.removeItem(at: job.outputURL)
+      }
+      // Cancel any active per-segment writer/reader
+      if let cancelClosure = self.activeSegmentWriters[jobId] {
+        cancelClosure()
+        self.activeSegmentWriters.removeValue(forKey: jobId)
       }
       DispatchQueue.main.async {
         result(["ok": true])

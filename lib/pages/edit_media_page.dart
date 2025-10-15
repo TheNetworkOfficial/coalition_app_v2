@@ -5,6 +5,9 @@ import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
 import 'package:video_editor_2/video_editor.dart';
 
+import '../services/proxy_playlist_controller.dart';
+import '../env.dart';
+
 import '../models/post_draft.dart';
 import '../models/video_proxy.dart';
 import '../services/video_proxy_service.dart';
@@ -42,6 +45,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
   static const _videoTrimHeight = 72.0;
 
   VideoEditorController? _videoController;
+  ProxyPlaylistController? _playlistController;
   VideoProxyResult? _activeProxy;
   bool _usingFallbackProxy = false;
   bool _isPreparingFallback = false;
@@ -71,7 +75,14 @@ class _EditMediaPageState extends State<EditMediaPage> {
         _activeProxy = proxy;
         _usingFallbackProxy =
             proxy.metadata.resolution == VideoProxyResolution.p360;
-        unawaited(_initVideoController());
+        // If segmented preview enabled, initialize playlist controller
+        final wantSegments = kEnableSegmentedPreview ||
+            (widget.media.proxyRequest?.segmentedPreview == true);
+        if (wantSegments && widget.media.proxyRequest != null) {
+          _initPlaylistController(widget.media.proxyRequest!);
+        } else {
+          unawaited(_initVideoController());
+        }
       }
     } else {
       _loadImageMetadata();
@@ -81,9 +92,14 @@ class _EditMediaPageState extends State<EditMediaPage> {
   @override
   void dispose() {
     final controller = _videoController;
+    final playlistEditor = _playlistController?.editor;
     if (controller != null) {
       controller.removeListener(_handleVideoControllerUpdate);
       unawaited(controller.dispose());
+    }
+    if (playlistEditor != null) {
+      playlistEditor.removeListener(_handleVideoControllerUpdate);
+      unawaited(playlistEditor.dispose());
     }
     if (!_retainProxyForNextStep) {
       final proxy = _activeProxy;
@@ -151,6 +167,51 @@ class _EditMediaPageState extends State<EditMediaPage> {
         _videoInitError ??= error;
       });
     }
+  }
+
+  void _initPlaylistController(VideoProxyRequest request) {
+    final service = VideoProxyService();
+    final job = service.createJob(
+      request: request,
+      onJobCreated: (jobId) {
+        if (_playlistController == null) {
+          _playlistController = ProxyPlaylistController(jobId: jobId);
+          _playlistController!.onReady = () {
+            final editor = _playlistController!.editor;
+            if (editor != null) {
+              editor.addListener(_handleVideoControllerUpdate);
+              setState(() {
+                _videoController = editor;
+                _videoInitialized = true;
+                _videoDuration = Duration(
+                    milliseconds: _playlistController!.segments
+                        .fold(0, (a, s) => a + s.durationMs));
+                _videoTrimRangeMs =
+                    RangeValues(0, _videoDuration!.inMilliseconds.toDouble());
+              });
+            }
+          };
+        }
+      },
+    );
+
+    // Show the existing progress dialog UX while background proxy runs.
+    unawaited(showDialog<VideoProxyDialogOutcome>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => VideoProxyProgressDialog(
+        job: job,
+        title: 'Preparing preview…',
+        allowCancel: true,
+      ),
+    ).then((outcome) {
+      if (outcome == null || outcome.cancelled) {
+        setState(() {
+          _videoInitError =
+              const VideoProxyException('Video optimization canceled');
+        });
+      }
+    }));
   }
 
   Future<bool> _attemptFallback(Object error) async {

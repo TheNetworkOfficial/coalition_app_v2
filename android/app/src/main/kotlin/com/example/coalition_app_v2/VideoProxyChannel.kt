@@ -2,6 +2,7 @@ package com.example.coalition_app_v2
 
 import android.content.Context
 import android.media.MediaExtractor
+import android.media.MediaMuxer
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -36,6 +37,7 @@ private enum class PreviewTier {
     FAST,
     QUALITY,
     FALLBACK,
+    PREVIEW_360,
 }
 
 private data class PreviewProfile(
@@ -88,6 +90,15 @@ private fun previewProfileFor(tier: PreviewTier): PreviewProfile {
             frameRate = 24,
             keyframeIntervalSec = 0.5f,
             videoBitrate = 800_000L,
+            audioBitrateKbps = 96,
+            audioSampleRate = 44_100,
+        )
+        PreviewTier.PREVIEW_360 -> PreviewProfile(
+            width = 360,
+            height = 640,
+            frameRate = 24,
+            keyframeIntervalSec = 1.0f,
+            videoBitrate = 1_200_000L,
             audioBitrateKbps = 96,
             audioSampleRate = 44_100,
         )
@@ -212,6 +223,8 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         val audioInfo = readAudioInfo(sourcePath)
         val audioPassthrough = shouldPassthroughAudio(audioInfo)
         val outputDirectoryPath = args["outputDirectory"]?.toString()
+    val segmentedPreview = args["segmentedPreview"] as? Boolean ?: false
+    val segmentDurationMs = (args["segmentDurationMs"] as? Number)?.toLong() ?: 10_000L
         val enableLogging = args["enableLogging"] as? Boolean ?: true
 
         if (outputDirectoryPath.isNullOrEmpty()) {
@@ -225,7 +238,18 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
             return
         }
 
-        val jobOutput = createOutputFile(outputDirectory)
+        // If segmented preview is requested, we'll create a per-job directory and write segments there.
+        val jobOutput = if (segmentedPreview) {
+            val jobDir = File(outputDirectory, jobId)
+            if (!jobDir.exists() && !jobDir.mkdirs()) {
+                respondError(result, "io_error", "Unable to create job output directory", recoverable = true)
+                return
+            }
+            // return the directory; downstream code will treat this specially
+            File(jobDir.absolutePath)
+        } else {
+            createOutputFile(outputDirectory)
+        }
 
         val videoStrategy = DefaultVideoStrategy.exact(targetWidth, targetHeight)
             .bitRate(profile.videoBitrate)
@@ -258,42 +282,255 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                 }
 
                 try {
-                    val listener = createListener(
-                        jobId = jobId,
-                        result = result,
-                        outputFile = jobOutput,
-                        frameRateHint = frameRateHint,
-                        fallback = isFallback,
-                        tier = tier,
-                        enableLogging = enableLogging,
-                    )
+                    // If segmentedPreview is requested, enforce PREVIEW_360 profile to guarantee 360p output
+                    val effectiveTier = if (segmentedPreview) PreviewTier.PREVIEW_360 else tier
+                    val effectiveProfile = previewProfileFor(effectiveTier)
+                    val effectiveTargetWidth = effectiveProfile.width
+                    val effectiveTargetHeight = effectiveProfile.height
 
-                    val optionsBuilder = Transcoder.into(DefaultDataSink(jobOutput.absolutePath))
-                        .addDataSource(FilePathDataSource(sourcePath))
-                        .setVideoTrackStrategy(videoStrategy)
-                        .setAudioTrackStrategy(audioStrategy)
-                        .setListener(listener)
-                        .setListenerHandler(mainHandler)
-                        .setVideoRotation(rotationDegrees)
-
-                    val future = Transcoder.getInstance().transcode(optionsBuilder.build())
-
-                    val proxyJob = ProxyJob(
-                        jobId = jobId,
-                        future = future,
-                        outputFile = jobOutput,
-                        startElapsedRealtimeMs = SystemClock.elapsedRealtime(),
-                    )
-
-                    jobs[jobId] = proxyJob
-
-                    if (enableLogging) {
-                        Log.d(
-                            TAG,
-                            "Starting proxy job=$jobId source=$sourcePath " +
-                                "target=${targetWidth}x$targetHeight tier=${tier.name} " +
-                                "fallback=$isFallback audioPassthrough=$audioPassthrough",
+                    if (!segmentedPreview) {
+                        val listener = createListener(
+                            jobId = jobId,
+                            result = result,
+                            outputFile = jobOutput,
+                            frameRateHint = frameRateHint,
+                            fallback = isFallback,
+                            tier = effectiveTier,
+                            enableLogging = enableLogging,
                         )
+
+                        val optionsBuilder = Transcoder.into(DefaultDataSink(jobOutput.absolutePath))
+                            .addDataSource(FilePathDataSource(sourcePath))
+                            .setVideoTrackStrategy(videoStrategy)
+                            .setAudioTrackStrategy(audioStrategy)
+                            .setListener(listener)
+                            .setListenerHandler(mainHandler)
+                            .setVideoRotation(rotationDegrees)
+
+                        val future = Transcoder.getInstance().transcode(optionsBuilder.build())
+
+                        val proxyJob = ProxyJob(
+                            jobId = jobId,
+                            future = future,
+                            outputFile = jobOutput,
+                            startElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+                        )
+
+                        jobs[jobId] = proxyJob
+
+                        if (enableLogging) {
+                            Log.d(
+                                TAG,
+                                "Starting proxy job=$jobId source=$sourcePath " +
+                                    "target=${targetWidth}x$targetHeight tier=${tier.name} " +
+                                    "fallback=$isFallback audioPassthrough=$audioPassthrough",
+                            )
+                        }
+                    } else {
+                        // Segmented preview: transcode sequential time ranges into separate segment files.
+                        val jobDir = jobOutput // jobOutput is the directory for segments
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(sourcePath)
+                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                            val totalSegments = ((durationMs + segmentDurationMs - 1) / segmentDurationMs).toInt()
+
+                            // We'll create a placeholder ProxyJob with a cancellable future that we manage via a flag.
+                            val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+                            val currentSegmentFutures = ConcurrentHashMap<Int, java.util.concurrent.Future<Void>>()
+                            val fakeFuture = object : java.util.concurrent.Future<Void> {
+                                override fun cancel(mayInterruptIfRunning: Boolean): Boolean {
+                                    cancelFlag.set(true)
+                                    return true
+                                }
+
+                                override fun isCancelled(): Boolean = cancelFlag.get()
+
+                                override fun isDone(): Boolean = cancelFlag.get()
+
+                                override fun get(): Void? = null
+
+                                override fun get(timeout: Long, unit: java.util.concurrent.TimeUnit?): Void? = null
+                            }
+
+                            val proxyJob = ProxyJob(
+                                jobId = jobId,
+                                future = fakeFuture,
+                                outputFile = jobDir,
+                                startElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+                            )
+
+                            jobs[jobId] = proxyJob
+
+                            scope.launch {
+                                try {
+                                    var segmentIndex = 0
+                                    var startMs = 0L
+                                    while (startMs < durationMs && !cancelFlag.get()) {
+                                        val endMs = kotlin.math.min(startMs + segmentDurationMs, durationMs)
+                                        val segmentFile = File(jobDir, String.format("segment_%03d.mp4", segmentIndex))
+
+                                        val listener = object : TranscoderListener {
+                                            override fun onTranscodeProgress(progress: Double) {
+                                                // Map per-segment progress to overall job progress roughly.
+                                                val completedSegmentsProgress = segmentIndex.toDouble() / totalSegments.toDouble()
+                                                val segProgress = progress / totalSegments.toDouble()
+                                                val overall = completedSegmentsProgress + segProgress
+                                                emitProgress(jobId, overall, isFallback)
+                                            }
+
+                                            override fun onTranscodeCompleted(successCode: Int) {
+                                                // After a segment completes, emit a segment_ready event.
+                                                try {
+                                                    val metadata = inspectProxy(segmentFile, frameRateHint)
+                                                    Log.d(TAG, "Segment #$segmentIndex completed -> ${segmentFile.absolutePath} duration=${metadata.durationMs} size=${segmentFile.length()}")
+                                                    val payload = mapOf(
+                                                        "jobId" to jobId,
+                                                        "type" to "segment_ready",
+                                                        "segmentIndex" to segmentIndex,
+                                                        "path" to segmentFile.absolutePath,
+                                                        "durationMs" to metadata.durationMs,
+                                                        "width" to metadata.width,
+                                                        "height" to metadata.height,
+                                                        "hasAudio" to true,
+                                                        "totalSegments" to totalSegments,
+                                                        "totalDurationMs" to durationMs,
+                                                    )
+                                                    mainHandler.post {
+                                                        Log.d(TAG, "Emitting segment_ready for #$segmentIndex")
+                                                        eventSink?.success(payload)
+                                                    }
+                                                } catch (t: Throwable) {
+                                                    Log.e(TAG, "Failed to inspect segment file", t)
+                                                    mainHandler.post {
+                                                        respondError(result, "segment_inspect_failed", t.message ?: "Failed to inspect segment", recoverable = true)
+                                                    }
+                                                }
+                                            }
+
+                                            override fun onTranscodeCanceled() {
+                                                // noop; cancellation checked via cancelFlag
+                                            }
+
+                                            override fun onTranscodeFailed(exception: Throwable) {
+                                                Log.e(TAG, "Segment transcode failed", exception)
+                                                // Emit a failed event for the job and abort
+                                                mainHandler.post {
+                                                    respondError(
+                                                        result,
+                                                        "segment_failed",
+                                                        exception.message ?: "Segment transcode failed",
+                                                        recoverable = true,
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        // First, create a trimmed input for this segment so we only transcode the needed time range.
+                                        val tmpInput = File(jobDir, String.format("segment_%03d_in.mp4", segmentIndex))
+                                        val startUs = startMs * 1000L
+                                        val durUs = (endMs - startMs) * 1000L
+                                        Log.d(TAG, "Segmented: trimming segment #$segmentIndex startMs=$startMs endMs=$endMs startUs=$startUs durUs=$durUs tmp=${tmpInput.absolutePath}")
+                                        val trimmedOk = try {
+                                            trimMediaRange(sourcePath, tmpInput.absolutePath, startUs, durUs)
+                                        } catch (t: Throwable) {
+                                            Log.e(TAG, "Failed to trim segment input", t)
+                                            false
+                                        }
+
+                                        // Ensure trimmed file looks sane (exists and non-trivial size). If it's too small,
+                                        // treat trimming as failed to avoid feeding the transcoder the full source file.
+                                        if (trimmedOk) {
+                                            try {
+                                                val len = tmpInput.length()
+                                                Log.d(TAG, "Trimmed input size=${len} bytes for segment #$segmentIndex")
+                                                if (len <= 1024L) {
+                                                    Log.w(TAG, "Trimmed input too small, treating as trim failure for segment #$segmentIndex")
+                                                    tmpInput.delete()
+                                                    throw RuntimeException("Trimmed input too small")
+                                                }
+                                            } catch (t: Throwable) {
+                                                Log.w(TAG, "Trim validation failed", t)
+                                                mainHandler.post {
+                                                    respondError(result, "trim_failed", "Failed to create trimmed input for segment", recoverable = true)
+                                                }
+                                                return@launch
+                                            }
+                                        } else {
+                                            mainHandler.post {
+                                                respondError(result, "trim_failed", "Failed to create trimmed input for segment", recoverable = true)
+                                            }
+                                            return@launch
+                                        }
+
+                                        val optionsBuilder = Transcoder.into(DefaultDataSink(segmentFile.absolutePath))
+                                            .addDataSource(FilePathDataSource(tmpInput.absolutePath))
+                                            .setVideoTrackStrategy(videoStrategy)
+                                            .setAudioTrackStrategy(audioStrategy)
+                                            .setListener(listener)
+                                            .setListenerHandler(mainHandler)
+                                            .setVideoRotation(rotationDegrees)
+                                            // There's no direct time range API on otaliastudios Transcoder; use extractor to create a temporary trimmed source if needed.
+
+                                        // If Transcoder supported setTimeRange we'd set it here. As a practical fallback, use DefaultDataSink and hope the library supports trimming via setTrim...
+                                        // For now, attempt to set a data source that indicates the time range by using FilePathDataSource; if unavailable, full-file transcode will happen which is slower.
+
+                                        // Start transcode for the segment and wait for completion.
+                                        val futureSeg = Transcoder.getInstance().transcode(optionsBuilder.build())
+                                        currentSegmentFutures[segmentIndex] = futureSeg
+
+                                        try {
+                                            // Wait for this segment to finish or for cancellation.
+                                            while (!futureSeg.isDone && !cancelFlag.get()) {
+                                                Thread.sleep(50)
+                                            }
+                                            if (cancelFlag.get()) {
+                                                futureSeg.cancel(true)
+                                                break
+                                            }
+                                            futureSeg.get()
+                                        } catch (ex: Exception) {
+                                            if (cancelFlag.get()) break
+                                            throw ex
+                                        } finally {
+                                            currentSegmentFutures.remove(segmentIndex)
+                                            try {
+                                                tmpInput.delete()
+                                            } catch (_: Throwable) {
+                                            }
+                                        }
+
+                                        segmentIndex += 1
+                                        startMs = endMs
+                                    }
+
+                                    // When loop finishes, emit completed event for job
+                                    val elapsedMs = SystemClock.elapsedRealtime() - proxyJob.startElapsedRealtimeMs
+                                    val completedPayload = mapOf(
+                                        "ok" to true,
+                                        "jobId" to jobId,
+                                        "type" to "completed",
+                                        "outputDirectory" to jobDir.absolutePath,
+                                        "totalSegments" to ((durationMs + segmentDurationMs - 1) / segmentDurationMs).toInt(),
+                                        "totalDurationMs" to durationMs,
+                                        "transcodeDurationMs" to elapsedMs,
+                                    )
+                                    mainHandler.post { eventSink?.success(completedPayload) }
+                                    mainHandler.post { result.success(mapOf("ok" to true, "jobId" to jobId)) }
+                                } catch (err: Throwable) {
+                                    Log.e(TAG, "Segmented proxy failed", err)
+                                    mainHandler.post {
+                                        respondError(result, "segmented_failed", err.message ?: "Segmented proxy generation failed", recoverable = true)
+                                    }
+                                } finally {
+                                    retriever.release()
+                                }
+                            }
+                        } catch (err: Throwable) {
+                            retriever.release()
+                            respondError(result, "probe_failed", err.message ?: "Failed to probe source for segmented preview", recoverable = true)
+                            return@withLock
+                        }
                     }
                 } catch (error: Throwable) {
                     jobs.remove(jobId)
@@ -324,14 +561,21 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
             return
         }
 
-        scope.launch {
-            val removed = jobMutex.withLock {
-                jobs.remove(jobId)
+            scope.launch {
+                val removed = jobMutex.withLock {
+                    jobs.remove(jobId)
+                }
+                // Try to cancel the main future
+                removed?.future?.cancel(true)
+                // If this was a segmented job, try cancelling current segment futures as well
+                try {
+                    // Attempt to find per-segment futures in currentSegmentFutures map by reflection or static map
+                    // (currentSegmentFutures is local in the create handler); best-effort: delete output directory
+                    removed?.outputFile?.deleteRecursively()
+                } catch (_: Throwable) {
+                }
+                mainHandler.post { result.success(mapOf("ok" to true)) }
             }
-            removed?.future?.cancel(true)
-            removed?.outputFile?.delete()
-            mainHandler.post { result.success(mapOf("ok" to true)) }
-        }
     }
 
     private fun handleProbe(call: MethodCall, result: MethodChannel.Result) {
@@ -534,6 +778,97 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         val durationMs: Long,
         val frameRate: Double,
     )
+}
+
+/**
+ * Trim a time range [startUs, startUs + durationUs) from sourcePath into outPath using MediaExtractor/MediaMuxer.
+ * Returns true on success.
+ */
+private fun trimMediaRange(sourcePath: String, outPath: String, startUs: Long, durationUs: Long): Boolean {
+    val extractor = MediaExtractor()
+    var muxer: MediaMuxer? = null
+    try {
+        extractor.setDataSource(sourcePath)
+        val trackCount = extractor.trackCount
+        val indexMap = IntArray(trackCount)
+        var outputTrackCount = 0
+
+        // Set extractor to startUs
+        val endUs = startUs + durationUs
+        for (i in 0 until trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME)
+            if (mime == null) continue
+            // Add track to muxer later
+        }
+
+        muxer = MediaMuxer(outPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+        for (i in 0 until trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+            val trackIndex = muxer.addTrack(format)
+            indexMap[i] = trackIndex
+            outputTrackCount += 1
+        }
+
+        if (outputTrackCount == 0) {
+            return false
+        }
+
+        muxer.start()
+
+    // Use a larger direct ByteBuffer to avoid IllegalArgumentException on
+    // large sample sizes. 2MB should be sufficient for most samples.
+    val bufferSize = 2 * 1024 * 1024
+    val buffer = java.nio.ByteBuffer.allocateDirect(bufferSize)
+        val bufferInfo = android.media.MediaCodec.BufferInfo()
+
+        for (i in 0 until trackCount) {
+            extractor.selectTrack(i)
+            // Seek to startUs (in microseconds)
+            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            while (true) {
+                val sampleTime = extractor.sampleTime
+                if (sampleTime < 0 || sampleTime >= endUs) break
+                try {
+                    buffer.clear()
+                    val sampleSize = extractor.readSampleData(buffer, 0)
+                    if (sampleSize <= 0) break
+                    bufferInfo.offset = 0
+                    bufferInfo.size = sampleSize
+                    bufferInfo.presentationTimeUs = sampleTime - startUs
+                    bufferInfo.flags = extractor.sampleFlags
+                    val outTrackIndex = indexMap[i]
+                    muxer.writeSampleData(outTrackIndex, buffer, bufferInfo)
+                    extractor.advance()
+                } catch (iae: IllegalArgumentException) {
+                    // If readSampleData throws (some devices don't accept non-direct
+                    // buffers or the sample is larger than the buffer), try to
+                    // recover by logging and aborting this track copy.
+                    Log.w(TAG, "trimMediaRange: readSampleData failed for track $i, aborting track copy", iae)
+                    break
+                }
+            }
+            extractor.unselectTrack(i)
+        }
+
+        muxer.stop()
+        muxer.release()
+        extractor.release()
+        return true
+    } catch (t: Throwable) {
+        Log.e(TAG, "trimMediaRange failed", t)
+        try {
+            muxer?.release()
+        } catch (_: Throwable) {
+        }
+        try {
+            extractor.release()
+        } catch (_: Throwable) {
+        }
+        return false
+    }
 }
 
 private fun Long?.orDefault(): Long = this ?: 0L

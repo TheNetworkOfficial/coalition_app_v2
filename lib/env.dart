@@ -1,10 +1,15 @@
 import 'package:flutter/foundation.dart';
 
-const String kApiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+const String kApiBaseUrl =
+    String.fromEnvironment('API_BASE_URL', defaultValue: '');
 const bool kAuthBypassEnabled =
     bool.fromEnvironment('AUTH_BYPASS', defaultValue: false);
 const bool kPreferVideoProxyUploads =
     bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: true);
+// Feature flag to enable segmented (chunked) preview proxying (10s segments).
+// Toggle with --dart-define=ENABLE_SEGMENTED_PREVIEW=true
+const bool kEnableSegmentedPreview =
+    bool.fromEnvironment('ENABLE_SEGMENTED_PREVIEW', defaultValue: false);
 
 String normalizeApiBaseUrl(String base) {
   if (base.isEmpty) {

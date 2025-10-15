@@ -20,6 +20,11 @@ android {
         jvmTarget = JavaVersion.VERSION_11.toString()
     }
 
+    // Suppress obsolete -source/-target warnings by passing lint options to the Java compiler
+    tasks.withType<JavaCompile> {
+        options.compilerArgs.addAll(listOf("-Xlint:-options"))
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.coalition_app_v2"
