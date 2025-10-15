@@ -85,8 +85,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
       if (overridePlaylist != null) {
         _playlistController = overridePlaylist;
         overridePlaylist.onReady = _handlePlaylistReady;
-        overridePlaylist.onSegmentAppended =
-            _handlePlaylistSegmentAppended;
+        overridePlaylist.onSegmentAppended = _handlePlaylistSegmentAppended;
         if (overridePlaylist.isReady) {
           _handlePlaylistReady();
         } else if (overridePlaylist.segments.isNotEmpty) {
@@ -309,9 +308,9 @@ class _EditMediaPageState extends State<EditMediaPage> {
         : RangeValues(
             _globalTrimMs!.start.clamp(0, defaultRange.end),
             _globalTrimMs!.end.clamp(
-                  _globalTrimMs!.start.clamp(0, defaultRange.end),
-                  defaultRange.end,
-                ),
+              _globalTrimMs!.start.clamp(0, defaultRange.end),
+              defaultRange.end,
+            ),
           );
 
     setState(() {
@@ -348,14 +347,14 @@ class _EditMediaPageState extends State<EditMediaPage> {
     final end = totalMs.toDouble();
     final previousDuration = _videoDuration?.inMilliseconds.toDouble();
     final previousRange = _globalTrimMs ??
-        RangeValues(0, (previousDuration ?? end).clamp(0, end));
-    final clampedStart = previousRange.start.clamp(0, end);
+        RangeValues(0, (previousDuration ?? end).clamp(0, end).toDouble());
+    final clampedStart = previousRange.start.clamp(0, end).toDouble();
     final wasUsingBufferedEnd = previousDuration == null
         ? true
         : (previousRange.end - previousDuration).abs() <= 0.5;
     final endCandidate = wasUsingBufferedEnd
         ? end
-        : previousRange.end.clamp(clampedStart, end);
+        : previousRange.end.clamp(clampedStart, end).toDouble();
     final nextRange = RangeValues(clampedStart, endCandidate);
 
     setState(() {
@@ -373,9 +372,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
   }
 
   void _handlePlaylistError(Object error) {
-    final message = error is VideoProxyException
-        ? error.message
-        : error.toString();
+    final message =
+        error is VideoProxyException ? error.message : error.toString();
     if (!mounted) {
       return;
     }

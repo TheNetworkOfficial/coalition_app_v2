@@ -31,7 +31,7 @@ class ProxyPlaylistController {
     required this.jobId,
     Stream<dynamic>? events,
     PlaylistEditorBuilder? editorBuilder,
-  })  : _editorBuilder = editorBuilder ?? _defaultEditorBuilder {
+  }) : _editorBuilder = editorBuilder ?? _defaultEditorBuilder {
     final source = events ?? VideoProxyService().nativeEventsFor(jobId);
     _eventsSub = source.listen(_handleEvent);
   }
@@ -110,8 +110,8 @@ class ProxyPlaylistController {
   Future<void> _initEditorForSegment(PlaylistSegment seg) async {
     final index = segments.indexOf(seg);
     if (index < 0) return;
-    final controller = await _acquireControllerForIndex(index,
-        failureLabel: 'first segment');
+    final controller =
+        await _acquireControllerForIndex(index, failureLabel: 'first segment');
     if (controller == null) return;
     controller.addListener(_onEditorUpdate);
     _editorController = controller;
@@ -172,12 +172,9 @@ class ProxyPlaylistController {
     required int endMs,
   }) async {
     final total = totalDurationMs;
-    final clampedStart = segments.isEmpty
-        ? startMs
-        : startMs.clamp(0, total).toInt();
-    final rawEnd = segments.isEmpty
-        ? endMs
-        : endMs.clamp(0, total).toInt();
+    final clampedStart =
+        segments.isEmpty ? startMs : startMs.clamp(0, total).toInt();
+    final rawEnd = segments.isEmpty ? endMs : endMs.clamp(0, total).toInt();
     final adjustedEnd = rawEnd <= clampedStart
         ? (segments.isEmpty ? rawEnd : math.min(total, clampedStart + 1))
         : rawEnd;
@@ -207,10 +204,10 @@ class ProxyPlaylistController {
         if (_currentIndex != i) {
           await _switchToSegmentIndex(i, seekMs: inSeg);
         } else {
-          await editor?.video.seekTo(Duration(milliseconds: inSeg));
-          if (editor != null) {
-            await _applyTrimToController(i, editor,
-                shouldSeek: false);
+          final currentEditor = editor;
+          if (currentEditor != null) {
+            await currentEditor.video.seekTo(Duration(milliseconds: inSeg));
+            await _applyTrimToController(i, currentEditor, shouldSeek: false);
           }
         }
         return;

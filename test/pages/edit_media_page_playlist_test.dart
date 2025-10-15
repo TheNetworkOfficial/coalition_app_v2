@@ -73,14 +73,17 @@ class _TestEditorFactory {
       state.trimMinFraction = trimMin;
       state.trimMaxFraction = trimMax;
     });
-    when(() => editor.startTrim)
-        .thenAnswer((_) => Duration(milliseconds: (trimMin * durationMs).round()));
-    when(() => editor.endTrim)
-        .thenAnswer((_) => Duration(milliseconds: (trimMax * durationMs).round()));
+    when(() => editor.startTrim).thenAnswer(
+        (_) => Duration(milliseconds: (trimMin * durationMs).round()));
+    when(() => editor.endTrim).thenAnswer(
+        (_) => Duration(milliseconds: (trimMax * durationMs).round()));
     when(() => editor.videoDuration)
         .thenReturn(Duration(milliseconds: durationMs));
     when(() => editor.isTrimming).thenReturn(false);
-    when(() => editor.isTrimming = any()).thenAnswer((_) {});
+    when(() => editor.isTrimming = any()).thenAnswer((invocation) {
+      final val = invocation.positionalArguments.first as bool;
+      return val;
+    });
 
     when(() => video.value).thenAnswer((_) => currentValue);
     when(() => video.play()).thenAnswer((_) async {});
@@ -111,7 +114,8 @@ void main() {
     registerFallbackValue(0.0);
   });
 
-  testWidgets('slider range grows with playlist segments and trim spans duration',
+  testWidgets(
+      'slider range grows with playlist segments and trim spans duration',
       (tester) async {
     final events = StreamController<dynamic>();
     final factory = _TestEditorFactory();

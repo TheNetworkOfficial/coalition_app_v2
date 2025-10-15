@@ -76,15 +76,16 @@ class _TestEditorFactory {
       state.trimMinFraction = trimMin;
       state.trimMaxFraction = trimMax;
     });
-    when(() => editor.startTrim)
-        .thenAnswer((_) => Duration(milliseconds: (trimMin * durationMs).round()));
-    when(() => editor.endTrim)
-        .thenAnswer((_) => Duration(milliseconds: (trimMax * durationMs).round()));
+    when(() => editor.startTrim).thenAnswer(
+        (_) => Duration(milliseconds: (trimMin * durationMs).round()));
+    when(() => editor.endTrim).thenAnswer(
+        (_) => Duration(milliseconds: (trimMax * durationMs).round()));
     when(() => editor.videoDuration)
         .thenReturn(Duration(milliseconds: durationMs));
     when(() => editor.isTrimming).thenAnswer((_) => isTrimming);
     when(() => editor.isTrimming = any()).thenAnswer((invocation) {
       isTrimming = invocation.positionalArguments.first as bool;
+      return isTrimming;
     });
 
     when(() => video.value).thenAnswer((_) => currentValue);
@@ -241,8 +242,7 @@ void main() {
     expect(factory.states.length, 2);
     verify(() => firstState.editor.dispose()).called(1);
     verify(() => secondState.editor
-            .initialize(aspectRatio: any(named: 'aspectRatio')))
-        .called(1);
+        .initialize(aspectRatio: any(named: 'aspectRatio'))).called(1);
 
     await controller.dispose();
     await events.close();
@@ -404,8 +404,8 @@ void main() {
     expect(controller.editor, same(factory.states[1].editor));
     expect(factory.states[1].trimStartMs, inInclusiveRange(499, 501));
     expect(factory.states[1].trimEndMs, inInclusiveRange(2999, 3001));
-    expect(factory.states[1].lastSeek,
-        equals(const Duration(milliseconds: 500)));
+    expect(
+        factory.states[1].lastSeek, equals(const Duration(milliseconds: 500)));
 
     await controller.dispose();
     await events.close();
