@@ -22,7 +22,7 @@ class _ControllerState {
 
   final _MockVideoEditorController editor;
   final _MockVideoPlayerController video;
-  VoidCallback? listener;
+  void Function()? listener;
   final void Function(VideoPlayerValue value) setValue;
   final VideoPlayerValue Function() getValue;
 
@@ -48,11 +48,11 @@ class _TestEditorFactory {
         .thenAnswer((_) async {});
     when(() => editor.dispose()).thenAnswer((_) async {});
     when(() => editor.addListener(any())).thenAnswer((invocation) {
-      final listener = invocation.positionalArguments.first as VoidCallback;
+      final listener = invocation.positionalArguments.first as void Function()?;
       state.listener = listener;
     });
     when(() => editor.removeListener(any())).thenAnswer((invocation) {
-      final listener = invocation.positionalArguments.first as VoidCallback;
+      final listener = invocation.positionalArguments.first as void Function()?;
       if (state.listener == listener) {
         state.listener = null;
       }
