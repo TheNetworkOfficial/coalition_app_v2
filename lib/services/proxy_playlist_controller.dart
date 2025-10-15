@@ -44,6 +44,8 @@ class ProxyPlaylistController {
   StreamSubscription? _eventsSub;
   final PlaylistEditorBuilder _editorBuilder;
   final Map<int, VideoEditorController> _preparedControllers = {};
+  Future<void>? _initializingEditor;
+  bool _pendingPrefetchAfterInit = false;
   VoidCallback? onReady;
   VoidCallback? onBuffering;
   VoidCallback? onSegmentAppended;
@@ -97,10 +99,32 @@ class ProxyPlaylistController {
       segments.sort((a, b) => a.index.compareTo(b.index));
 
       if (_editorController == null && segments.isNotEmpty) {
-        await _initEditorForSegment(segments.first);
-        onReady?.call();
+        if (_initializingEditor != null) {
+          _pendingPrefetchAfterInit = true;
+          await _initializingEditor;
+        } else {
+          final future = _initEditorForSegment(segments.first);
+          _initializingEditor = future;
+          try {
+            await future;
+            onReady?.call();
+          } finally {
+            _initializingEditor = null;
+            if (_pendingPrefetchAfterInit) {
+              _pendingPrefetchAfterInit = false;
+              if (_editorController != null) {
+                await _prefetchNextSegment();
+              }
+            }
+          }
+        }
       } else if (_editorController != null) {
-        await _prefetchNextSegment();
+        if (_initializingEditor != null) {
+          _pendingPrefetchAfterInit = true;
+          await _initializingEditor;
+        } else {
+          await _prefetchNextSegment();
+        }
       }
 
       onSegmentAppended?.call();
