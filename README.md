@@ -17,7 +17,8 @@
 - Google sign-in: Hosted UI returns via `myapp://auth/` and completes authentication.
 - After sign-in, force quit and relaunch; user stays authenticated.
 
-## Video proxy feature flags
+## Proxy workflow
 
-- Segmented preview proxying is enabled by default. `CreateEntryPage` forwards the `VideoProxyRequest` directly to `EditMediaPage`, which starts the proxy job, streams early segments through `ProxyPlaylistController`, and enables progressive playback while the full proxy finalizes.
-- To force the legacy proxy flow, pass `--dart-define=ENABLE_SEGMENTED_PREVIEW=false`. In that mode, `CreateEntryPage` waits for a full `VideoProxyResult`, `EditMediaPage` initializes the traditional `VideoEditorController`, and fallbacks rely on `_prepareVideoProxy` dialogs to request smaller proxies when needed.
+- When a video is picked, the editor plays the original file immediately (muted looping) so the user gets instant feedback while a background proxy transcode starts.
+- A single low-resolution proxy is generated in the background via `VideoProxyService.createJob`; once ready the editor swaps to that proxy and all trimming/scrubbing happens against the lightweight file.
+- Timeline state is preserved so trim sliders continue to map to source timecodes, and any fallback proxy encodes (e.g. 360p) still upgrade the session once they complete.

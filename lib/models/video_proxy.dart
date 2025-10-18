@@ -217,7 +217,7 @@ class VideoProxyRequest {
       audioBitrateKbps: 96,
       previewQuality: VideoProxyPreviewQuality.fast,
       forceFallback: true,
-      segmentedPreview: true,
+      segmentedPreview: false,
       sourceStartMs: sourceStartMs,
       sourceDurationMs: sourceDurationMs,
       sourceRotationDegrees: sourceRotationDegrees,
