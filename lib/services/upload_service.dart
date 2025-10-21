@@ -11,6 +11,7 @@ import '../env.dart';
 import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
 import '../models/upload_outcome.dart';
+import '../models/posts_page.dart';
 import 'api_client.dart';
 import 'tus_uploader.dart';
 
@@ -30,8 +31,14 @@ class UploadService {
   final Map<String, _TusUploadState> _tusUploads = {};
   final Map<String, Future<UploadOutcome>> _finalizationInFlight = {};
   final Map<String, UploadOutcome> _finalizedOutcomes = {};
+  final Map<String, Future<void>> _postReadyPolling = {};
+
+  static const Duration _postReadyPollInterval = Duration(seconds: 2);
+  static const Duration _postReadyPollTimeout = Duration(minutes: 2);
 
   VoidCallback? onFeedRefreshRequested;
+  ValueChanged<PostItem>? onPendingPostCreated;
+  ValueChanged<PostItem>? onPostStatusUpdated;
   String? _lastStartedTaskId;
 
   String? get lastStartedTaskId => _lastStartedTaskId;
@@ -584,6 +591,11 @@ class UploadService {
           debugPrint(
             '[UploadService] finalize createPost: {type: $type, cfUid: $cfUid, hasDescription: $hasDescription, visibility: $visibility} -> status=${status ?? 'unknown'}',
           );
+          _handleCreatePostSuccess(
+            response: response,
+            cfUid: cfUid,
+            feedRefreshCallback: feedRefreshCallback,
+          );
           await _notifyFeedRefreshRequested(feedRefreshCallback);
           final resolvedPostId = _extractPostId(response);
           return UploadOutcome(
@@ -726,6 +738,151 @@ class UploadService {
       }
     }
     return null;
+  }
+
+  void _handleCreatePostSuccess({
+    required Map<String, dynamic> response,
+    required String cfUid,
+    required VoidCallback? feedRefreshCallback,
+  }) {
+    final postId = _extractPostId(response) ?? cfUid;
+    final status = _normalizeStatus(response['status']);
+    PostItem placeholder;
+    try {
+      Map<String, dynamic>? rawPost;
+      const candidateKeys = <String>['post', 'data', 'item'];
+      for (final key in candidateKeys) {
+        final value = response[key];
+        if (value is Map<String, dynamic>) {
+          rawPost = Map<String, dynamic>.from(value);
+          break;
+        }
+      }
+      rawPost ??= Map<String, dynamic>.from(response);
+      rawPost['id'] ??= postId;
+      rawPost['status'] ??= status;
+      rawPost.putIfAbsent(
+        'createdAt',
+        () => DateTime.now().toUtc().toIso8601String(),
+      );
+      placeholder = PostItem.fromJson(rawPost);
+    } catch (_) {
+      placeholder = PostItem(
+        id: postId,
+        createdAt: DateTime.now().toUtc(),
+        durationMs: 0,
+        width: 1,
+        height: 1,
+        thumbUrl: null,
+        status: status,
+      );
+    }
+
+    if (placeholder.isPending || !placeholder.isReady) {
+      onPendingPostCreated?.call(placeholder);
+    } else {
+      onPostStatusUpdated?.call(placeholder);
+    }
+    final shouldPoll = !placeholder.isReady || placeholder.thumbUrl == null;
+    if (shouldPoll) {
+      _schedulePostReadyPolling(
+        postId: postId,
+        feedRefreshCallback: feedRefreshCallback,
+      );
+    }
+  }
+
+  void _schedulePostReadyPolling({
+    required String postId,
+    required VoidCallback? feedRefreshCallback,
+  }) {
+    if (_postReadyPolling.containsKey(postId)) {
+      return;
+    }
+    final future = _pollUntilPostReady(
+      postId: postId,
+      feedRefreshCallback: feedRefreshCallback,
+    ).whenComplete(() {
+      _postReadyPolling.remove(postId);
+    });
+    _postReadyPolling[postId] = future;
+  }
+
+  Future<void> _pollUntilPostReady({
+    required String postId,
+    required VoidCallback? feedRefreshCallback,
+  }) async {
+    final deadline = DateTime.now().add(_postReadyPollTimeout);
+    var hasTriggeredRefresh = false;
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        final snapshot = await _fetchPostSnapshot(postId);
+        if (snapshot != null) {
+          onPostStatusUpdated?.call(snapshot);
+          final hasThumb = snapshot.thumbUrl != null;
+          final readyWithThumb = snapshot.isReady && hasThumb;
+          if (readyWithThumb && !hasTriggeredRefresh) {
+            await _notifyFeedRefreshRequested(feedRefreshCallback);
+            hasTriggeredRefresh = true;
+          }
+          if (hasThumb) {
+            return;
+          }
+        }
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[UploadService] polling post $postId failed: $error\n$stackTrace',
+        );
+      }
+      await Future<void>.delayed(_postReadyPollInterval);
+    }
+  }
+
+  Future<PostItem?> _fetchPostSnapshot(String postId) async {
+    try {
+      final post = await _apiClient.getPost(postId);
+      if (post != null) {
+        return post;
+      }
+    } on ApiException catch (error) {
+      if (error.statusCode != HttpStatus.notFound) {
+        debugPrint(
+          '[UploadService] getPost($postId) failed: ${error.message} (${error.statusCode ?? 'unknown'})',
+        );
+      }
+    } catch (error, stackTrace) {
+      debugPrint('[UploadService] getPost($postId) unexpected error: $error\n$stackTrace');
+    }
+
+    try {
+      final page = await _apiClient.getMyPosts(limit: 30);
+      for (final item in page.items) {
+        if (item.id == postId) {
+          return item;
+        }
+      }
+    } on ApiException catch (error) {
+      if (error.statusCode != HttpStatus.notFound) {
+        debugPrint(
+          '[UploadService] getMyPosts fallback while polling $postId failed: ${error.message} (${error.statusCode ?? 'unknown'})',
+        );
+      }
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[UploadService] getMyPosts fallback unexpected error for $postId: $error\n$stackTrace',
+      );
+    }
+    return null;
+  }
+
+  String _normalizeStatus(dynamic value) {
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+    return 'UNKNOWN';
   }
 
   void _emitStatus(Task task, TaskStatus status) {

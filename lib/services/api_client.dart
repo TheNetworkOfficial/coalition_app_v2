@@ -5,9 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../env.dart';
-import '../features/feed/models/post.dart';
 import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
+import '../models/posts_page.dart';
 import '../models/profile.dart';
 import 'auth_service.dart';
 
@@ -203,6 +203,63 @@ class ApiClient {
     }
   }
 
+  Future<PostItem?> getPost(String postId) async {
+    final uri = _resolve('/api/posts/$postId');
+    final headers = await _composeHeaders(null);
+    final response = await _httpClient.get(
+      uri,
+      headers: headers.isEmpty ? null : headers,
+    );
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.notFound) {
+      return null;
+    }
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while loading post $postId',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to load post: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return null;
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected post response');
+    }
+
+    Map<String, dynamic>? rawPost;
+    final candidateKeys = <String>['post', 'data', 'item'];
+    for (final key in candidateKeys) {
+      final value = decoded[key];
+      if (value is Map<String, dynamic>) {
+        rawPost = Map<String, dynamic>.from(value);
+        break;
+      }
+    }
+    rawPost ??= Map<String, dynamic>.from(decoded);
+    rawPost.putIfAbsent('id', () => postId);
+    rawPost.putIfAbsent(
+      'createdAt',
+      () => DateTime.now().toUtc().toIso8601String(),
+    );
+    return PostItem.fromJson(rawPost);
+  }
+
   Future<Map<String, dynamic>> createPost({
     required String type,
     required String cfUid,
@@ -310,62 +367,139 @@ class ApiClient {
     throw ApiException('Unexpected profile update response');
   }
 
-  Future<List<Post>> getMyPosts({bool includePending = false}) async {
-    final query = includePending ? '?includePending=true' : '';
-    final response = await get('/api/users/me/posts$query');
-    if (response.statusCode == HttpStatus.unauthorized) {
-      throw ApiException('Unauthorized', statusCode: response.statusCode);
+  Future<PostsPage> getMyPosts({int limit = 30, String? cursor}) async {
+    final resolvedLimit = limit <= 0 ? 30 : limit;
+    final baseUri = _resolve('/api/users/me/posts');
+    final queryParameters = <String, String>{
+      'limit': resolvedLimit.toString(),
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+    };
+    final uri = baseUri.replace(queryParameters: queryParameters);
+
+    http.Response? response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final forceRefresh = attempt == 1;
+      final headers = await _composeHeaders(
+        null,
+        forceRefreshAuth: forceRefresh,
+      );
+      response = await _httpClient.get(
+        uri,
+        headers: headers.isEmpty ? null : headers,
+      );
+
+      final statusCode = response.statusCode;
+      final isAuthError =
+          statusCode == HttpStatus.unauthorized || statusCode == HttpStatus.forbidden;
+      if (isAuthError && !forceRefresh) {
+        await _authService?.fetchAuthToken(forceRefresh: true);
+        continue;
+      }
+      debugPrint(
+        '[ApiClient] getMyPosts attempt=$attempt status=$statusCode',
+      );
+      break;
     }
-    if (response.statusCode == HttpStatus.notFound) {
-      return const [];
+
+    if (response == null) {
+      throw ApiException('Failed to load posts: no response');
     }
-    if (response.statusCode < 200 || response.statusCode >= 300) {
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
       throw ApiException(
-        'Failed to load posts: ${response.statusCode}',
-        statusCode: response.statusCode,
+        'Forbidden while loading posts',
+        statusCode: statusCode,
         details: response.body.isEmpty ? null : response.body,
       );
     }
-    final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    final items = _extractItemsList(decoded);
-    if (items == null) {
+    if (statusCode == HttpStatus.notFound) {
+      return PostsPage(items: const <PostItem>[], nextCursor: null);
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to load posts: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return PostsPage(items: const <PostItem>[], nextCursor: null);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
       throw ApiException('Unexpected posts response');
     }
-    final posts = <Post>[];
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      if (item is Map<String, dynamic>) {
-        try {
-          posts.add(Post.fromJson(item, fallbackId: 'me-$i'));
-        } catch (error, stackTrace) {
-          debugPrint('[ApiClient] Skipping malformed post: $error\n$stackTrace');
-        }
+
+    final rawItems = decoded['items'];
+    if (rawItems is! List) {
+      throw ApiException('Unexpected posts response: missing items');
+    }
+
+    final items = <PostItem>[];
+    for (final entry in rawItems) {
+      if (entry is! Map<String, dynamic>) {
+        debugPrint('[ApiClient] Ignoring non-map post item: ${entry.runtimeType}');
+        continue;
+      }
+      try {
+        items.add(PostItem.fromJson(entry));
+      } catch (error, stackTrace) {
+        debugPrint('[ApiClient] Skipping malformed post item: $error\n$stackTrace');
       }
     }
-    return posts;
+
+    if (items.isEmpty) {
+      debugPrint('[ApiClient] getMyPosts empty items payload=${response.body}');
+    }
+
+    final nextCursorRaw = decoded['nextCursor'];
+    String? nextCursor;
+    if (nextCursorRaw is String && nextCursorRaw.trim().isNotEmpty) {
+      nextCursor = nextCursorRaw;
+    } else if (nextCursorRaw != null && nextCursorRaw is! String) {
+      debugPrint('[ApiClient] Unexpected nextCursor type: ${nextCursorRaw.runtimeType}');
+    }
+
+    debugPrint(
+      '[ApiClient] getMyPosts items=${items.length} nextCursor=${nextCursor ?? 'null'}',
+    );
+    return PostsPage(items: items, nextCursor: nextCursor);
   }
 
-  Future<Map<String, String>> _jsonHeaders([Map<String, String>? headers]) async {
-    final resolved = await _composeHeaders(headers);
+  Future<Map<String, String>> _jsonHeaders({
+    Map<String, String>? headers,
+    bool forceRefreshAuth = false,
+  }) async {
+    final resolved = await _composeHeaders(
+      headers,
+      forceRefreshAuth: forceRefreshAuth,
+    );
     resolved.putIfAbsent(HttpHeaders.contentTypeHeader, () => 'application/json');
     return resolved;
   }
 
   Future<Map<String, String>> _composeHeaders(
-    Map<String, String>? headers,
-  ) async {
+    Map<String, String>? headers, {
+    bool forceRefreshAuth = false,
+  }) async {
     final resolved = <String, String>{};
     if (headers != null) {
       resolved.addAll(headers);
     }
-    final authorization = await _authorizationHeader();
+    final authorization = await _authorizationHeader(forceRefreshAuth: forceRefreshAuth);
     if (authorization != null) {
       resolved.putIfAbsent(HttpHeaders.authorizationHeader, () => authorization);
     }
     return resolved;
   }
 
-  Future<String?> _authorizationHeader() async {
+  Future<String?> _authorizationHeader({bool forceRefreshAuth = false}) async {
     if (kAuthBypassEnabled) {
       return null;
     }
@@ -373,7 +507,7 @@ class ApiClient {
     if (service == null) {
       return null;
     }
-    final token = await service.fetchAuthToken();
+    final token = await service.fetchAuthToken(forceRefresh: forceRefreshAuth);
     if (token == null || token.isEmpty) {
       return null;
     }
@@ -400,20 +534,4 @@ class ApiClient {
     return null;
   }
 
-  List<dynamic>? _extractItemsList(dynamic payload) {
-    if (payload is List) {
-      return payload;
-    }
-    if (payload is Map<String, dynamic>) {
-      final items = payload['items'];
-      if (items is List) {
-        return List<dynamic>.from(items);
-      }
-      final data = payload['data'];
-      if (data is List) {
-        return List<dynamic>.from(data);
-      }
-    }
-    return null;
-  }
 }

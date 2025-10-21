@@ -29,6 +29,10 @@ class _NativeProxyEvent {
     this.durationMs,
     this.width,
     this.height,
+    this.displayWidth,
+    this.displayHeight,
+    this.rotation,
+    this.sourceRotation,
     this.hasAudio,
     this.totalSegments,
     this.totalDurationMs,
@@ -58,6 +62,10 @@ class _NativeProxyEvent {
   final int? durationMs;
   final int? width;
   final int? height;
+  final int? displayWidth;
+  final int? displayHeight;
+  final int? rotation;
+  final int? sourceRotation;
   final bool? hasAudio;
   final int? totalSegments;
   final int? totalDurationMs;
@@ -93,6 +101,10 @@ class _NativeProxyEvent {
     final durationMs = (map['durationMs'] as num?)?.toInt();
     final width = (map['width'] as num?)?.toInt();
     final height = (map['height'] as num?)?.toInt();
+    final displayWidth = (map['displayWidth'] as num?)?.toInt();
+    final displayHeight = (map['displayHeight'] as num?)?.toInt();
+    final rotation = (map['rotation'] as num?)?.toInt();
+    final sourceRotation = (map['sourceRotation'] as num?)?.toInt();
     final hasAudio = map['hasAudio'] == true;
     final totalSegments = (map['totalSegments'] as num?)?.toInt();
     final totalDurationMs = (map['totalDurationMs'] as num?)?.toInt();
@@ -153,6 +165,10 @@ class _NativeProxyEvent {
       durationMs: durationMs,
       width: width,
       height: height,
+      displayWidth: displayWidth,
+      displayHeight: displayHeight,
+      rotation: rotation,
+      sourceRotation: sourceRotation,
       hasAudio: hasAudio,
       totalSegments: totalSegments,
       totalDurationMs: totalDurationMs,
@@ -530,10 +546,14 @@ class VideoProxyService {
         final metaFps =
             (metadataPayload['frameRate'] as num?)?.toDouble() ??
                 (metadataPayload['fps'] as num?)?.toDouble();
-        final metaWidth =
-            (metadataPayload['width'] as num?)?.toInt() ?? event.width;
-        final metaHeight =
-            (metadataPayload['height'] as num?)?.toInt() ?? event.height;
+        final metaWidth = (metadataPayload['displayWidth'] as num?)?.toInt() ??
+            (metadataPayload['width'] as num?)?.toInt() ??
+            event.displayWidth ??
+            event.width;
+        final metaHeight = (metadataPayload['displayHeight'] as num?)?.toInt() ??
+            (metadataPayload['height'] as num?)?.toInt() ??
+            event.displayHeight ??
+            event.height;
         final metaHasAudio = metadataPayload['hasAudio'] as bool?;
         final metaSourceStart =
             (metadataPayload['sourceStartMs'] as num?)?.toInt();
@@ -587,10 +607,14 @@ class VideoProxyService {
       if (event.type == 'preview_ready' || event.type == 'poster_ready') {
         final previewPath = event.previewPath ?? event.path;
         if (previewPath != null && previewPath.isNotEmpty) {
-          final previewWidth =
-              event.width ?? metadataState.width ?? request.targetWidth;
-          final previewHeight =
-              event.height ?? metadataState.height ?? request.targetHeight;
+          final previewWidth = event.displayWidth ??
+              event.width ??
+              metadataState.width ??
+              request.targetWidth;
+          final previewHeight = event.displayHeight ??
+              event.height ??
+              metadataState.height ??
+              request.targetHeight;
           final previewDuration = event.durationMs ??
               metadataState.durationMs ??
               request.estimatedDurationMs ??
@@ -786,11 +810,7 @@ class VideoProxyService {
           throw VideoProxyException(message, code: code);
         }
 
-        if (response == null) {
-          throw const VideoProxyException('Proxy response missing');
-        }
-        final responseMap =
-            Map<String, dynamic>.from(response as Map<String, dynamic>);
+        final responseMap = Map<String, dynamic>.from(response!);
         final usedFallbackFlag = responseMap['usedFallback720p'] == true;
 
         VideoProxyResolution inferResolution(int width, int height) {
@@ -836,9 +856,13 @@ class VideoProxyService {
           for (final tier in tiers) {
             final tierPath = tier['filePath']?.toString() ?? fallbackPath;
             final tierWidth =
-                (tier['width'] as num?)?.toInt() ?? fallbackMetadata.width;
+                (tier['displayWidth'] as num?)?.toInt() ??
+                    (tier['width'] as num?)?.toInt() ??
+                    fallbackMetadata.width;
             final tierHeight =
-                (tier['height'] as num?)?.toInt() ?? fallbackMetadata.height;
+                (tier['displayHeight'] as num?)?.toInt() ??
+                    (tier['height'] as num?)?.toInt() ??
+                    fallbackMetadata.height;
             final tierDuration =
                 (tier['durationMs'] as num?)?.toInt() ??
                     fallbackMetadata.durationMs;
@@ -986,6 +1010,7 @@ class VideoProxyService {
                 responseMap['matchesSourceAudioCodec'] == true;
           }
 
+
           if (timelineMappings.isEmpty) {
             final defaultQuality = tierResults.isNotEmpty
                 ? tierResults.first.quality
@@ -1063,16 +1088,25 @@ class VideoProxyService {
           if (path == null || path.isEmpty) {
             throw const VideoProxyException('Proxy path missing from response');
           }
-          final width =
-              (responseMap['width'] as num?)?.toInt() ?? request.targetWidth;
-          final height =
-              (responseMap['height'] as num?)?.toInt() ?? request.targetHeight;
+          final width = (responseMap['displayWidth'] as num?)?.toInt() ??
+              (responseMap['width'] as num?)?.toInt() ??
+              request.targetWidth;
+          final height = (responseMap['displayHeight'] as num?)?.toInt() ??
+              (responseMap['height'] as num?)?.toInt() ??
+              request.targetHeight;
           final durationMs =
               (responseMap['durationMs'] as num?)?.toInt() ??
                   request.estimatedDurationMs ??
                   0;
           final frameRate = (responseMap['frameRate'] as num?)?.toDouble();
-          final rotationBaked = responseMap['rotationBaked'] != false;
+          final rotation =
+              (responseMap['rotation'] as num?)?.toInt() ?? 0;
+          if (rotation != 0) {
+            debugPrint(
+              '[VideoProxyService] Warning: proxy rotation=$rotation (expected 0)',
+            );
+          }
+          final rotationBaked = true;
           final metadata = buildMetadata(
             width: width,
             height: height,

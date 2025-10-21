@@ -212,9 +212,7 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         val displayWidth = profile.width
         val displayHeight = profile.height
         val rotationDegrees = readRotationDegrees(sourcePath)
-        val needsSwap = rotationDegrees % 180 != 0
-        val strategyWidth = if (needsSwap) displayHeight else displayWidth
-        val strategyHeight = if (needsSwap) displayWidth else displayHeight
+        val normalizedRotation = Math.floorMod(360 - Math.floorMod(rotationDegrees, 360), 360)
         val frameRateHint = profile.frameRate
         val keyIntervalSeconds = profile.keyframeIntervalSec
         val audioBitrateKbps = profile.audioBitrateKbps
@@ -236,7 +234,7 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
 
         val jobOutput = createOutputFile(outputDirectory)
 
-        val videoStrategy = DefaultVideoStrategy.exact(strategyWidth, strategyHeight)
+        val videoStrategy = DefaultVideoStrategy.exact(displayWidth, displayHeight)
             .bitRate(profile.videoBitrate)
             .frameRate(profile.frameRate)
             .keyFrameInterval(keyIntervalSeconds)
@@ -270,6 +268,7 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                         result = result,
                         outputFile = jobOutput,
                         frameRateHint = frameRateHint,
+                        sourceRotation = rotationDegrees,
                         fallback = isFallback,
                         tier = tier,
                         enableLogging = enableLogging,
@@ -281,7 +280,6 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                         .setAudioTrackStrategy(audioStrategy)
                         .setListener(listener)
                         .setListenerHandler(mainHandler)
-                        .setVideoRotation(rotationDegrees)
 
                     val future = Transcoder.getInstance().transcode(optionsBuilder.build())
 
@@ -299,7 +297,8 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                             TAG,
                             "Starting proxy job=$jobId source=$sourcePath " +
                                 "target=${displayWidth}x$displayHeight tier=${tier.name} " +
-                                "fallback=$isFallback audioPassthrough=$audioPassthrough",
+                                "fallback=$isFallback audioPassthrough=$audioPassthrough " +
+                                "sourceRotation=$rotationDegrees rotationCorrection=$normalizedRotation",
                         )
                     }
                 } catch (error: Throwable) {
@@ -405,8 +404,11 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
     )
 
     private data class ProxyMetadata(
-        val width: Int,
-        val height: Int,
+        val pixelWidth: Int,
+        val pixelHeight: Int,
+        val displayWidth: Int,
+        val displayHeight: Int,
+        val rotation: Int,
         val durationMs: Long,
         val frameRate: Double,
     )
@@ -416,6 +418,7 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         result: MethodChannel.Result,
         outputFile: File,
         frameRateHint: Int,
+        sourceRotation: Int,
         fallback: Boolean,
         tier: PreviewTier,
         enableLogging: Boolean,
@@ -434,8 +437,13 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                         val payload = mapOf(
                             "ok" to true,
                             "proxyPath" to outputFile.absolutePath,
-                            "width" to metadata.width,
-                            "height" to metadata.height,
+                            "width" to metadata.displayWidth,
+                            "height" to metadata.displayHeight,
+                            "rotation" to metadata.rotation,
+                            "displayWidth" to metadata.displayWidth,
+                            "displayHeight" to metadata.displayHeight,
+                            "sourceRotation" to sourceRotation,
+                            "sourceRotationDegrees" to sourceRotation,
                             "durationMs" to metadata.durationMs,
                             "frameRate" to metadata.frameRate,
                             "rotationBaked" to true,
@@ -445,7 +453,8 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
                         if (enableLogging) {
                             Log.d(
                                 TAG,
-                                "Proxy job=$jobId completed ${metadata.width}x${metadata.height} " +
+                                    "Proxy job=$jobId completed ${metadata.displayWidth}x${metadata.displayHeight} " +
+                                    "rotation=${metadata.rotation} " +
                                     "duration=${metadata.durationMs}ms tier=${tier.name}",
                             )
                         }
@@ -520,12 +529,30 @@ class VideoProxyChannel(private val context: Context, messenger: BinaryMessenger
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, Uri.fromFile(outputFile))
-            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val pixelWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val pixelHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            if (pixelWidth <= 0 || pixelHeight <= 0) {
+                throw IllegalStateException("Proxy metadata missing frame size")
+            }
+            val rotationRaw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+            val rotation = Math.floorMod(rotationRaw ?: 0, 360)
+            val displayWidth = if (rotation % 180 == 0) pixelWidth else pixelHeight
+            val displayHeight = if (rotation % 180 == 0) pixelHeight else pixelWidth
+            if (rotation != 0) {
+                throw IllegalStateException("Proxy rotation not baked (rotation=$rotation)")
+            }
             val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
             val frameRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull()
                 ?: frameRateHint.toDouble()
-            ProxyMetadata(width, height, durationMs, frameRate)
+            ProxyMetadata(
+                pixelWidth = pixelWidth,
+                pixelHeight = pixelHeight,
+                displayWidth = displayWidth,
+                displayHeight = displayHeight,
+                rotation = rotation,
+                durationMs = durationMs,
+                frameRate = frameRate,
+            )
         } finally {
             retriever.release()
         }

@@ -5,10 +5,10 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:video_player/video_player.dart';
 
 import '../features/auth/providers/auth_state.dart';
-import '../features/feed/models/post.dart';
-import '../features/feed/ui/widgets/post_view.dart';
+import '../models/posts_page.dart';
 import '../models/profile.dart';
 import '../providers/app_providers.dart';
 import '../providers/upload_manager.dart';
@@ -24,81 +24,84 @@ class ProfilePage extends ConsumerStatefulWidget {
 
 class _ProfilePageState extends ConsumerState<ProfilePage> {
   Profile? _profile;
-  List<Post> _posts = const [];
-  bool _isLoading = true;
-  bool _hasLoaded = false;
+  List<PostItem> _items = const [];
+  String? _cursor;
+  bool _hasMore = true;
+  bool _isLoading = false;
+  bool _isInitialLoading = true;
   final Random _random = Random();
   ProviderSubscription<UploadManager>? _uploadSubscription;
+  late final ScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
+    _scrollController = ScrollController()..addListener(_onScroll);
     _uploadSubscription = ref.listenManual<UploadManager>(
       uploadManagerProvider,
       (previous, next) {
         final previousStatus = previous?.status;
         final nextStatus = next.status;
         if (previousStatus != nextStatus && nextStatus?.isFinalState == true) {
-          _refreshProfile();
+          _refreshContent();
         }
       },
       fireImmediately: false,
     );
-    _loadProfile();
+    _loadInitialData();
   }
 
   @override
   void dispose() {
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
     _uploadSubscription?.close();
     super.dispose();
   }
 
-  Future<void> _loadProfile({bool showLoader = true}) async {
+  Future<void> _loadInitialData({
+    bool resetState = true,
+    bool showLoader = true,
+  }) async {
     if (!mounted) {
       return;
     }
     setState(() {
-      if (showLoader) {
-        _isLoading = true;
+      if (resetState) {
+        _items = const [];
+        _cursor = null;
+        _hasMore = true;
+      }
+      _isLoading = true;
+      if (resetState || showLoader) {
+        _isInitialLoading = true;
       }
     });
 
     final apiClient = ref.read(apiClientProvider);
     try {
       final profile = await _fetchOrCreateProfile(apiClient);
-      final posts = await apiClient.getMyPosts();
+      final page = await apiClient.getMyPosts(limit: 30);
       if (!mounted) {
         return;
       }
+      debugPrint(
+        '[ProfilePage] Initial load items=${page.items.length} nextCursor=${page.nextCursor ?? 'null'}',
+      );
+      ref.read(uploadManagerProvider).removePendingPostsByIds(
+            page.items.map((item) => item.id),
+          );
       setState(() {
         _profile = profile;
-        _posts = posts;
+        _items = page.items;
+        _cursor = page.nextCursor;
+        _hasMore = page.hasMore;
         _isLoading = false;
-        _hasLoaded = true;
+        _isInitialLoading = false;
       });
     } on ApiException catch (error) {
-      if (error.statusCode == HttpStatus.unauthorized) {
-        await ref.read(authStateProvider.notifier).signOut();
-        if (!mounted) {
-          return;
-        }
-        context.go('/auth');
-        return;
-      }
-      if (!mounted) {
-        return;
-      }
-      if (error.statusCode != HttpStatus.notFound) {
-        _showProfileErrorSnackBar(
-          error.message.isNotEmpty
-              ? error.message
-              : 'Failed to load profile: ${error.statusCode}',
-        );
-      }
-      setState(() {
-        _isLoading = false;
-        _hasLoaded = true;
-      });
+      await _handleApiException(error);
     } catch (error) {
       if (!mounted) {
         return;
@@ -106,13 +109,83 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       _showProfileErrorSnackBar('Failed to load profile: $error');
       setState(() {
         _isLoading = false;
-        _hasLoaded = true;
+        _isInitialLoading = false;
       });
     }
   }
 
-  Future<void> _refreshProfile() async {
-    await _loadProfile(showLoader: false);
+  Future<void> _refreshContent() async {
+    await _loadInitialData(resetState: true, showLoader: false);
+  }
+
+  Future<void> _loadMorePosts() async {
+    if (!mounted || _isLoading || !_hasMore || (_cursor ?? '').isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    final apiClient = ref.read(apiClientProvider);
+    try {
+      final page = await apiClient.getMyPosts(limit: 30, cursor: _cursor);
+      if (!mounted) {
+        return;
+      }
+      debugPrint(
+        '[ProfilePage] Load more received ${page.items.length} items nextCursor=${page.nextCursor ?? 'null'}',
+      );
+      ref.read(uploadManagerProvider).removePendingPostsByIds(
+            page.items.map((item) => item.id),
+          );
+      setState(() {
+        final updated = List<PostItem>.of(_items)..addAll(page.items);
+        _items = updated;
+        _cursor = page.nextCursor;
+        _hasMore = page.hasMore;
+        _isLoading = false;
+      });
+    } on ApiException catch (error) {
+      await _handleApiException(error, isLoadMore: true);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showProfileErrorSnackBar('Failed to load posts: $error');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _handleApiException(
+    ApiException error, {
+    bool isLoadMore = false,
+  }) async {
+    if (error.statusCode == HttpStatus.unauthorized) {
+      await ref.read(authStateProvider.notifier).signOut();
+      if (!mounted) {
+        return;
+      }
+      context.go('/auth');
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    if (error.statusCode != HttpStatus.notFound) {
+      final message = error.message.isNotEmpty
+          ? error.message
+          : 'Failed to load posts: ${error.statusCode}';
+      _showProfileErrorSnackBar(message);
+    }
+    setState(() {
+      _isLoading = false;
+      if (!isLoadMore) {
+        _isInitialLoading = false;
+      }
+    });
   }
 
   Future<Profile> _fetchOrCreateProfile(ApiClient apiClient) async {
@@ -157,19 +230,53 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           action: SnackBarAction(
             label: 'Retry',
             onPressed: () {
-              _loadProfile();
+              _loadInitialData();
             },
-              ),
-            ),
-          );
+          ),
+        ),
+      );
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients || _isLoading || !_hasMore) {
+      return;
+    }
+    final position = _scrollController.position;
+    if (!position.hasPixels || position.maxScrollExtent <= 0) {
+      return;
+    }
+    final threshold = position.maxScrollExtent * 0.8;
+    if (position.pixels >= threshold) {
+      _loadMorePosts();
+    }
+  }
+
+  Future<void> _onRefresh() async {
+    await _loadInitialData(resetState: true, showLoader: false);
   }
 
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
-    final posts = _posts;
+    final uploadManager = ref.watch(uploadManagerProvider);
+    final pendingPosts = uploadManager.pendingPosts;
+    final seenIds = <String>{};
+    final combinedPosts = <PostItem>[];
+    for (final pending in pendingPosts) {
+      if (seenIds.add(pending.id)) {
+        combinedPosts.add(pending);
+      }
+    }
+    for (final item in _items) {
+      if (seenIds.add(item.id)) {
+        combinedPosts.add(item);
+      }
+    }
+    final posts = combinedPosts;
     final profile = _profile;
-    final isInitialLoading = _isLoading && !_hasLoaded;
+    final isInitialLoading = _isInitialLoading;
+    final isLoadMoreInProgress = !isInitialLoading && _isLoading;
+    final profileIsLoading = profile == null && isInitialLoading;
     final usernameValue = profile?.username?.trim().isNotEmpty == true
         ? profile!.username!.trim()
         : (authState.user?.username ?? '').trim();
@@ -179,16 +286,17 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     return Scaffold(
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: _refreshProfile,
+          onRefresh: _onRefresh,
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
+            controller: _scrollController,
             slivers: [
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
                   child: _ProfileDetailsSection(
                     profile: profile,
-                    isLoading: _isLoading,
+                    isLoading: profileIsLoading,
                     onEditProfile: _handleEditProfile,
                     onSignOut: _signOut,
                     usernameLabel: usernameLabel,
@@ -225,7 +333,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                       (context, index) {
                         final post = posts[index];
                         return _PostGridTile(
-                          post: post,
+                          item: post,
                           onTap: () => _openPost(post),
                         );
                       },
@@ -237,6 +345,19 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                       crossAxisSpacing: 6,
                       mainAxisSpacing: 6,
                       childAspectRatio: 1,
+                    ),
+                  ),
+                ),
+              if (isLoadMoreInProgress && posts.isNotEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: SizedBox(
+                        height: 32,
+                        width: 32,
+                        child: CircularProgressIndicator(strokeWidth: 2.5),
+                      ),
                     ),
                   ),
                 ),
@@ -267,10 +388,19 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     context.go('/auth');
   }
 
-  void _openPost(Post post) {
+  void _openPost(PostItem item) {
+    final playbackUrl = item.playbackUrl?.trim();
+    if (playbackUrl != null && playbackUrl.isNotEmpty) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => _ProfilePostPlaybackPage(item: item),
+        ),
+      );
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => _PostViewerPage(post: post),
+        builder: (context) => _ProfilePostViewerPage(item: item),
       ),
     );
   }
@@ -308,7 +438,8 @@ class _ProfileDetailsSection extends StatelessWidget {
               radius: 36,
               backgroundImage:
                   avatarUrl != null ? NetworkImage(avatarUrl) : null,
-              child: avatarUrl == null ? const Icon(Icons.person, size: 36) : null,
+              child:
+                  avatarUrl == null ? const Icon(Icons.person, size: 36) : null,
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -363,9 +494,7 @@ class _ProfileDetailsSection extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         Text(
-          bio?.isNotEmpty == true
-              ? bio!
-              : 'Tell the community more about you.',
+          bio?.isNotEmpty == true ? bio! : 'Tell the community more about you.',
           style: theme.textTheme.bodyMedium,
         ),
       ],
@@ -390,72 +519,102 @@ class _NoPostsView extends StatelessWidget {
 }
 
 class _PostGridTile extends StatelessWidget {
-  const _PostGridTile({required this.post, required this.onTap});
+  const _PostGridTile({required this.item, required this.onTap});
 
-  final Post post;
+  final PostItem item;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final duration = post.duration;
-    final hasThumb = post.thumbUrl != null && post.thumbUrl!.isNotEmpty;
-    final canUseMedia = !post.isVideo && post.mediaUrl.isNotEmpty;
-    final thumbnailUrl = hasThumb
-        ? post.thumbUrl!
-        : (canUseMedia ? post.mediaUrl : null);
-    return GestureDetector(
-      onTap: onTap,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (thumbnailUrl != null && thumbnailUrl.isNotEmpty)
-              CachedNetworkImage(
-                imageUrl: thumbnailUrl,
-                fit: BoxFit.cover,
-                placeholder: (context, url) => const _ShimmerTile(),
-                errorWidget: (context, url, error) => Container(
-                  color: Colors.grey.shade300,
-                  alignment: Alignment.center,
-                  child: const Icon(Icons.broken_image_outlined),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
+        final width = (constraints.maxWidth * devicePixelRatio).round();
+        final height = (constraints.maxHeight * devicePixelRatio).round();
+        final memCacheWidth = width > 0 ? width : 1;
+        final memCacheHeight = height > 0 ? height : 1;
+        final hasThumbnail = _validThumbUrl(item.thumbUrl) != null;
+        final showSpinner = !hasThumbnail;
+        final showDuration = item.durationMs > 0 && hasThumbnail;
+
+        return GestureDetector(
+          onTap: hasThumbnail ? onTap : null,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Hero(
+                  tag: 'profile_post_${item.id}',
+                  child:
+                      _buildThumbnail(memCacheWidth, memCacheHeight),
                 ),
-              )
-            else
-              Container(
-                color: Colors.grey.shade300,
-                alignment: Alignment.center,
-                child: Icon(
-                  post.isVideo ? Icons.videocam_outlined : Icons.image_outlined,
-                  color: Colors.grey.shade600,
-                ),
-              ),
-            if (duration != null)
-              Positioned(
-                right: 6,
-                bottom: 6,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(4),
+                if (showDuration)
+                  Positioned(
+                    right: 6,
+                    bottom: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        _formatDuration(item.duration),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ),
                   ),
-                  child: Text(
-                    _formatDuration(duration),
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                if (showSpinner)
+                  Container(
+                    color: Colors.black26,
+                    child: const Center(
+                      child: SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: CircularProgressIndicator(strokeWidth: 2.5),
+                      ),
+                    ),
                   ),
-                ),
-              ),
-          ],
-        ),
-      ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildThumbnail(int memCacheWidth, int memCacheHeight) {
+    final safeThumb = _validThumbUrl(item.thumbUrl);
+    if (safeThumb == null) {
+      return _placeholderTile();
+    }
+    return CachedNetworkImage(
+      imageUrl: safeThumb,
+      fit: BoxFit.cover,
+      memCacheWidth: memCacheWidth,
+      memCacheHeight: memCacheHeight,
+      placeholder: (context, url) => const _ShimmerTile(),
+      errorWidget: (context, url, error) => _placeholderTile(),
+    );
+  }
+
+  Widget _placeholderTile() {
+    return Container(
+      color: Colors.grey.shade300,
+      alignment: Alignment.center,
+      child: const Icon(Icons.videocam_outlined, color: Colors.black38),
     );
   }
 
   String _formatDuration(Duration duration) {
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds % 60;
+    final totalSeconds = duration.inSeconds;
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
     final minutesStr = minutes.toString().padLeft(2, '0');
     final secondsStr = seconds.toString().padLeft(2, '0');
     return '$minutesStr:$secondsStr';
@@ -501,7 +660,8 @@ class _ShimmerTileState extends State<_ShimmerTile>
               animation: _controller,
               builder: (context, child) {
                 final shimmerWidth = width * 0.6;
-                final dx = (width + shimmerWidth) * _controller.value - shimmerWidth;
+                final dx =
+                    (width + shimmerWidth) * _controller.value - shimmerWidth;
                 return Transform.translate(
                   offset: Offset(dx, 0),
                   child: Container(
@@ -510,7 +670,7 @@ class _ShimmerTileState extends State<_ShimmerTile>
                       gradient: LinearGradient(
                         colors: [
                           Colors.grey.shade200.withAlpha(0),
-                          Colors.grey.shade100.withAlpha(179), // ~0.7 * 255
+                          Colors.grey.shade100.withAlpha(179),
                           Colors.grey.shade200.withAlpha(0),
                         ],
                         begin: Alignment.centerLeft,
@@ -528,42 +688,231 @@ class _ShimmerTileState extends State<_ShimmerTile>
   }
 }
 
-class _PostViewerPage extends StatefulWidget {
-  const _PostViewerPage({required this.post});
+class _ProfilePostPlaybackPage extends StatefulWidget {
+  const _ProfilePostPlaybackPage({required this.item});
 
-  final Post post;
+  final PostItem item;
 
   @override
-  State<_PostViewerPage> createState() => _PostViewerPageState();
+  State<_ProfilePostPlaybackPage> createState() => _ProfilePostPlaybackPageState();
 }
 
-class _PostViewerPageState extends State<_PostViewerPage> {
+class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
+  VideoPlayerController? _controller;
+  Object? _loadError;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializePlayback();
+  }
+
+  void _initializePlayback() {
+    final playbackUrl = widget.item.playbackUrl?.trim();
+    if (playbackUrl == null || playbackUrl.isEmpty) {
+      setState(() {
+        _loadError = ArgumentError('Missing playback URL');
+      });
+      return;
+    }
+    final uri = Uri.tryParse(playbackUrl);
+    if (uri == null) {
+      setState(() {
+        _loadError = ArgumentError('Invalid playback URL');
+      });
+      return;
+    }
+
+    final controller = VideoPlayerController.networkUrl(uri);
+    _controller = controller;
+    controller.setLooping(true);
+    controller.initialize().then((_) {
+      if (!mounted || _controller != controller) {
+        return;
+      }
+      setState(() {});
+      controller.play();
+    }).catchError((Object error) {
+      if (!mounted || _controller != controller) {
+        return;
+      }
+      setState(() {
+        _loadError = error;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  void _togglePlayback() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+    if (controller.value.isPlaying) {
+      controller.pause();
+    } else {
+      controller.play();
+    }
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: PostView(
-              post: widget.post,
-              onProfileTap: () {},
-              onCommentsTap: () {},
-              initiallyActive: true,
+    final controller = _controller;
+    final hasError = _loadError != null;
+    final isInitialized = controller != null && controller.value.isInitialized;
+    final safeThumb = _validThumbUrl(widget.item.thumbUrl);
+
+    Widget child;
+
+    if (hasError) {
+      child = _buildFallback(safeThumb);
+    } else if (isInitialized && controller != null) {
+      var aspectRatio = controller.value.aspectRatio;
+      if (!aspectRatio.isFinite || aspectRatio <= 0) {
+        aspectRatio = widget.item.aspectRatio;
+      }
+      if (!aspectRatio.isFinite || aspectRatio <= 0) {
+        aspectRatio = 1;
+      }
+      child = GestureDetector(
+        onTap: _togglePlayback,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            AspectRatio(
+              aspectRatio: aspectRatio,
+              child: VideoPlayer(controller),
             ),
-          ),
-          SafeArea(
-            child: Align(
-              alignment: Alignment.topLeft,
-              child: IconButton(
-                color: Colors.white,
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.of(context).pop(),
+            if (!controller.value.isPlaying)
+              const Center(
+                child: Icon(
+                  Icons.play_arrow,
+                  color: Colors.white70,
+                  size: 64,
+                ),
               ),
+          ],
+        ),
+      );
+    } else {
+      child = Stack(
+        fit: StackFit.expand,
+        children: [
+          if (safeThumb != null)
+            CachedNetworkImage(
+              imageUrl: safeThumb,
+              fit: BoxFit.contain,
+              placeholder: (context, url) => const _ShimmerTile(),
+              errorWidget: (context, url, error) =>
+                  _profileFullScreenPlaceholder(),
+            )
+          else
+            _profileFullScreenPlaceholder(),
+          const Center(
+            child: SizedBox(
+              height: 48,
+              width: 48,
+              child: CircularProgressIndicator(),
             ),
           ),
         ],
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Center(
+        child: Hero(
+          tag: 'profile_post_${widget.item.id}',
+          child: child,
+        ),
       ),
     );
   }
+
+  Widget _buildFallback(String? safeThumb) {
+    if (safeThumb != null) {
+      return CachedNetworkImage(
+        imageUrl: safeThumb,
+        fit: BoxFit.contain,
+        placeholder: (context, url) => const _ShimmerTile(),
+        errorWidget: (context, url, error) => _profileFullScreenPlaceholder(),
+      );
+    }
+    return _profileFullScreenPlaceholder();
+  }
+}
+
+class _ProfilePostViewerPage extends StatelessWidget {
+  const _ProfilePostViewerPage({required this.item});
+
+  final PostItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeThumb = _validThumbUrl(item.thumbUrl);
+    final Widget heroChild = safeThumb != null
+        ? CachedNetworkImage(
+            imageUrl: safeThumb,
+            fit: BoxFit.contain,
+            placeholder: (context, url) => const _ShimmerTile(),
+            errorWidget: (context, url, error) => _profileFullScreenPlaceholder(),
+          )
+        : _profileFullScreenPlaceholder();
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Center(
+        child: Hero(
+          tag: 'profile_post_${item.id}',
+          child: heroChild,
+        ),
+      ),
+    );
+  }
+}
+
+String? _validThumbUrl(String? url) {
+  if (url == null) {
+    return null;
+  }
+  final trimmed = url.trim();
+  if (trimmed.isEmpty) {
+    return null;
+  }
+  final base = trimmed.toLowerCase().split('?').first;
+  if (base.endsWith('.m3u8')) {
+    return null;
+  }
+  return trimmed;
+}
+
+Widget _profileFullScreenPlaceholder() {
+  return Container(
+    color: Colors.black,
+    alignment: Alignment.center,
+    child: const Icon(
+      Icons.broken_image_outlined,
+      color: Colors.white70,
+      size: 48,
+    ),
+  );
 }

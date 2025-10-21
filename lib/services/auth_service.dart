@@ -367,12 +367,15 @@ class AuthService {
     await _sessionManager.clearSessionMarker();
   }
 
-  Future<String?> fetchAuthToken() async {
+  Future<String?> fetchAuthToken({bool forceRefresh = false}) async {
     if (kAuthBypassEnabled) {
       return null;
     }
     await configureIfNeeded();
     try {
+      if (forceRefresh) {
+        return await _tryFetchIdToken(forceRefresh: true);
+      }
       final token = await _tryFetchIdToken(forceRefresh: false);
       if (token != null) {
         return token;

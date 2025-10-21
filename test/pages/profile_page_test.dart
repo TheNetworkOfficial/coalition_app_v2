@@ -8,9 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:coalition_app_v2/features/auth/models/user_summary.dart';
-import 'package:coalition_app_v2/features/feed/models/post.dart';
 import 'package:coalition_app_v2/models/post_draft.dart';
 import 'package:coalition_app_v2/models/profile.dart';
+import 'package:coalition_app_v2/models/posts_page.dart';
 import 'package:coalition_app_v2/models/upload_outcome.dart';
 import 'package:coalition_app_v2/pages/profile_page.dart';
 import 'package:coalition_app_v2/providers/app_providers.dart';
@@ -31,18 +31,22 @@ void main() {
             displayName: 'Test User',
             username: 'testuser',
           ),
-          postResponses: Queue<List<Post>>.from(<List<Post>>[
-            const <Post>[],
-            const <Post>[
-              Post(
-                id: 'post-1',
-                userId: 'user-123',
-                userDisplayName: 'Test User',
-                mediaUrl: 'https://example.com/media.jpg',
-                thumbUrl: 'https://example.com/thumb.jpg',
-                isVideo: false,
-              ),
-            ],
+          postResponses: Queue<PostsPage>.from(<PostsPage>[
+            PostsPage(items: const <PostItem>[], nextCursor: null),
+            PostsPage(
+              items: [
+                PostItem(
+                  id: 'post-1',
+                  createdAt: DateTime.parse('2025-10-12T19:04:01Z'),
+                  durationMs: 1200,
+                  width: 1080,
+                  height: 1920,
+                  thumbUrl: 'https://example.com/thumb.jpg',
+                  status: 'READY',
+                ),
+              ],
+              nextCursor: null,
+            ),
           ]),
         );
         final fakeAuthService = _FakeAuthService(
@@ -90,14 +94,14 @@ void main() {
 class _FakeApiClient extends ApiClient {
   _FakeApiClient({
     required Profile initialProfile,
-    Queue<List<Post>>? postResponses,
+    Queue<PostsPage>? postResponses,
   })  : _profile = initialProfile,
-        _postResponses = postResponses ?? Queue<List<Post>>(),
+        _postResponses = postResponses ?? Queue<PostsPage>(),
         super(httpClient: _NoopHttpClient(), baseUrl: 'https://example.com');
 
   Profile _profile;
-  final Queue<List<Post>> _postResponses;
-  List<Post> _lastPosts = const <Post>[];
+  final Queue<PostsPage> _postResponses;
+  PostsPage _lastPage = PostsPage(items: const <PostItem>[], nextCursor: null);
   int _myPostsCallCount = 0;
 
   int get myPostsCallCount => _myPostsCallCount;
@@ -106,12 +110,12 @@ class _FakeApiClient extends ApiClient {
   Future<Profile> getMyProfile() async => _profile;
 
   @override
-  Future<List<Post>> getMyPosts({bool includePending = false}) async {
+  Future<PostsPage> getMyPosts({int limit = 30, String? cursor}) async {
     _myPostsCallCount += 1;
     if (_postResponses.isNotEmpty) {
-      _lastPosts = _postResponses.removeFirst();
+      _lastPage = _postResponses.removeFirst();
     }
-    return _lastPosts;
+    return _lastPage;
   }
 
   @override
@@ -159,6 +163,7 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
   String? _currentTaskId;
   UploadOutcome _outcome;
   final Queue<TaskStatus?> _statusNotifications = Queue<TaskStatus?>();
+  final List<PostItem> _pendingPosts = <PostItem>[];
 
   @override
   bool get hasActiveUpload => _hasActiveUpload;
@@ -176,6 +181,9 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
 
   @override
   String? get currentTaskId => _currentTaskId;
+
+  @override
+  List<PostItem> get pendingPosts => List<PostItem>.unmodifiable(_pendingPosts);
 
   @override
   Future<UploadOutcome> startUpload({
@@ -199,6 +207,19 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
       _currentTaskId = null;
     }
     notifyListeners();
+  }
+
+  @override
+  void removePendingPostsByIds(Iterable<String> ids) {
+    final idSet = ids.toSet();
+    if (idSet.isEmpty) {
+      return;
+    }
+    final beforeLength = _pendingPosts.length;
+    _pendingPosts.removeWhere((post) => idSet.contains(post.id));
+    if (_pendingPosts.length != beforeLength) {
+      notifyListeners();
+    }
   }
 
   @override
