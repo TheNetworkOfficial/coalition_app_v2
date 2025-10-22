@@ -42,7 +42,7 @@ class OverlayActions extends StatelessWidget {
         _ActionIcon(
           icon: Icons.message_outlined,
           onTap: onCommentsTap,
-          semanticsLabel: 'Open comments (coming soon)',
+          semanticsLabel: 'Open comments',
         ),
         const SizedBox(height: 14),
         _ActionIcon(

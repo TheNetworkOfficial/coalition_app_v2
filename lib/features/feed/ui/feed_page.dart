@@ -134,11 +134,20 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   void _handleCommentsTap(Post post) {
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.black87,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => const CommentsSheet(),
+      builder: (context) => CommentsSheet(
+        postId: post.id,
+        onProfileTap: (userId) {
+          if (userId.isEmpty) {
+            return;
+          }
+          context.push('/profile', extra: userId);
+        },
+      ),
     );
   }
 
