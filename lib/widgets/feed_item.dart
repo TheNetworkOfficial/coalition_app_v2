@@ -413,29 +413,35 @@ class _VideoContent extends StatelessWidget {
 
     return AspectRatio(
       aspectRatio: aspectRatio,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            mediaContent,
-            if (videoController != null)
-              _VideoControlsOverlay(controller: videoController),
-            if (videoController == null ||
-                videoController.value.isInitialized == false)
-              const _LoadingOverlay(),
-            if (videoController != null)
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: _VideoProgressBar(controller: videoController),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          mediaContent,
+          if (onTap != null)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: onTap,
               ),
-          ],
-        ),
+            ),
+          if (videoController != null)
+            _VideoControlsOverlay(controller: videoController),
+          if (videoController == null ||
+              videoController.value.isInitialized == false)
+            const _LoadingOverlay(),
+          if (videoController != null)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: _VideoProgressBar(controller: videoController),
+            ),
+        ],
       ),
     );
   }
 }
+
+bool _overlayVisible(VideoPlayerValue value, bool isReady) =>
+    isReady && !value.isPlaying;
 
 class _VideoControlsOverlay extends StatelessWidget {
   const _VideoControlsOverlay({required this.controller});
@@ -448,11 +454,12 @@ class _VideoControlsOverlay extends StatelessWidget {
       valueListenable: controller,
       builder: (context, value, child) {
         final isReady = value.isInitialized;
-        final isPlaying = value.isPlaying && !value.isBuffering;
+        final isVisible = _overlayVisible(value, isReady);
         return IgnorePointer(
+          ignoring: !isVisible,
           child: AnimatedOpacity(
             duration: const Duration(milliseconds: 180),
-            opacity: isReady && !isPlaying ? 1.0 : 0.0,
+            opacity: isVisible ? 1.0 : 0.0,
             child: Container(
               color: Colors.black38,
               alignment: Alignment.center,
