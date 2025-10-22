@@ -47,9 +47,8 @@ class PostViewState extends State<PostView>
   @override
   void didUpdateWidget(covariant PostView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final mediaChanged =
-        widget.post.mediaUrl != oldWidget.post.mediaUrl ||
-            widget.post.isVideo != oldWidget.post.isVideo;
+    final mediaChanged = widget.post.mediaUrl != oldWidget.post.mediaUrl ||
+        widget.post.isVideo != oldWidget.post.isVideo;
     if (mediaChanged) {
       _disposeVideo();
       _userPaused = false;
@@ -110,6 +109,8 @@ class PostViewState extends State<PostView>
     }
 
     final controller = _videoController;
+    debugPrint(
+        '[PostView] _updatePlayback: isActive=$_isActive controller=${controller != null} userPaused=$_userPaused');
     if (_isActive) {
       if (controller == null) {
         _initializeVideoIfNeeded();
@@ -120,10 +121,14 @@ class PostViewState extends State<PostView>
       }
       // Respect user intent: don't auto-play if user explicitly paused.
       if (_userPaused) {
+        debugPrint(
+            '[PostView] _updatePlayback: honoring _userPaused -> pause()');
         controller.pause();
         return;
       }
       // Auto-play when active, applying user's chosen baseline speed.
+      debugPrint(
+          '[PostView] _updatePlayback: auto-play -> play() at speed=$_userSpeed');
       controller
         ..play()
         ..setPlaybackSpeed(_userSpeed);
@@ -293,18 +298,23 @@ class PostViewState extends State<PostView>
   }
 
   Widget _buildGradientOverlay() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.black.withValues(alpha: 0.2),
-            Colors.black.withValues(alpha: 0.05),
-            Colors.black.withValues(alpha: 0.4),
-            Colors.black.withValues(alpha: 0.8),
-          ],
-          stops: const [0, 0.4, 0.7, 1],
+    // Visual-only overlay; ignore pointer events so taps fall through to
+    // the video surface beneath.
+    return IgnorePointer(
+      ignoring: true,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withValues(alpha: 0.2),
+              Colors.black.withValues(alpha: 0.05),
+              Colors.black.withValues(alpha: 0.4),
+              Colors.black.withValues(alpha: 0.8),
+            ],
+            stops: const [0, 0.4, 0.7, 1],
+          ),
         ),
       ),
     );
@@ -322,6 +332,8 @@ class PostViewState extends State<PostView>
     if (c == null || !c.value.isInitialized) {
       return;
     }
+    debugPrint(
+        '[PostView] _onSurfaceTapTogglePlayPause: wasPlaying=${c.value.isPlaying}');
     // Toggle play/pause and set user intent flag
     if (c.value.isPlaying) {
       _userPaused = true;

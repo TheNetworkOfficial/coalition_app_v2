@@ -220,6 +220,8 @@ class _FeedItemState extends State<FeedItem> {
     }
 
     final controller = _controller;
+    debugPrint(
+        '[FeedItem] _updatePlayback: isActive=${widget.isActive} controller=${controller != null} userPaused=$_userPaused');
     if (widget.isActive) {
       if (controller == null) {
         _maybeInitializeController();
@@ -229,8 +231,11 @@ class _FeedItemState extends State<FeedItem> {
         return;
       }
       if (_userPaused) {
+        debugPrint(
+            '[FeedItem] _updatePlayback: honoring _userPaused -> pause()');
         controller.pause();
       } else {
+        debugPrint('[FeedItem] _updatePlayback: auto-play -> play()');
         controller.play();
       }
       return;
@@ -261,6 +266,8 @@ class _FeedItemState extends State<FeedItem> {
     if (controller == null || !controller.value.isInitialized) {
       return;
     }
+    debugPrint(
+        '[FeedItem] _onVideoTap: wasPlaying=${controller.value.isPlaying}');
     final wasPlaying = controller.value.isPlaying;
     if (wasPlaying) {
       controller.pause();
@@ -455,8 +462,15 @@ class _VideoControlsOverlay extends StatelessWidget {
       builder: (context, value, child) {
         final isReady = value.isInitialized;
         final isVisible = _overlayVisible(value, isReady);
+        // Do not block pointer events from reaching the underlying
+        // GestureDetector. The overlay is purely visual; taps should
+        // always be handled by the video tap handler so the user can
+        // toggle playback even when the overlay is visible.
         return IgnorePointer(
-          ignoring: !isVisible,
+          // Always ignore pointers here so the overlay never intercepts
+          // hit testing. This lets the Positioned.fill GestureDetector
+          // receive taps reliably.
+          ignoring: true,
           child: AnimatedOpacity(
             duration: const Duration(milliseconds: 180),
             opacity: isVisible ? 1.0 : 0.0,
