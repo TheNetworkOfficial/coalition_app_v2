@@ -45,7 +45,7 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
     final state = ref.watch(commentsControllerProvider(widget.postId));
     final controller =
         ref.read(commentsControllerProvider(widget.postId).notifier);
-    final commentById = {
+    final Map<String, Comment> commentById = {
       for (final comment in state.items) comment.commentId: comment,
     };
 
@@ -111,7 +111,8 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
                     }
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('Failed to post comment. Please try again.'),
+                        content:
+                            Text('Failed to post comment. Please try again.'),
                       ),
                     );
                   }
@@ -207,12 +208,10 @@ class _CommentTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final textTheme = theme.textTheme;
-    final displayName =
-        comment.displayName ?? comment.username ?? 'Unknown';
+    final displayName = comment.displayName ?? comment.username ?? 'Unknown';
     final username = comment.username;
     final timeLabel = _formatTimestamp(comment.createdAt);
-    final likeColor =
-        comment.likedByMe ? theme.colorScheme.secondary : null;
+    final likeColor = comment.likedByMe ? theme.colorScheme.secondary : null;
 
     final contentPadding = EdgeInsets.only(
       left: comment.replyTo == null ? 16 : 32,
@@ -298,9 +297,7 @@ class _CommentTile extends StatelessWidget {
                 IconButton(
                   onPressed: onLike,
                   icon: Icon(
-                    comment.likedByMe
-                        ? Icons.favorite
-                        : Icons.favorite_border,
+                    comment.likedByMe ? Icons.favorite : Icons.favorite_border,
                   ),
                   color: likeColor,
                   tooltip: 'Like',
@@ -343,9 +340,7 @@ class _Composer extends StatelessWidget {
     final replyName = replyingTo?.displayName ?? replyingTo?.username;
     final replyLabel =
         replyName == null ? 'Replying' : 'Replying to $replyName';
-    final hintText = replyingTo == null
-        ? 'Add a comment…'
-        : 'Write a reply…';
+    final hintText = replyingTo == null ? 'Add a comment…' : 'Write a reply…';
 
     return Padding(
       padding: EdgeInsets.only(
@@ -430,8 +425,8 @@ String? _formatTimestamp(int timestamp) {
 
   DateTime created;
   try {
-    created =
-        DateTime.fromMillisecondsSinceEpoch(milliseconds, isUtc: true).toLocal();
+    created = DateTime.fromMillisecondsSinceEpoch(milliseconds, isUtc: true)
+        .toLocal();
   } catch (_) {
     return null;
   }

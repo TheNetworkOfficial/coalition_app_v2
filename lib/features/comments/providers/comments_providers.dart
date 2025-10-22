@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
+import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../providers/app_providers.dart';
 import '../data/comments_repository.dart';
@@ -41,24 +42,22 @@ class CommentsState {
 
 final commentsControllerProvider = StateNotifierProvider.family<
     CommentsController, CommentsState, String>((ref, postId) {
-  return CommentsController(ref.read, postId);
+  final repo = ref.read(commentsRepositoryProvider);
+  return CommentsController(repo, postId);
 });
 
 class CommentsController extends StateNotifier<CommentsState> {
-  CommentsController(this._read, this.postId)
+  CommentsController(this._repo, this.postId)
       : super(CommentsState(items: const []));
 
-  final Reader _read;
+  final CommentsRepository _repo;
   final String postId;
 
   Future<void> loadInitial() async {
-    if (state.loading) {
-      return;
-    }
+    if (state.loading) return;
     state = state.copyWith(loading: true);
     try {
-      final repo = _read(commentsRepositoryProvider);
-      final result = await repo.listComments(postId);
+      final result = await _repo.listComments(postId);
       state = CommentsState(
         items: result.items,
         cursor: result.cursor,
@@ -71,13 +70,10 @@ class CommentsController extends StateNotifier<CommentsState> {
   }
 
   Future<void> loadMore() async {
-    if (state.loading || state.cursor == null) {
-      return;
-    }
+    if (state.loading || state.cursor == null) return;
     state = state.copyWith(loading: true);
     try {
-      final repo = _read(commentsRepositoryProvider);
-      final result = await repo.listComments(postId, cursor: state.cursor);
+      final result = await _repo.listComments(postId, cursor: state.cursor);
       state = state.copyWith(
         items: [...state.items, ...result.items],
         cursor: result.cursor,
@@ -90,8 +86,7 @@ class CommentsController extends StateNotifier<CommentsState> {
   }
 
   Future<void> addComment(String text, {String? replyTo}) async {
-    final repo = _read(commentsRepositoryProvider);
-    final created = await repo.createComment(
+    final created = await _repo.createComment(
       postId,
       text: text,
       replyTo: replyTo,
@@ -101,9 +96,7 @@ class CommentsController extends StateNotifier<CommentsState> {
 
   Future<void> toggleLike(String commentId) async {
     final index = state.items.indexWhere((c) => c.commentId == commentId);
-    if (index < 0) {
-      return;
-    }
+    if (index < 0) return;
 
     final current = state.items[index];
     final optimistic = current.copyWith(
@@ -114,8 +107,7 @@ class CommentsController extends StateNotifier<CommentsState> {
     state = state.copyWith(items: optimisticItems);
 
     try {
-      final repo = _read(commentsRepositoryProvider);
-      final liked = await repo.toggleLike(commentId);
+      final liked = await _repo.toggleLike(commentId);
       final targetIndex =
           state.items.indexWhere((item) => item.commentId == commentId);
       if (targetIndex >= 0) {

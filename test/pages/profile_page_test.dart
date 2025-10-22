@@ -17,6 +17,7 @@ import 'package:coalition_app_v2/providers/app_providers.dart';
 import 'package:coalition_app_v2/providers/upload_manager.dart';
 import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/services/auth_service.dart';
+import 'package:coalition_app_v2/services/upload_service.dart';
 
 import '../test_http_overrides.dart';
 
@@ -184,6 +185,22 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
 
   @override
   List<PostItem> get pendingPosts => List<PostItem>.unmodifiable(_pendingPosts);
+
+  // The real UploadManager exposes some additional getters related to video processing.
+  @override
+  VideoProcessingUpdate? get processingStatus => null;
+
+  @override
+  bool get showProcessingSpinner => false;
+
+  @override
+  bool get processingSucceeded => false;
+
+  @override
+  bool get processingFailed => false;
+
+  @override
+  String? get processingMessage => null;
 
   @override
   Future<UploadOutcome> startUpload({
