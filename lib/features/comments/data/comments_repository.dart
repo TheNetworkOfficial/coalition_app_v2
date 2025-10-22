@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../../debug/logging.dart';
 import '../../../services/api_client.dart';
 import '../models/comment.dart';
 
@@ -67,12 +68,30 @@ class CommentsRepository {
       payload['replyTo'] = replyTo;
     }
 
+    logDebug(
+      'COMMENTS',
+      'createComment request',
+      extra: <String, Object?>{
+        'postId': trimmedId,
+        'textLength': text.length,
+        if (replyTo != null && replyTo.isNotEmpty) 'replyTo': replyTo,
+      },
+    );
+
     final response = await _apiClient.postJson(
       '/api/posts/${Uri.encodeComponent(trimmedId)}/comments',
       body: payload,
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      logDebug(
+        'COMMENTS',
+        'createComment failed',
+        extra: <String, Object?>{
+          'status': response.statusCode,
+          'body': response.body,
+        },
+      );
       throw Exception('Failed to create comment: ${response.statusCode}');
     }
 
@@ -86,7 +105,13 @@ class CommentsRepository {
       throw Exception('Missing comment payload');
     }
 
-    return Comment.fromJson(item);
+    final comment = Comment.fromJson(item);
+    logDebug(
+      'COMMENTS',
+      'createComment success',
+      extra: <String, Object?>{'commentId': comment.commentId},
+    );
+    return comment;
   }
 
   Future<bool> toggleLike(String commentId) async {
