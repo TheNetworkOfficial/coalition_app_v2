@@ -86,12 +86,36 @@ class ApiClient {
   Future<http.Response> get(
     String path, {
     Map<String, String>? headers,
+    Map<String, String>? queryParameters,
   }) async {
-    final uri = _resolve(path);
+    final baseUri = _resolve(path);
+    final uri = queryParameters == null || queryParameters.isEmpty
+        ? baseUri
+        : baseUri.replace(
+            queryParameters: {
+              if (baseUri.hasQuery) ...baseUri.queryParameters,
+              ...queryParameters,
+            },
+          );
     final resolvedHeaders = await _composeHeaders(headers);
     return _httpClient.get(
       uri,
       headers: resolvedHeaders.isEmpty ? null : resolvedHeaders,
+    );
+  }
+
+  Future<http.Response> postJson(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, String>? headers,
+  }) async {
+    final uri = _resolve(path);
+    final resolvedHeaders = await _jsonHeaders(headers: headers);
+    final payload = jsonEncode(body ?? const <String, dynamic>{});
+    return _httpClient.post(
+      uri,
+      headers: resolvedHeaders,
+      body: payload,
     );
   }
 
