@@ -185,6 +185,7 @@ class PostViewState extends State<PostView>
                     child: ExpandableDescription(
                       displayName: widget.post.userDisplayName,
                       description: widget.post.description,
+                      onDisplayNameTap: widget.onProfileTap,
                     ),
                   ),
                 ),

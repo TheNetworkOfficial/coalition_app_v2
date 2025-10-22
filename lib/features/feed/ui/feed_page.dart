@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../models/post.dart';
 import '../providers/feed_providers.dart';
@@ -123,10 +124,11 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   void _handleProfileTap(Post post) {
-    Navigator.of(context).pushNamed(
-      '/profile',
-      arguments: post.userId ?? post.id,
-    );
+    final target = post.userId;
+    if (target == null || target.isEmpty) {
+      return;
+    }
+    context.push('/profile', extra: target);
   }
 
   void _handleCommentsTap(Post post) {
