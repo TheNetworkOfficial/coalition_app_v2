@@ -16,7 +16,9 @@ import '../services/api_client.dart';
 import 'edit_profile_page.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
-  const ProfilePage({super.key});
+  const ProfilePage({super.key, this.targetUserId});
+
+  final String? targetUserId;
 
   @override
   ConsumerState<ProfilePage> createState() => _ProfilePageState();
@@ -32,6 +34,17 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   final Random _random = Random();
   ProviderSubscription<UploadManager>? _uploadSubscription;
   late final ScrollController _scrollController;
+
+  String? get _resolvedTargetUserId {
+    final raw = widget.targetUserId;
+    if (raw == null) {
+      return null;
+    }
+    final trimmed = raw.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  bool get _isViewingSelf => _resolvedTargetUserId == null;
 
   @override
   void initState() {
@@ -80,18 +93,43 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     });
 
     final apiClient = ref.read(apiClientProvider);
+    final targetUserId = _resolvedTargetUserId;
     try {
-      final profile = await _fetchOrCreateProfile(apiClient);
-      final page = await apiClient.getMyPosts(limit: 30);
+      if (_isViewingSelf) {
+        final profile = await _fetchOrCreateProfile(apiClient);
+        final page = await apiClient.getMyPosts(limit: 30);
+        if (!mounted) {
+          return;
+        }
+        debugPrint(
+          '[ProfilePage] Initial load items=${page.items.length} nextCursor=${page.nextCursor ?? 'null'}',
+        );
+        ref.read(uploadManagerProvider).removePendingPostsByIds(
+              page.items.map((item) => item.id),
+            );
+        setState(() {
+          _profile = profile;
+          _items = page.items;
+          _cursor = page.nextCursor;
+          _hasMore = page.hasMore;
+          _isLoading = false;
+          _isInitialLoading = false;
+        });
+        return;
+      }
+
+      if (targetUserId == null) {
+        return;
+      }
+
+      final profile = await apiClient.getProfile(targetUserId);
+      final page = await apiClient.getUserPosts(targetUserId, limit: 30);
       if (!mounted) {
         return;
       }
       debugPrint(
-        '[ProfilePage] Initial load items=${page.items.length} nextCursor=${page.nextCursor ?? 'null'}',
+        '[ProfilePage] Initial load (user=$targetUserId) items=${page.items.length} nextCursor=${page.nextCursor ?? 'null'}',
       );
-      ref.read(uploadManagerProvider).removePendingPostsByIds(
-            page.items.map((item) => item.id),
-          );
       setState(() {
         _profile = profile;
         _items = page.items;
@@ -128,17 +166,22 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     });
 
     final apiClient = ref.read(apiClientProvider);
+    final targetUserId = _resolvedTargetUserId;
     try {
-      final page = await apiClient.getMyPosts(limit: 30, cursor: _cursor);
+      final page = _isViewingSelf
+          ? await apiClient.getMyPosts(limit: 30, cursor: _cursor)
+          : await apiClient.getUserPosts(targetUserId!, limit: 30, cursor: _cursor);
       if (!mounted) {
         return;
       }
       debugPrint(
         '[ProfilePage] Load more received ${page.items.length} items nextCursor=${page.nextCursor ?? 'null'}',
       );
-      ref.read(uploadManagerProvider).removePendingPostsByIds(
-            page.items.map((item) => item.id),
-          );
+      if (_isViewingSelf) {
+        ref.read(uploadManagerProvider).removePendingPostsByIds(
+              page.items.map((item) => item.id),
+            );
+      }
       setState(() {
         final updated = List<PostItem>.of(_items)..addAll(page.items);
         _items = updated;
@@ -259,7 +302,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
     final uploadManager = ref.watch(uploadManagerProvider);
-    final pendingPosts = uploadManager.pendingPosts;
+    final pendingPosts = _isViewingSelf ? uploadManager.pendingPosts : const <PostItem>[];
     final seenIds = <String>{};
     final combinedPosts = <PostItem>[];
     for (final pending in pendingPosts) {
@@ -279,7 +322,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     final profileIsLoading = profile == null && isInitialLoading;
     final usernameValue = profile?.username?.trim().isNotEmpty == true
         ? profile!.username!.trim()
-        : (authState.user?.username ?? '').trim();
+        : (_isViewingSelf ? (authState.user?.username ?? '').trim() : '');
     final usernameLabel =
         usernameValue.isNotEmpty ? '@$usernameValue' : 'Username pending';
 
@@ -300,6 +343,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     onEditProfile: _handleEditProfile,
                     onSignOut: _signOut,
                     usernameLabel: usernameLabel,
+                    showActions: _isViewingSelf,
                   ),
                 ),
               ),
@@ -413,6 +457,7 @@ class _ProfileDetailsSection extends StatelessWidget {
     required this.onEditProfile,
     required this.onSignOut,
     required this.usernameLabel,
+    this.showActions = true,
   });
 
   final Profile? profile;
@@ -420,6 +465,7 @@ class _ProfileDetailsSection extends StatelessWidget {
   final VoidCallback onEditProfile;
   final VoidCallback onSignOut;
   final String usernameLabel;
+  final bool showActions;
 
   @override
   Widget build(BuildContext context) {
@@ -459,37 +505,40 @@ class _ProfileDetailsSection extends StatelessWidget {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  TextButton.icon(
-                    onPressed: isLoading ? null : onEditProfile,
-                    icon: const Icon(Icons.edit_outlined),
-                    label: const Text('Edit profile'),
-                  ),
+                  if (showActions) ...[
+                    const SizedBox(height: 12),
+                    TextButton.icon(
+                      onPressed: isLoading ? null : onEditProfile,
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('Edit profile'),
+                    ),
+                  ],
                 ],
               ),
             ),
-            PopupMenuButton<String>(
-              onSelected: (value) {
-                switch (value) {
-                  case 'edit':
-                    onEditProfile();
-                    break;
-                  case 'signout':
-                    onSignOut();
-                    break;
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem<String>(
-                  value: 'edit',
-                  child: Text('Edit profile'),
-                ),
-                PopupMenuItem<String>(
-                  value: 'signout',
-                  child: Text('Sign out'),
-                ),
-              ],
-            ),
+            if (showActions)
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  switch (value) {
+                    case 'edit':
+                      onEditProfile();
+                      break;
+                    case 'signout':
+                      onSignOut();
+                      break;
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem<String>(
+                    value: 'edit',
+                    child: Text('Edit profile'),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'signout',
+                    child: Text('Sign out'),
+                  ),
+                ],
+              ),
           ],
         ),
         const SizedBox(height: 16),

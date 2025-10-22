@@ -354,6 +354,38 @@ class ApiClient {
     throw ApiException('Unexpected profile response format');
   }
 
+  Future<Profile> getProfile(String userId) async {
+    final trimmed = userId.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('userId must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmed);
+    final response = await get('/api/profile/$encodedId');
+    if (response.statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: response.statusCode);
+    }
+    if (response.statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Profile not found',
+        statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        'Failed to load profile: ${response.statusCode}',
+        statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    final dynamic decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    final profileMap = _extractProfileMap(decoded);
+    if (profileMap != null) {
+      return Profile.fromJson(profileMap);
+    }
+    throw ApiException('Unexpected profile response format');
+  }
+
   Future<Profile> upsertMyProfile(ProfileUpdate update) async {
     final uri = _resolve('/api/profile');
     final headers = await _jsonHeaders();
@@ -482,6 +514,120 @@ class ApiClient {
 
     debugPrint(
       '[ApiClient] getMyPosts items=${items.length} nextCursor=${nextCursor ?? 'null'}',
+    );
+    return PostsPage(items: items, nextCursor: nextCursor);
+  }
+
+  Future<PostsPage> getUserPosts(
+    String userId, {
+    int limit = 30,
+    String? cursor,
+  }) async {
+    final trimmed = userId.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('userId must not be empty');
+    }
+    final resolvedLimit = limit <= 0 ? 30 : limit;
+    final encodedId = Uri.encodeComponent(trimmed);
+    final baseUri = _resolve('/api/users/$encodedId/posts');
+    final queryParameters = <String, String>{
+      'limit': resolvedLimit.toString(),
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+    };
+    final uri = baseUri.replace(queryParameters: queryParameters);
+
+    http.Response? response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final forceRefresh = attempt == 1;
+      final headers = await _composeHeaders(
+        null,
+        forceRefreshAuth: forceRefresh,
+      );
+      response = await _httpClient.get(
+        uri,
+        headers: headers.isEmpty ? null : headers,
+      );
+
+      final statusCode = response.statusCode;
+      final isAuthError =
+          statusCode == HttpStatus.unauthorized || statusCode == HttpStatus.forbidden;
+      if (isAuthError && !forceRefresh) {
+        await _authService?.fetchAuthToken(forceRefresh: true);
+        continue;
+      }
+      debugPrint(
+        '[ApiClient] getUserPosts attempt=$attempt status=$statusCode',
+      );
+      break;
+    }
+
+    if (response == null) {
+      throw ApiException('Failed to load posts: no response');
+    }
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while loading posts',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      return PostsPage(items: const <PostItem>[], nextCursor: null);
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to load posts: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return PostsPage(items: const <PostItem>[], nextCursor: null);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected posts response');
+    }
+
+    final rawItems = decoded['items'];
+    if (rawItems is! List) {
+      throw ApiException('Unexpected posts response: missing items');
+    }
+
+    final items = <PostItem>[];
+    for (final entry in rawItems) {
+      if (entry is! Map<String, dynamic>) {
+        debugPrint('[ApiClient] Ignoring non-map post item: ${entry.runtimeType}');
+        continue;
+      }
+      try {
+        items.add(PostItem.fromJson(entry));
+      } catch (error, stackTrace) {
+        debugPrint('[ApiClient] Skipping malformed post item: $error\n$stackTrace');
+      }
+    }
+
+    if (items.isEmpty) {
+      debugPrint('[ApiClient] getUserPosts empty items payload=${response.body}');
+    }
+
+    final nextCursorRaw = decoded['nextCursor'];
+    String? nextCursor;
+    if (nextCursorRaw is String && nextCursorRaw.trim().isNotEmpty) {
+      nextCursor = nextCursorRaw;
+    } else if (nextCursorRaw != null && nextCursorRaw is! String) {
+      debugPrint('[ApiClient] Unexpected nextCursor type: ${nextCursorRaw.runtimeType}');
+    }
+
+    debugPrint(
+      '[ApiClient] getUserPosts items=${items.length} nextCursor=${nextCursor ?? 'null'}',
     );
     return PostsPage(items: items, nextCursor: nextCursor);
   }

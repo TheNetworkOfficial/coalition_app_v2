@@ -89,9 +89,12 @@ final GoRouter appRouter = GoRouter(
             GoRoute(
               path: '/profile',
               name: 'profile',
-              pageBuilder: (context, state) => const NoTransitionPage(
-                child: ProfilePage(),
-              ),
+              pageBuilder: (context, state) {
+                final targetUserId = state.extra is String ? state.extra as String : null;
+                return NoTransitionPage(
+                  child: ProfilePage(targetUserId: targetUserId),
+                );
+              },
             ),
           ],
         ),

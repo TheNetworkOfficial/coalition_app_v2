@@ -7,10 +7,12 @@ class ExpandableDescription extends StatefulWidget {
     super.key,
     required this.displayName,
     this.description,
+    this.onDisplayNameTap,
   });
 
   final String displayName;
   final String? description;
+  final VoidCallback? onDisplayNameTap;
 
   @override
   State<ExpandableDescription> createState() => _ExpandableDescriptionState();
@@ -61,11 +63,15 @@ class _ExpandableDescriptionState extends State<ExpandableDescription> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          widget.displayName,
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
+        GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: widget.onDisplayNameTap,
+          child: Text(
+            widget.displayName,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
         if (_hasDescription) ...[
