@@ -35,6 +35,20 @@ class CreateUploadResult {
   final Map<String, dynamic> rawJson;
 }
 
+class StreamCheckResult {
+  const StreamCheckResult({
+    required this.ok,
+    required this.state,
+    required this.ready,
+  });
+
+  final bool ok;
+  final String state;
+  final bool ready;
+
+  bool get isFailed => state.toLowerCase() == 'failed' || state.toLowerCase() == 'error';
+}
+
 class ApiClient {
   ApiClient({
     http.Client? httpClient,
@@ -470,6 +484,74 @@ class ApiClient {
       '[ApiClient] getMyPosts items=${items.length} nextCursor=${nextCursor ?? 'null'}',
     );
     return PostsPage(items: items, nextCursor: nextCursor);
+  }
+
+  Future<StreamCheckResult> checkStreamStatus(String uid) async {
+    final trimmedUid = uid.trim();
+    if (trimmedUid.isEmpty) {
+      throw ArgumentError('uid must not be empty');
+    }
+    final uri = _resolve('/api/stream/check');
+    final headers = await _jsonHeaders();
+    final payload = jsonEncode({'uid': trimmedUid});
+    debugPrint('[ApiClient] POST $uri');
+    final response = await _httpClient.post(
+      uri,
+      headers: headers,
+      body: payload,
+    );
+    final statusCode = response.statusCode;
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Stream check failed: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (response.body.isEmpty) {
+      return const StreamCheckResult(ok: false, state: 'unknown', ready: false);
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected stream check response');
+    }
+
+    bool _asBool(dynamic value) {
+      if (value is bool) {
+        return value;
+      }
+      if (value is num) {
+        return value != 0;
+      }
+      if (value is String) {
+        final normalized = value.trim().toLowerCase();
+        if (normalized == 'true' || normalized == '1') {
+          return true;
+        }
+        if (normalized == 'false' || normalized == '0') {
+          return false;
+        }
+      }
+      return false;
+    }
+
+    String _asString(dynamic value) {
+      if (value is String) {
+        final trimmed = value.trim();
+        if (trimmed.isNotEmpty) {
+          return trimmed;
+        }
+      }
+      if (value is num) {
+        return value.toString();
+      }
+      return 'unknown';
+    }
+
+    final ok = _asBool(decoded['ok']) || statusCode == HttpStatus.ok;
+    final ready = _asBool(decoded['ready']);
+    final state = _asString(decoded['state']);
+    return StreamCheckResult(ok: ok, state: state, ready: ready);
   }
 
   Future<Map<String, String>> _jsonHeaders({

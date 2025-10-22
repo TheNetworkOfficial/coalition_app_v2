@@ -534,11 +534,12 @@ class _PostGridTile extends StatelessWidget {
         final memCacheWidth = width > 0 ? width : 1;
         final memCacheHeight = height > 0 ? height : 1;
         final hasThumbnail = _validThumbUrl(item.thumbUrl) != null;
+        final isFailed = item.status.toUpperCase() == 'FAILED';
         final showSpinner = !hasThumbnail;
         final showDuration = item.durationMs > 0 && hasThumbnail;
 
         return GestureDetector(
-          onTap: hasThumbnail ? onTap : null,
+          onTap: (!isFailed && hasThumbnail) ? onTap : null,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: Stack(
@@ -569,7 +570,7 @@ class _PostGridTile extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (showSpinner)
+                if (showSpinner && !isFailed)
                   Container(
                     color: Colors.black26,
                     child: const Center(
@@ -578,6 +579,27 @@ class _PostGridTile extends StatelessWidget {
                         height: 28,
                         child: CircularProgressIndicator(strokeWidth: 2.5),
                       ),
+                    ),
+                  ),
+                if (isFailed)
+                  Container(
+                    color: Colors.black54,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.error_outline, color: Colors.white, size: 28),
+                        SizedBox(height: 8),
+                        Text(
+                          'Video processing failed.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
               ],

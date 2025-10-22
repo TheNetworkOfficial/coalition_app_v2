@@ -247,7 +247,12 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   @override
   Widget build(BuildContext context) {
     final uploadManager = ref.watch(uploadManagerProvider);
+    final theme = Theme.of(context);
     final showUploadBar = uploadManager.hasActiveUpload;
+    final processingMessage = uploadManager.processingMessage;
+    final showProcessingBanner = processingMessage != null;
+    final showProcessingSpinner = uploadManager.showProcessingSpinner;
+    final processingSucceeded = uploadManager.processingSucceeded;
     double? indicatorValue;
     final progress = uploadManager.progress;
     if (progress != null) {
@@ -279,6 +284,54 @@ class _FeedPageState extends ConsumerState<FeedPage> {
                   )
                 : const SizedBox(
                     key: ValueKey('upload-progress-empty'),
+                    height: 0,
+                  ),
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 250),
+            child: showProcessingBanner
+                ? Container(
+                    key: const ValueKey('video-processing-banner'),
+                    width: double.infinity,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surface,
+                      border: Border(
+                        bottom: BorderSide(
+                          color: theme.dividerColor.withOpacity(0.2),
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        if (showProcessingSpinner)
+                          const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        else
+                          Icon(
+                            processingSucceeded
+                                ? Icons.check_circle_outline
+                                : Icons.error_outline,
+                            color: processingSucceeded
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.error,
+                          ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            processingMessage!,
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox(
+                    key: ValueKey('video-processing-banner-empty'),
                     height: 0,
                   ),
           ),

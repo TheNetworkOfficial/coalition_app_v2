@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
@@ -32,13 +33,19 @@ class UploadService {
   final Map<String, Future<UploadOutcome>> _finalizationInFlight = {};
   final Map<String, UploadOutcome> _finalizedOutcomes = {};
   final Map<String, Future<void>> _postReadyPolling = {};
+  final Map<String, _PostReadyPoller> _postReadyControllers = {};
+  final Map<String, PostItem> _pendingPostSnapshots = {};
+  final Map<String, String> _postMediaTypes = {};
 
   static const Duration _postReadyPollInterval = Duration(seconds: 2);
   static const Duration _postReadyPollTimeout = Duration(minutes: 2);
+  static const Duration _streamPollInitialDelay = Duration(seconds: 5);
+  static const Duration _streamPollMaxDelay = Duration(seconds: 30);
 
   VoidCallback? onFeedRefreshRequested;
   ValueChanged<PostItem>? onPendingPostCreated;
   ValueChanged<PostItem>? onPostStatusUpdated;
+  ValueChanged<VideoProcessingUpdate>? onVideoProcessingUpdate;
   String? _lastStartedTaskId;
 
   String? get lastStartedTaskId => _lastStartedTaskId;
@@ -61,6 +68,12 @@ class UploadService {
     _tusUploads.clear();
     _finalizationInFlight.clear();
     _finalizedOutcomes.clear();
+    for (final controller in _postReadyControllers.values) {
+      controller.cancel();
+    }
+    _postReadyControllers.clear();
+    _pendingPostSnapshots.clear();
+    _postMediaTypes.clear();
     _updatesController.close();
   }
 
@@ -594,6 +607,7 @@ class UploadService {
           _handleCreatePostSuccess(
             response: response,
             cfUid: cfUid,
+            type: type,
             feedRefreshCallback: feedRefreshCallback,
           );
           await _notifyFeedRefreshRequested(feedRefreshCallback);
@@ -743,10 +757,13 @@ class UploadService {
   void _handleCreatePostSuccess({
     required Map<String, dynamic> response,
     required String cfUid,
+    required String type,
     required VoidCallback? feedRefreshCallback,
   }) {
     final postId = _extractPostId(response) ?? cfUid;
     final status = _normalizeStatus(response['status']);
+    final normalizedType = type.trim().toLowerCase();
+    _postMediaTypes[postId] = normalizedType;
     PostItem placeholder;
     try {
       Map<String, dynamic>? rawPost;
@@ -785,8 +802,25 @@ class UploadService {
     }
     final shouldPoll = !placeholder.isReady || placeholder.thumbUrl == null;
     if (shouldPoll) {
+      _pendingPostSnapshots[postId] = placeholder;
+    } else {
+      _pendingPostSnapshots.remove(postId);
+      _postMediaTypes.remove(postId);
+    }
+    if (shouldPoll) {
+      final isVideo = normalizedType == 'video';
+      final streamUid = isVideo && cfUid.trim().isNotEmpty ? cfUid : null;
+      if (isVideo) {
+        _notifyVideoProcessing(
+          postId: postId,
+          mediaType: normalizedType,
+          phase: VideoProcessingPhase.processing,
+        );
+      }
       _schedulePostReadyPolling(
         postId: postId,
+        isVideo: isVideo,
+        streamUid: streamUid,
         feedRefreshCallback: feedRefreshCallback,
       );
     }
@@ -794,47 +828,175 @@ class UploadService {
 
   void _schedulePostReadyPolling({
     required String postId,
+    required bool isVideo,
+    required String? streamUid,
     required VoidCallback? feedRefreshCallback,
   }) {
     if (_postReadyPolling.containsKey(postId)) {
       return;
     }
+    final controller = _PostReadyPoller(streamUid: streamUid);
+    final existingController = _postReadyControllers.remove(postId);
+    existingController?.cancel();
+    _postReadyControllers[postId] = controller;
     final future = _pollUntilPostReady(
       postId: postId,
+      isVideo: isVideo,
+      controller: controller,
+      streamUid: streamUid,
       feedRefreshCallback: feedRefreshCallback,
     ).whenComplete(() {
       _postReadyPolling.remove(postId);
+      final removed = _postReadyControllers.remove(postId);
+      removed?.cancel();
+      _postMediaTypes.remove(postId);
     });
     _postReadyPolling[postId] = future;
   }
 
   Future<void> _pollUntilPostReady({
     required String postId,
+    required bool isVideo,
+    required _PostReadyPoller controller,
+    required String? streamUid,
     required VoidCallback? feedRefreshCallback,
   }) async {
     final deadline = DateTime.now().add(_postReadyPollTimeout);
+    final mediaType = _postMediaTypes[postId] ?? (isVideo ? 'video' : 'unknown');
     var hasTriggeredRefresh = false;
-    while (DateTime.now().isBefore(deadline)) {
+    var streamDelay = _streamPollInitialDelay;
+    var streamReady = streamUid == null;
+    var streamFailed = false;
+
+    while (!controller.isCancelled && DateTime.now().isBefore(deadline)) {
+      if (!streamReady && !streamFailed && streamUid != null) {
+        try {
+          final result = await _apiClient.checkStreamStatus(streamUid);
+          controller
+            ..lastStreamResult = result
+            ..streamReady = result.ready
+            ..streamFailed = result.isFailed;
+          streamReady = result.ready;
+          streamFailed = result.isFailed;
+        } on ApiException catch (error) {
+          if (error.statusCode != HttpStatus.notFound) {
+            debugPrint(
+              '[UploadService] stream check api error for $streamUid: ${error.message}',
+            );
+          }
+        } catch (error, stackTrace) {
+          debugPrint(
+            '[UploadService] stream check failed for $streamUid: $error\n$stackTrace',
+          );
+        }
+      }
+
+      if (controller.isCancelled) {
+        return;
+      }
+
       try {
         final snapshot = await _fetchPostSnapshot(postId);
         if (snapshot != null) {
+          _pendingPostSnapshots[postId] = snapshot;
           onPostStatusUpdated?.call(snapshot);
           final hasThumb = snapshot.thumbUrl != null;
           final readyWithThumb = snapshot.isReady && hasThumb;
+          final failed = snapshot.status.toUpperCase() == 'FAILED';
           if (readyWithThumb && !hasTriggeredRefresh) {
             await _notifyFeedRefreshRequested(feedRefreshCallback);
             hasTriggeredRefresh = true;
           }
-          if (hasThumb) {
+          if (readyWithThumb) {
+            if (isVideo) {
+              _notifyVideoProcessing(
+                postId: postId,
+                mediaType: mediaType,
+                phase: VideoProcessingPhase.ready,
+                streamState: controller.lastStreamResult?.state,
+              );
+            }
+            _pendingPostSnapshots.remove(postId);
             return;
           }
+          if (failed) {
+            if (isVideo) {
+              _notifyVideoProcessing(
+                postId: postId,
+                mediaType: mediaType,
+                phase: VideoProcessingPhase.failed,
+                streamState: controller.lastStreamResult?.state,
+              );
+            }
+            return;
+          }
+        } else if (streamFailed) {
+          if (isVideo) {
+            _notifyVideoProcessing(
+              postId: postId,
+              mediaType: mediaType,
+              phase: VideoProcessingPhase.failed,
+              streamState: controller.lastStreamResult?.state,
+            );
+          }
+          _emitPostFailure(postId);
+          return;
         }
       } catch (error, stackTrace) {
         debugPrint(
           '[UploadService] polling post $postId failed: $error\n$stackTrace',
         );
       }
-      await Future<void>.delayed(_postReadyPollInterval);
+
+      if (controller.isCancelled) {
+        return;
+      }
+
+      if (streamFailed) {
+        if (isVideo) {
+          _notifyVideoProcessing(
+            postId: postId,
+            mediaType: mediaType,
+            phase: VideoProcessingPhase.failed,
+            streamState: controller.lastStreamResult?.state,
+          );
+        }
+        _emitPostFailure(postId);
+        return;
+      }
+
+      final waitDuration = streamReady
+          ? _postReadyPollInterval
+          : streamDelay;
+      if (waitDuration > Duration.zero) {
+        await Future<void>.delayed(waitDuration);
+      }
+
+      if (!streamReady && streamDelay < _streamPollMaxDelay) {
+        final nextSeconds = math.min(
+          _streamPollMaxDelay.inSeconds,
+          math.max(
+            streamDelay.inSeconds * 2,
+            _streamPollInitialDelay.inSeconds,
+          ),
+        );
+        streamDelay = Duration(seconds: nextSeconds);
+      }
+    }
+
+    if (!controller.isCancelled) {
+      if (streamUid != null && !streamReady) {
+        if (isVideo) {
+          _notifyVideoProcessing(
+            postId: postId,
+            mediaType: mediaType,
+            phase: VideoProcessingPhase.failed,
+            streamState:
+                controller.lastStreamResult?.state ?? 'timeout',
+          );
+        }
+        _emitPostFailure(postId);
+      }
     }
   }
 
@@ -883,6 +1045,64 @@ class UploadService {
       }
     }
     return 'UNKNOWN';
+  }
+
+  PostItem _clonePostWithStatus(PostItem source, String status) {
+    return PostItem(
+      id: source.id,
+      createdAt: source.createdAt,
+      durationMs: source.durationMs,
+      width: source.width,
+      height: source.height,
+      thumbUrl: source.thumbUrl,
+      status: status,
+      playbackUrl: source.playbackUrl,
+    );
+  }
+
+  void _emitPostFailure(String postId) {
+    final existing = _pendingPostSnapshots[postId];
+    final failed = existing != null
+        ? _clonePostWithStatus(existing, 'FAILED')
+        : PostItem(
+            id: postId,
+            createdAt: DateTime.now().toUtc(),
+            durationMs: 0,
+            width: 1,
+            height: 1,
+            thumbUrl: existing?.thumbUrl,
+            status: 'FAILED',
+            playbackUrl: existing?.playbackUrl,
+          );
+    _pendingPostSnapshots[postId] = failed;
+    onPostStatusUpdated?.call(failed);
+  }
+
+  void _notifyVideoProcessing({
+    required String postId,
+    required String mediaType,
+    required VideoProcessingPhase phase,
+    String? streamState,
+  }) {
+    final callback = onVideoProcessingUpdate;
+    if (callback == null) {
+      return;
+    }
+    try {
+      callback(
+        VideoProcessingUpdate(
+          postId: postId,
+          mediaType: mediaType,
+          phase: phase,
+          streamState: streamState,
+          timestamp: DateTime.now().toUtc(),
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[UploadService] video processing callback error: $error\n$stackTrace',
+      );
+    }
   }
 
   void _emitStatus(Task task, TaskStatus status) {
@@ -1047,4 +1267,40 @@ class _TusUploadState {
   bool isUploading = false;
   bool isPaused = false;
   double lastProgress = 0.0;
+}
+
+class _PostReadyPoller {
+  _PostReadyPoller({required this.streamUid});
+
+  final String? streamUid;
+  bool _cancelled = false;
+  bool streamReady = false;
+  bool streamFailed = false;
+  StreamCheckResult? lastStreamResult;
+
+  bool get isCancelled => _cancelled;
+
+  void cancel() {
+    _cancelled = true;
+  }
+}
+
+enum VideoProcessingPhase { processing, ready, failed }
+
+class VideoProcessingUpdate {
+  const VideoProcessingUpdate({
+    required this.postId,
+    required this.mediaType,
+    required this.phase,
+    this.streamState,
+    required this.timestamp,
+  });
+
+  final String postId;
+  final String mediaType;
+  final VideoProcessingPhase phase;
+  final String? streamState;
+  final DateTime timestamp;
+
+  bool get isVideo => mediaType.toLowerCase() == 'video';
 }
