@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../debug/logging.dart';
+import '../../../../env.dart';
 import '../../../comments/models/comment.dart';
 import '../../../comments/providers/comments_providers.dart';
 import '../../../../widgets/user_avatar.dart';
@@ -26,11 +28,20 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref
+    Future.microtask(() {
+      final base = normalizedApiBaseUrl.isEmpty ? 'unset' : normalizedApiBaseUrl;
+      logDebug(
+        'COMMENTS',
+        'sheet open',
+        extra: <String, Object?>{
+          'postId': widget.postId,
+          'apiBase': base,
+        },
+      );
+      ref
           .read(commentsControllerProvider(widget.postId).notifier)
-          .loadInitial(),
-    );
+          .loadInitial();
+    });
   }
 
   @override
@@ -97,24 +108,38 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
                 onCancelReply: () => controller.setReplyingTo(null),
                 onSend: (text) async {
                   final replyTo = state.replyingTo;
+                  logDebug(
+                    'COMMENTS',
+                    'send start',
+                    extra: <String, Object?>{
+                      'postId': widget.postId,
+                      'textLength': text.length,
+                      if (replyTo != null) 'replyTo': replyTo,
+                    },
+                  );
                   try {
                     await controller.addComment(text, replyTo: replyTo);
+                    logDebug(
+                      'COMMENTS',
+                      'send success',
+                      extra: <String, Object?>{
+                        'postId': widget.postId,
+                        if (replyTo != null) 'replyTo': replyTo,
+                      },
+                    );
                     if (!mounted) {
                       return;
                     }
                     _textController.clear();
                     controller.setReplyingTo(null);
                     _focusNode.unfocus();
-                  } catch (error) {
-                    if (!mounted) {
-                      return;
-                    }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content:
-                            Text('Failed to post comment. Please try again.'),
-                      ),
+                  } catch (error, stackTrace) {
+                    logDebug(
+                      'COMMENTS',
+                      'send error: $error',
+                      extra: stackTrace.toString(),
                     );
+                    rethrow;
                   }
                 },
               ),
@@ -393,11 +418,27 @@ class _Composer extends StatelessWidget {
               const SizedBox(width: 12),
               ElevatedButton(
                 onPressed: () {
-                  final text = controller.text.trim();
-                  if (text.isEmpty) {
+                  final trimmed = controller.text.trim();
+                  logDebug(
+                    'COMMENTS',
+                    'send tapped',
+                    extra: <String, Object?>{'textLength': trimmed.length},
+                  );
+                  if (trimmed.isEmpty) {
                     return;
                   }
-                  onSend(text);
+                  onSend(trimmed).catchError((error, stackTrace) {
+                    logDebug(
+                      'COMMENTS',
+                      'send failed: $error',
+                      extra: stackTrace.toString(),
+                    );
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Failed to post comment: $error'),
+                      ),
+                    );
+                  });
                 },
                 style: ElevatedButton.styleFrom(
                   shape: const CircleBorder(),

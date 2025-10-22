@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../../../debug/logging.dart';
 import '../../../providers/app_providers.dart';
 import '../data/comments_repository.dart';
 import '../models/comment.dart';
@@ -86,12 +87,35 @@ class CommentsController extends StateNotifier<CommentsState> {
   }
 
   Future<void> addComment(String text, {String? replyTo}) async {
-    final created = await _repo.createComment(
-      postId,
-      text: text,
-      replyTo: replyTo,
+    logDebug(
+      'COMMENTS',
+      'addComment start',
+      extra: <String, Object?>{
+        'postId': postId,
+        'textLength': text.length,
+        if (replyTo != null && replyTo.isNotEmpty) 'replyTo': replyTo,
+      },
     );
-    state = state.copyWith(items: [created, ...state.items]);
+    try {
+      final created = await _repo.createComment(
+        postId,
+        text: text,
+        replyTo: replyTo,
+      );
+      state = state.copyWith(items: [created, ...state.items]);
+      logDebug(
+        'COMMENTS',
+        'addComment success',
+        extra: <String, Object?>{'commentId': created.commentId},
+      );
+    } catch (error, stackTrace) {
+      logDebug(
+        'COMMENTS',
+        'addComment failed: $error',
+        extra: stackTrace.toString(),
+      );
+      rethrow;
+    }
   }
 
   Future<void> toggleLike(String commentId) async {

@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../debug/logging.dart';
+import '../debug/logging_http_client.dart';
 import '../env.dart';
 import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
@@ -54,7 +56,7 @@ class ApiClient {
     http.Client? httpClient,
     String? baseUrl,
     AuthService? authService,
-  })  : _httpClient = httpClient ?? http.Client(),
+  })  : _httpClient = httpClient ?? _createDefaultClient(),
         _baseUrlOverride = baseUrl == null || baseUrl.isEmpty
             ? null
             : normalizeApiBaseUrl(baseUrl),
@@ -68,6 +70,7 @@ class ApiClient {
   final String? _baseUrlOverride;
   AuthService? _authService;
   int? _lastCreatePostStatusCode;
+  bool _loggedAuthHeaderPresence = false;
 
   set authService(AuthService? service) => _authService = service;
 
@@ -760,10 +763,26 @@ class ApiClient {
       return null;
     }
     final token = await service.fetchAuthToken(forceRefresh: forceRefreshAuth);
+    if (!_loggedAuthHeaderPresence) {
+      logDebug(
+        'AUTH',
+        'auth header present?',
+        extra: <String, Object?>{'present': token != null && token.isNotEmpty},
+      );
+      _loggedAuthHeaderPresence = true;
+    }
     if (token == null || token.isEmpty) {
       return null;
     }
     return 'Bearer $token';
+  }
+
+  static http.Client _createDefaultClient() {
+    final client = http.Client();
+    if (!kDebugMode) {
+      return client;
+    }
+    return LoggingClient(client);
   }
 
   Map<String, dynamic>? _extractProfileMap(dynamic payload) {
