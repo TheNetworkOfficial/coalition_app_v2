@@ -28,6 +28,11 @@ class PostViewState extends State<PostView>
   VideoPlayerController? _videoController;
   bool _isFavorite = false;
   bool _isActive = false;
+  // --- NEW: user-intent & speed coordination ---
+  bool _userPaused = false; // true if user explicitly paused via tap
+  double _userSpeed = 1.0; // baseline playback speed user expects
+  double? _holdPrevSpeed; // temporary cache used during long-press
+  bool _holdWasPaused = false; // whether video was paused before the hold
 
   @override
   bool get wantKeepAlive => true;
@@ -47,10 +52,18 @@ class PostViewState extends State<PostView>
             widget.post.isVideo != oldWidget.post.isVideo;
     if (mediaChanged) {
       _disposeVideo();
+      _userPaused = false;
+      _userSpeed = 1.0;
+      _holdPrevSpeed = null;
+      _holdWasPaused = false;
       _updatePlayback();
     }
     if (widget.post.id != oldWidget.post.id) {
       _isActive = widget.initiallyActive;
+      _userPaused = false;
+      _userSpeed = 1.0;
+      _holdPrevSpeed = null;
+      _holdWasPaused = false;
       _updatePlayback();
     }
   }
@@ -105,7 +118,15 @@ class PostViewState extends State<PostView>
       if (!controller.value.isInitialized) {
         return;
       }
-      controller.play();
+      // Respect user intent: don't auto-play if user explicitly paused.
+      if (_userPaused) {
+        controller.pause();
+        return;
+      }
+      // Auto-play when active, applying user's chosen baseline speed.
+      controller
+        ..play()
+        ..setPlaybackSpeed(_userSpeed);
       return;
     }
 
@@ -118,6 +139,9 @@ class PostViewState extends State<PostView>
         ..pause()
         ..seekTo(Duration.zero);
     }
+    // Clear transient hold-only state when deactivating
+    _holdPrevSpeed = null;
+    _holdWasPaused = false;
     _disposeVideo();
   }
 
@@ -208,12 +232,18 @@ class PostViewState extends State<PostView>
     final controller = _videoController;
     if (controller != null && controller.value.isInitialized) {
       final size = controller.value.size;
-      return FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: size.width,
-          height: size.height,
-          child: VideoPlayer(controller),
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _onSurfaceTapTogglePlayPause,
+        onLongPressStart: (_) => _onSurfaceHoldStart(),
+        onLongPressEnd: (_) => _onSurfaceHoldEnd(),
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: VideoPlayer(controller),
+          ),
         ),
       );
     }
@@ -285,5 +315,60 @@ class PostViewState extends State<PostView>
       _isActive = isActive;
     }
     _updatePlayback();
+  }
+
+  void _onSurfaceTapTogglePlayPause() {
+    final c = _videoController;
+    if (c == null || !c.value.isInitialized) {
+      return;
+    }
+    // Toggle play/pause and set user intent flag
+    if (c.value.isPlaying) {
+      _userPaused = true;
+      c.pause();
+    } else {
+      _userPaused = false;
+      c
+        ..play()
+        ..setPlaybackSpeed(_userSpeed);
+    }
+    setState(() {});
+  }
+
+  void _onSurfaceHoldStart() {
+    final c = _videoController;
+    if (c == null || !c.value.isInitialized) {
+      return;
+    }
+    _holdPrevSpeed ??= c.value.playbackSpeed;
+    _holdWasPaused = !c.value.isPlaying;
+    // During hold: ensure playing at 2.0x regardless of prior speed
+    c.play();
+    c.setPlaybackSpeed(2.0);
+    // Do NOT change _userPaused here; this is a transient hold state
+    setState(() {});
+  }
+
+  void _onSurfaceHoldEnd() {
+    final c = _videoController;
+    if (c == null || !c.value.isInitialized) {
+      return;
+    }
+    // Restore user's baseline speed and prior pause/play state
+    final targetSpeed = _holdPrevSpeed ?? _userSpeed;
+    c.setPlaybackSpeed(targetSpeed);
+    if (_holdWasPaused) {
+      c.pause();
+    } else {
+      if (!_userPaused) {
+        c.play();
+      } else {
+        c.pause();
+      }
+    }
+    // Clear transient hold flags
+    _holdPrevSpeed = null;
+    _holdWasPaused = false;
+    setState(() {});
   }
 }
