@@ -53,6 +53,18 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final nameStyle = textTheme.bodyMedium?.copyWith(
+      color: cs.onSurface,
+      fontWeight: FontWeight.w600,
+    );
+    final textStyle = textTheme.bodyMedium?.copyWith(
+      color: cs.onSurface.withOpacity(0.87),
+    );
+    final metaStyle = textTheme.bodySmall?.copyWith(
+      color: cs.onSurface.withOpacity(0.6),
+    );
     final state = ref.watch(commentsControllerProvider(widget.postId));
     final controller =
         ref.read(commentsControllerProvider(widget.postId).notifier);
@@ -68,84 +80,103 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
 
     return SafeArea(
       top: false,
-      child: DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.7,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        builder: (context, scrollController) {
-          return Column(
-            children: [
-              const SizedBox(height: 8),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).dividerColor,
-                  borderRadius: BorderRadius.circular(2),
+      child: Material(
+        color: cs.surface,
+        child: DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.7,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          builder: (context, scrollController) {
+            final rootCount =
+                state.items.where((c) => c.replyTo == null).length;
+            return Column(
+              children: [
+                const SizedBox(height: 8),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).dividerColor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Comments',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 4),
-              const Divider(height: 1),
-              Expanded(
-                child: _buildCommentsList(
-                  context,
-                  state,
-                  controller,
-                  scrollController,
-                  commentById,
+                const SizedBox(height: 12),
+                Text(
+                  'Comments',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(color: cs.onSurface, fontWeight: FontWeight.w700),
                 ),
-              ),
-              _Composer(
-                replyingTo: replyTarget,
-                controller: _textController,
-                focusNode: _focusNode,
-                onCancelReply: () => controller.setReplyingTo(null),
-                onSend: (text) async {
-                  final replyTo = state.replyingTo;
-                  logDebug(
-                    'COMMENTS',
-                    'send start',
-                    extra: <String, Object?>{
-                      'postId': widget.postId,
-                      'textLength': text.length,
-                      if (replyTo != null) 'replyTo': replyTo,
-                    },
-                  );
-                  try {
-                    await controller.addComment(text, replyTo: replyTo);
+                const SizedBox(height: 4),
+                Text(
+                  '$rootCount comments',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                const Divider(height: 1),
+                Expanded(
+                  child: _buildCommentsList(
+                    context,
+                    state,
+                    controller,
+                    scrollController,
+                    commentById,
+                    nameStyle: nameStyle,
+                    textStyle: textStyle,
+                    metaStyle: metaStyle,
+                  ),
+                ),
+                _Composer(
+                  replyingTo: replyTarget,
+                  controller: _textController,
+                  focusNode: _focusNode,
+                  onCancelReply: () => controller.setReplyingTo(null),
+                  onSend: (text) async {
+                    final replyTo = state.replyingTo;
                     logDebug(
                       'COMMENTS',
-                      'send success',
+                      'send start',
                       extra: <String, Object?>{
                         'postId': widget.postId,
+                        'textLength': text.length,
                         if (replyTo != null) 'replyTo': replyTo,
                       },
                     );
-                    if (!mounted) {
-                      return;
+                    try {
+                      await controller.addComment(text, replyTo: replyTo);
+                      logDebug(
+                        'COMMENTS',
+                        'send success',
+                        extra: <String, Object?>{
+                          'postId': widget.postId,
+                          if (replyTo != null) 'replyTo': replyTo,
+                        },
+                      );
+                      if (!mounted) {
+                        return;
+                      }
+                      _textController.clear();
+                      controller.setReplyingTo(null);
+                      _focusNode.unfocus();
+                    } catch (error, stackTrace) {
+                      logDebug(
+                        'COMMENTS',
+                        'send error: $error',
+                        extra: stackTrace.toString(),
+                      );
+                      rethrow;
                     }
-                    _textController.clear();
-                    controller.setReplyingTo(null);
-                    _focusNode.unfocus();
-                  } catch (error, stackTrace) {
-                    logDebug(
-                      'COMMENTS',
-                      'send error: $error',
-                      extra: stackTrace.toString(),
-                    );
-                    rethrow;
-                  }
-                },
-              ),
-            ],
-          );
-        },
+                  },
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -156,6 +187,7 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
     CommentsController controller,
     ScrollController scrollController,
     Map<String, Comment> commentById,
+    {TextStyle? nameStyle, TextStyle? textStyle, TextStyle? metaStyle},
   ) {
     if (state.items.isEmpty) {
       return ListView(
@@ -207,6 +239,9 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
               _focusNode.requestFocus();
             },
             onProfileTap: widget.onProfileTap,
+            nameStyle: nameStyle,
+            textStyle: textStyle,
+            metaStyle: metaStyle,
           );
         },
       ),
@@ -221,6 +256,9 @@ class _CommentTile extends StatelessWidget {
     required this.onLike,
     required this.onReply,
     required this.onProfileTap,
+    this.nameStyle,
+    this.textStyle,
+    this.metaStyle,
   });
 
   final Comment comment;
@@ -228,117 +266,101 @@ class _CommentTile extends StatelessWidget {
   final VoidCallback onLike;
   final VoidCallback onReply;
   final void Function(String userId)? onProfileTap;
+  final TextStyle? nameStyle;
+  final TextStyle? textStyle;
+  final TextStyle? metaStyle;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final textTheme = theme.textTheme;
     final displayName = comment.displayName ?? comment.username ?? 'Unknown';
     final username = comment.username;
     final timeLabel = _formatTimestamp(comment.createdAt);
-    final likeColor = comment.likedByMe ? theme.colorScheme.secondary : null;
+    final cs = theme.colorScheme;
+    final isReply = comment.replyTo != null && comment.replyTo!.isNotEmpty;
 
-    final contentPadding = EdgeInsets.only(
-      left: comment.replyTo == null ? 16 : 32,
-      right: 16,
-      top: 4,
-      bottom: 4,
-    );
-
-    return Padding(
-      padding: EdgeInsets.only(
-        left: comment.replyTo == null ? 0 : 8,
-        right: 0,
+    return ListTile(
+      contentPadding: EdgeInsets.only(
+        left: isReply ? 24 : 16,
+        right: 12,
+        top: 4,
+        bottom: 4,
       ),
-      child: ListTile(
-        contentPadding: contentPadding,
-        leading: GestureDetector(
-          onTap: comment.userId.isNotEmpty
-              ? () => onProfileTap?.call(comment.userId)
-              : null,
-          child: UserAvatar(
-            url: comment.avatarUrl,
-            size: 40,
-            backgroundColor: theme.colorScheme.surfaceVariant.withOpacity(0.2),
+      leading: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isReply)
+            Container(
+              width: 2,
+              height: 32,
+              margin: const EdgeInsets.only(left: 6, right: 8),
+              color: cs.onSurface.withOpacity(0.12),
+            ),
+          GestureDetector(
+            onTap: comment.userId.isNotEmpty
+                ? () => onProfileTap?.call(comment.userId)
+                : null,
+            child: UserAvatar(
+              url: comment.avatarUrl,
+              size: 36,
+              backgroundColor: theme.colorScheme.surfaceVariant.withOpacity(0.2),
+            ),
           ),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        ],
+      ),
+      title: GestureDetector(
+        onTap: comment.userId.isNotEmpty
+            ? () => onProfileTap?.call(comment.userId)
+            : null,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: comment.userId.isNotEmpty
-                        ? () => onProfileTap?.call(comment.userId)
-                        : null,
-                    child: Text(
-                      displayName,
-                      style: textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-                if (timeLabel != null)
-                  Text(
-                    timeLabel,
-                    style: textTheme.bodySmall?.copyWith(
-                      color: textTheme.bodySmall?.color?.withOpacity(0.7),
-                    ),
-                  ),
-              ],
-            ),
-            if (username != null && username.isNotEmpty)
-              Text(
-                '@$username',
-                style: textTheme.bodySmall?.copyWith(
-                  color: textTheme.bodySmall?.color?.withOpacity(0.7),
-                ),
-              ),
-            if (parent != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'Replying to ${parent!.displayName ?? parent!.username ?? 'comment'}',
-                  style: textTheme.bodySmall?.copyWith(
-                    color: textTheme.bodySmall?.color?.withOpacity(0.7),
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                comment.text,
-                style: textTheme.bodyMedium,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(displayName, style: nameStyle),
+                  if (username != null && username.isNotEmpty)
+                    Text('@$username', style: metaStyle),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: onLike,
-                  icon: Icon(
-                    comment.likedByMe ? Icons.favorite : Icons.favorite_border,
-                  ),
-                  color: likeColor,
-                  tooltip: 'Like',
-                ),
-                Text(
-                  '${comment.likeCount}',
-                  style: textTheme.bodySmall,
-                ),
-                TextButton(
-                  onPressed: onReply,
-                  child: const Text('Reply'),
-                ),
-              ],
-            ),
+            if (timeLabel != null) Text(timeLabel, style: metaStyle),
           ],
         ),
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (parent != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'Replying to ${parent!.displayName ?? parent!.username ?? 'comment'}',
+                style: metaStyle?.copyWith(fontStyle: FontStyle.italic),
+              ),
+            ),
+          Text(comment.text, style: textStyle),
+        ],
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: Icon(
+              comment.likedByMe ? Icons.favorite : Icons.favorite_border,
+              color: comment.likedByMe ? cs.primary : cs.onSurface,
+            ),
+            onPressed: onLike,
+            tooltip: 'Like',
+          ),
+          Text('${comment.likeCount}', style: metaStyle),
+          IconButton(
+            icon: Icon(Icons.reply, color: cs.onSurface),
+            onPressed: onReply,
+            tooltip: 'Reply',
+          ),
+        ],
       ),
     );
   }
