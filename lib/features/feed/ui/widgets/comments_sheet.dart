@@ -60,10 +60,10 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
       fontWeight: FontWeight.w600,
     );
     final textStyle = textTheme.bodyMedium?.copyWith(
-      color: cs.onSurface.withOpacity(0.87),
+      color: cs.onSurface.withValues(alpha: 0.87),
     );
     final metaStyle = textTheme.bodySmall?.copyWith(
-      color: cs.onSurface.withOpacity(0.6),
+      color: cs.onSurface.withValues(alpha: 0.6),
     );
     final state = ref.watch(commentsControllerProvider(widget.postId));
     final controller =
@@ -186,9 +186,11 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
     CommentsState state,
     CommentsController controller,
     ScrollController scrollController,
-    Map<String, Comment> commentById,
-    {TextStyle? nameStyle, TextStyle? textStyle, TextStyle? metaStyle},
-  ) {
+    Map<String, Comment> commentById, {
+    TextStyle? nameStyle,
+    TextStyle? textStyle,
+    TextStyle? metaStyle,
+  }) {
     if (state.items.isEmpty) {
       return ListView(
         controller: scrollController,
@@ -294,7 +296,7 @@ class _CommentTile extends StatelessWidget {
               width: 2,
               height: 32,
               margin: const EdgeInsets.only(left: 6, right: 8),
-              color: cs.onSurface.withOpacity(0.12),
+              color: cs.onSurface.withValues(alpha: 0.12),
             ),
           GestureDetector(
             onTap: comment.userId.isNotEmpty
@@ -303,7 +305,8 @@ class _CommentTile extends StatelessWidget {
             child: UserAvatar(
               url: comment.avatarUrl,
               size: 36,
-              backgroundColor: theme.colorScheme.surfaceVariant.withOpacity(0.2),
+              backgroundColor: theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.2),
             ),
           ),
         ],
