@@ -5,6 +5,9 @@ class Profile {
     this.username,
     this.avatarUrl,
     this.bio,
+    this.isFollowing = false,
+    this.followersCount = 0,
+    this.followingCount = 0,
   });
 
   factory Profile.fromJson(Map<String, dynamic> json) {
@@ -34,6 +37,9 @@ class Profile {
           stringValue(json['profileImageUrl']) ??
           stringValue(json['avatar']),
       bio: stringValue(json['bio']) ?? stringValue(json['about']),
+      isFollowing: (json['isFollowing'] as bool?) ?? false,
+      followersCount: (json['followersCount'] as num?)?.toInt() ?? 0,
+      followingCount: (json['followingCount'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -42,6 +48,9 @@ class Profile {
   final String? username;
   final String? avatarUrl;
   final String? bio;
+  final bool isFollowing;
+  final int followersCount;
+  final int followingCount;
 
   bool get isEmpty => userId.isEmpty && displayName == null && username == null;
 
@@ -50,6 +59,9 @@ class Profile {
     String? username,
     String? avatarUrl,
     String? bio,
+    bool? isFollowing,
+    int? followersCount,
+    int? followingCount,
   }) {
     return Profile(
       userId: userId,
@@ -57,6 +69,9 @@ class Profile {
       username: username ?? this.username,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       bio: bio ?? this.bio,
+      isFollowing: isFollowing ?? this.isFollowing,
+      followersCount: followersCount ?? this.followersCount,
+      followingCount: followingCount ?? this.followingCount,
     );
   }
 }
