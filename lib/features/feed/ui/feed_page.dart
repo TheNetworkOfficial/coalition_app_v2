@@ -135,7 +135,9 @@ class _FeedPageState extends ConsumerState<FeedPage> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.black87,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      // Opaque backdrop: no transparency
+      barrierColor: Colors.black,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),

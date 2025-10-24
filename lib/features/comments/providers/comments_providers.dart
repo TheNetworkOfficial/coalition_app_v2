@@ -102,7 +102,24 @@ class CommentsController extends StateNotifier<CommentsState> {
         text: text,
         replyTo: replyTo,
       );
-      state = state.copyWith(items: [created, ...state.items]);
+      final current = [...state.items];
+      if (created.replyTo == null || created.replyTo!.isEmpty) {
+        state = state.copyWith(items: [created, ...current]);
+      } else {
+        final parentId = created.replyTo!;
+        final parentIndex = current.indexWhere((c) => c.commentId == parentId);
+        if (parentIndex == -1) {
+          state = state.copyWith(items: [created, ...current]);
+        } else {
+          var insertAt = parentIndex + 1;
+          while (insertAt < current.length &&
+              current[insertAt].replyTo == parentId) {
+            insertAt++;
+          }
+          current.insert(insertAt, created);
+          state = state.copyWith(items: current);
+        }
+      }
       logDebug(
         'COMMENTS',
         'addComment success',
