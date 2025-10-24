@@ -90,17 +90,33 @@ class PostViewState extends State<PostView>
 
     final controller = VideoPlayerController.networkUrl(uri);
     controller.setLooping(true);
-    controller.setVolume(0);
+    // Always start audible; device hardware buttons control loudness.
+    // Do not set volume to 0 on feed.
 
     controller.initialize().then((_) {
       if (!mounted || _videoController != controller) {
         return;
       }
+      // Ensure audible after init (some platforms default to 1.0, this is explicit).
+      _ensureAudible(controller);
       setState(() {});
       _updatePlayback();
     }).catchError((_) {});
 
     _videoController = controller;
+  }
+
+  void _ensureAudible(VideoPlayerController c) {
+    try {
+      final value = c.value;
+      if (!value.isInitialized || value.volume == 0.0) {
+        c.setVolume(1.0);
+      }
+    } catch (_) {
+      try {
+        c.setVolume(1.0);
+      } catch (_) {}
+    }
   }
 
   void _updatePlayback() {
@@ -129,6 +145,8 @@ class PostViewState extends State<PostView>
       // Auto-play when active, applying user's chosen baseline speed.
       debugPrint(
           '[PostView] _updatePlayback: auto-play -> play() at speed=$_userSpeed');
+      // Safety: if some earlier code or recycled state zeroed volume, restore it.
+      _ensureAudible(controller);
       controller
         ..play()
         ..setPlaybackSpeed(_userSpeed);
