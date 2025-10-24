@@ -413,6 +413,30 @@ class ApiClient {
     throw ApiException('Unexpected profile response format');
   }
 
+  Future<Map<String, dynamic>> toggleFollow(String userId) async {
+    final trimmed = userId.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('userId must not be empty');
+    }
+    final uri = _resolve('/api/users/${Uri.encodeComponent(trimmed)}/follow');
+    final headers = await _composeHeaders({'Content-Type': 'application/json'});
+    final response = await _httpClient.post(uri, headers: headers);
+    if (response.statusCode != 200) {
+      throw Exception('Failed to toggle follow (${response.statusCode})');
+    }
+    if (response.body.isEmpty) {
+      return const <String, dynamic>{};
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map<String, dynamic>) {
+      return decoded;
+    }
+    if (decoded is Map) {
+      return Map<String, dynamic>.from(decoded);
+    }
+    throw Exception('Unexpected toggle follow response format');
+  }
+
   Future<Profile> upsertMyProfile(ProfileUpdate update) async {
     final uri = _resolve('/api/profile');
     final headers = await _jsonHeaders();

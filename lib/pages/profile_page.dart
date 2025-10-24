@@ -202,6 +202,54 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     }
   }
 
+  Future<void> onToggleFollow(String targetUserId, bool next) async {
+    if (_isViewingSelf) {
+      return;
+    }
+    final trimmedId = targetUserId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    final profile = _profile;
+    if (profile == null) {
+      return;
+    }
+
+    final previousFollowersCount = profile.followersCount;
+    final previousIsFollowing = profile.isFollowing;
+
+    setState(() {
+      final delta = next ? 1 : -1;
+      final updatedCount = max(0, previousFollowersCount + delta);
+      _profile = profile.copyWith(
+        isFollowing: next,
+        followersCount: updatedCount,
+      );
+    });
+
+    final apiClient = ref.read(apiClientProvider);
+    try {
+      await apiClient.toggleFollow(trimmedId);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        final current = _profile ?? profile;
+        if (current == null) {
+          return;
+        }
+        _profile = current.copyWith(
+          isFollowing: previousIsFollowing,
+          followersCount: previousFollowersCount,
+        );
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update follow: $error')),
+      );
+    }
+  }
+
   Future<void> _handleApiException(
     ApiException error, {
     bool isLoadMore = false,
@@ -344,6 +392,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     onSignOut: _signOut,
                     usernameLabel: usernameLabel,
                     showActions: _isViewingSelf,
+                    onToggleFollow: onToggleFollow,
                   ),
                 ),
               ),
@@ -458,6 +507,7 @@ class _ProfileDetailsSection extends StatelessWidget {
     required this.onSignOut,
     required this.usernameLabel,
     this.showActions = true,
+    this.onToggleFollow,
   });
 
   final Profile? profile;
@@ -466,6 +516,7 @@ class _ProfileDetailsSection extends StatelessWidget {
   final VoidCallback onSignOut;
   final String usernameLabel;
   final bool showActions;
+  final Future<void> Function(String targetUserId, bool next)? onToggleFollow;
 
   @override
   Widget build(BuildContext context) {
@@ -473,6 +524,8 @@ class _ProfileDetailsSection extends StatelessWidget {
     final displayName = profile?.displayName?.trim();
     final avatarUrl = profile?.avatarUrl;
     final bio = profile?.bio;
+    final profileData = profile;
+    final toggleFollow = onToggleFollow;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -513,6 +566,15 @@ class _ProfileDetailsSection extends StatelessWidget {
                       label: const Text('Edit profile'),
                     ),
                   ],
+                  if (!showActions && profileData != null && toggleFollow != null)
+                    ...[
+                      const SizedBox(height: 12),
+                      _FollowButton(
+                        targetUserId: profileData.userId,
+                        isFollowing: profileData.isFollowing,
+                        onToggle: toggleFollow,
+                      ),
+                    ],
                 ],
               ),
             ),
@@ -547,6 +609,27 @@ class _ProfileDetailsSection extends StatelessWidget {
           style: theme.textTheme.bodyMedium,
         ),
       ],
+    );
+  }
+}
+
+class _FollowButton extends StatelessWidget {
+  const _FollowButton({
+    required this.targetUserId,
+    required this.isFollowing,
+    required this.onToggle,
+  });
+
+  final String targetUserId;
+  final bool isFollowing;
+  final Future<void> Function(String targetUserId, bool next) onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final next = !isFollowing;
+    return ElevatedButton(
+      onPressed: () => onToggle(targetUserId, next),
+      child: Text(isFollowing ? 'Following' : 'Follow'),
     );
   }
 }
