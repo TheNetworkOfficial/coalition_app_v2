@@ -34,19 +34,18 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class DebugObserver extends ProviderObserver {
+final class DebugObserver extends ProviderObserver {
   const DebugObserver();
 
   @override
   void providerDidFail(
-    ProviderBase<Object?> provider,
+    ProviderObserverContext context,
     Object error,
     StackTrace stackTrace,
-    ProviderContainer container,
   ) {
     logDebug(
       'PROVIDER',
-      '[${provider.name ?? provider.runtimeType}] error: $error',
+      '[${context.provider.name ?? context.provider.runtimeType}] error: $error',
       extra: stackTrace.toString(),
     );
   }
