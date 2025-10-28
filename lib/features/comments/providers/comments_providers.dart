@@ -41,8 +41,9 @@ class CommentsState {
   }
 }
 
-final commentsControllerProvider = StateNotifierProvider.family<
-    CommentsController, CommentsState, String>((ref, postId) {
+final commentsControllerProvider =
+    StateNotifierProvider.family<CommentsController, CommentsState, String>(
+        (ref, postId) {
   final repo = ref.read(commentsRepositoryProvider);
   return CommentsController(repo, postId);
 });

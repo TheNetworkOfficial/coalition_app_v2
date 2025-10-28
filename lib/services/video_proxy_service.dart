@@ -17,7 +17,6 @@ const _kProxyProgressChannelName = 'coalition/video_proxy/progress';
 const _methodChannel = MethodChannel(_kProxyChannelName);
 const _progressChannel = EventChannel(_kProxyProgressChannelName);
 
-
 class _NativeProxyEvent {
   const _NativeProxyEvent({
     required this.jobId,
@@ -115,14 +114,12 @@ class _NativeProxyEvent {
     final orientation = map['orientation']?.toString();
     final videoCodec = map['videoCodec']?.toString();
     final audioCodec = map['audioCodec']?.toString();
-    final matchesSourceVideoCodec =
-        map.containsKey('matchesSourceVideoCodec')
-            ? map['matchesSourceVideoCodec'] == true
-            : null;
-    final matchesSourceAudioCodec =
-        map.containsKey('matchesSourceAudioCodec')
-            ? map['matchesSourceAudioCodec'] == true
-            : null;
+    final matchesSourceVideoCodec = map.containsKey('matchesSourceVideoCodec')
+        ? map['matchesSourceVideoCodec'] == true
+        : null;
+    final matchesSourceAudioCodec = map.containsKey('matchesSourceAudioCodec')
+        ? map['matchesSourceAudioCodec'] == true
+        : null;
     Map<String, dynamic>? metadataPayload;
     final metadata = map['metadata'];
     if (metadata is Map) {
@@ -420,7 +417,6 @@ class VideoProxyService {
     return dir;
   }
 
-
   Future<void> deleteProxy(String path) async {
     try {
       final file = File(path);
@@ -503,9 +499,8 @@ class VideoProxyService {
     }
 
     StreamSubscription<_NativeProxyEvent>? subscription;
-    subscription = _progressEvents
-        .where((event) => event.jobId == jobId)
-        .listen((event) {
+    subscription =
+        _progressEvents.where((event) => event.jobId == jobId).listen((event) {
       if (enableLogging) {
         debugPrint(
             '[VideoProxyService] native event for job $jobId: type=${event.type} progress=${event.progress}');
@@ -543,31 +538,32 @@ class VideoProxyService {
       final metadataPayload = event.metadataPayload;
       if (metadataPayload != null) {
         final metaDuration = (metadataPayload['durationMs'] as num?)?.toInt();
-        final metaFps =
-            (metadataPayload['frameRate'] as num?)?.toDouble() ??
-                (metadataPayload['fps'] as num?)?.toDouble();
+        final metaFps = (metadataPayload['frameRate'] as num?)?.toDouble() ??
+            (metadataPayload['fps'] as num?)?.toDouble();
         final metaWidth = (metadataPayload['displayWidth'] as num?)?.toInt() ??
             (metadataPayload['width'] as num?)?.toInt() ??
             event.displayWidth ??
             event.width;
-        final metaHeight = (metadataPayload['displayHeight'] as num?)?.toInt() ??
-            (metadataPayload['height'] as num?)?.toInt() ??
-            event.displayHeight ??
-            event.height;
+        final metaHeight =
+            (metadataPayload['displayHeight'] as num?)?.toInt() ??
+                (metadataPayload['height'] as num?)?.toInt() ??
+                event.displayHeight ??
+                event.height;
         final metaHasAudio = metadataPayload['hasAudio'] as bool?;
         final metaSourceStart =
             (metadataPayload['sourceStartMs'] as num?)?.toInt();
-        final metaSourceEnd =
-            (metadataPayload['sourceEndMs'] as num?)?.toInt();
+        final metaSourceEnd = (metadataPayload['sourceEndMs'] as num?)?.toInt();
         final metaOrientation = metadataPayload['orientation']?.toString();
         final metaVideoCodec = metadataPayload['videoCodec']?.toString();
         final metaAudioCodec = metadataPayload['audioCodec']?.toString();
-        final metaMatchesVideo = metadataPayload.containsKey('matchesSourceVideoCodec')
-            ? metadataPayload['matchesSourceVideoCodec'] == true
-            : null;
-        final metaMatchesAudio = metadataPayload.containsKey('matchesSourceAudioCodec')
-            ? metadataPayload['matchesSourceAudioCodec'] == true
-            : null;
+        final metaMatchesVideo =
+            metadataPayload.containsKey('matchesSourceVideoCodec')
+                ? metadataPayload['matchesSourceVideoCodec'] == true
+                : null;
+        final metaMatchesAudio =
+            metadataPayload.containsKey('matchesSourceAudioCodec')
+                ? metadataPayload['matchesSourceAudioCodec'] == true
+                : null;
 
         metadataState.mergeMetadata(
           width: metaWidth,
@@ -599,8 +595,7 @@ class VideoProxyService {
 
       final keyframePayload = event.keyframePayload;
       if (keyframePayload != null && keyframePayload.isNotEmpty) {
-        metadataState
-            .addKeyframes(keyframePayload.map(ProxyKeyframe.fromJson));
+        metadataState.addKeyframes(keyframePayload.map(ProxyKeyframe.fromJson));
         metadataUpdated = true;
       }
 
@@ -810,7 +805,7 @@ class VideoProxyService {
           throw VideoProxyException(message, code: code);
         }
 
-        final responseMap = Map<String, dynamic>.from(response!);
+        final responseMap = Map<String, dynamic>.from(response);
         final usedFallbackFlag = responseMap['usedFallback720p'] == true;
 
         VideoProxyResolution inferResolution(int width, int height) {
@@ -855,20 +850,16 @@ class VideoProxyService {
           final results = <ProxyTierResult>[];
           for (final tier in tiers) {
             final tierPath = tier['filePath']?.toString() ?? fallbackPath;
-            final tierWidth =
-                (tier['displayWidth'] as num?)?.toInt() ??
-                    (tier['width'] as num?)?.toInt() ??
-                    fallbackMetadata.width;
-            final tierHeight =
-                (tier['displayHeight'] as num?)?.toInt() ??
-                    (tier['height'] as num?)?.toInt() ??
-                    fallbackMetadata.height;
-            final tierDuration =
-                (tier['durationMs'] as num?)?.toInt() ??
-                    fallbackMetadata.durationMs;
-            final tierFrameRate =
-                (tier['frameRate'] as num?)?.toDouble() ??
-                    fallbackMetadata.frameRate;
+            final tierWidth = (tier['displayWidth'] as num?)?.toInt() ??
+                (tier['width'] as num?)?.toInt() ??
+                fallbackMetadata.width;
+            final tierHeight = (tier['displayHeight'] as num?)?.toInt() ??
+                (tier['height'] as num?)?.toInt() ??
+                fallbackMetadata.height;
+            final tierDuration = (tier['durationMs'] as num?)?.toInt() ??
+                fallbackMetadata.durationMs;
+            final tierFrameRate = (tier['frameRate'] as num?)?.toDouble() ??
+                fallbackMetadata.frameRate;
             final tierMetadata = buildMetadata(
               width: tierWidth,
               height: tierHeight,
@@ -924,8 +915,7 @@ class VideoProxyService {
               sourceStartMs = (json['sourceStartMs'] as num?)?.toInt();
             }
             if (json.containsKey('sourceDurationMs')) {
-              sourceDurationMs =
-                  (json['sourceDurationMs'] as num?)?.toInt();
+              sourceDurationMs = (json['sourceDurationMs'] as num?)?.toInt();
             }
             if (json.containsKey('sourceRotationDegrees')) {
               sourceRotationDegrees =
@@ -975,14 +965,12 @@ class VideoProxyService {
               final casted = mapping.map((key, dynamic value) {
                 return MapEntry(key.toString(), value);
               });
-              timelineMappings
-                  .add(VideoProxyTimelineMapping.fromJson(casted));
+              timelineMappings.add(VideoProxyTimelineMapping.fromJson(casted));
             }
           }
 
           if (responseMap['sourceStartMs'] != null) {
-            sourceStartMs =
-                (responseMap['sourceStartMs'] as num?)?.toInt();
+            sourceStartMs = (responseMap['sourceStartMs'] as num?)?.toInt();
           }
           if (responseMap['sourceDurationMs'] != null) {
             sourceDurationMs =
@@ -1010,13 +998,11 @@ class VideoProxyService {
                 responseMap['matchesSourceAudioCodec'] == true;
           }
 
-
           if (timelineMappings.isEmpty) {
             final defaultQuality = tierResults.isNotEmpty
                 ? tierResults.first.quality
                 : ProxyQuality.proxy;
-            final fallbackSourceStart =
-                sourceStartMs ?? request.sourceStartMs;
+            final fallbackSourceStart = sourceStartMs ?? request.sourceStartMs;
             final fallbackSourceDuration =
                 sourceDurationMs ?? metadata.durationMs;
             sourceStartMs ??= fallbackSourceStart;
@@ -1094,13 +1080,11 @@ class VideoProxyService {
           final height = (responseMap['displayHeight'] as num?)?.toInt() ??
               (responseMap['height'] as num?)?.toInt() ??
               request.targetHeight;
-          final durationMs =
-              (responseMap['durationMs'] as num?)?.toInt() ??
-                  request.estimatedDurationMs ??
-                  0;
+          final durationMs = (responseMap['durationMs'] as num?)?.toInt() ??
+              request.estimatedDurationMs ??
+              0;
           final frameRate = (responseMap['frameRate'] as num?)?.toDouble();
-          final rotation =
-              (responseMap['rotation'] as num?)?.toInt() ?? 0;
+          final rotation = (responseMap['rotation'] as num?)?.toInt() ?? 0;
           if (rotation != 0) {
             debugPrint(
               '[VideoProxyService] Warning: proxy rotation=$rotation (expected 0)',
@@ -1227,8 +1211,7 @@ class VideoProxyService {
               '[VideoProxyService] Failed to cancel proxy job $jobId: $error');
         }
         if (!previewCompleter.isCompleted) {
-          previewCompleter
-              .completeError(const VideoProxyCancelException());
+          previewCompleter.completeError(const VideoProxyCancelException());
         }
       },
     );

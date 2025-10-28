@@ -29,7 +29,8 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
   void initState() {
     super.initState();
     Future.microtask(() {
-      final base = normalizedApiBaseUrl.isEmpty ? 'unset' : normalizedApiBaseUrl;
+      final base =
+          normalizedApiBaseUrl.isEmpty ? 'unset' : normalizedApiBaseUrl;
       logDebug(
         'COMMENTS',
         'sheet open',
@@ -104,10 +105,8 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
                 const SizedBox(height: 12),
                 Text(
                   'Comments',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.copyWith(color: cs.onSurface, fontWeight: FontWeight.w700),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: cs.onSurface, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 4),
                 Text(

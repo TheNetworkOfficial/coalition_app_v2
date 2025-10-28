@@ -180,7 +180,6 @@ class _EditMediaPageState extends State<EditMediaPage> {
     super.dispose();
   }
 
-
   Future<void> _initOriginalPreview() async {
     final path = widget.media.originalFilePath;
     if (path.isEmpty) {

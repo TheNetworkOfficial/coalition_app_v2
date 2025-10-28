@@ -139,7 +139,8 @@ class AuthService {
       if (marker == null || marker.isEmpty) {
         return null;
       }
-      return UserSummary(userId: marker, username: marker, displayName: 'Developer');
+      return UserSummary(
+          userId: marker, username: marker, displayName: 'Developer');
     }
 
     await configureIfNeeded();
@@ -185,7 +186,8 @@ class AuthService {
       debugPrint('[AuthService] Google sign-in failed: $error\n$stackTrace');
       throw _mapAuthException(error);
     } catch (error, stackTrace) {
-      debugPrint('[AuthService] Google sign-in unexpected error: $error\n$stackTrace');
+      debugPrint(
+          '[AuthService] Google sign-in unexpected error: $error\n$stackTrace');
       throw AuthFlowException(
         'Google sign-in failed. Please try again in a moment.',
         cause: error,
@@ -239,7 +241,8 @@ class AuthService {
           deliveryDestination: destination,
         );
       }
-      final fallbackDestination = result.nextStep.codeDeliveryDetails?.destination;
+      final fallbackDestination =
+          result.nextStep.codeDeliveryDetails?.destination;
       return SignUpFlowResult(
         isComplete: result.isSignUpComplete,
         nextStep: 'none',
@@ -303,7 +306,8 @@ class AuthService {
         password: password,
       );
       if (!result.isSignedIn) {
-        throw AuthFlowException('Sign-in not completed. Please follow the next steps.');
+        throw AuthFlowException(
+            'Sign-in not completed. Please follow the next steps.');
       }
     } on AuthException catch (error, stackTrace) {
       debugPrint('[AuthService] signInEmail failed: $error\n$stackTrace');
@@ -415,7 +419,8 @@ class AuthService {
         cause: error,
       );
     }
-    if (error is AuthNotAuthorizedException || error is InvalidPasswordException) {
+    if (error is AuthNotAuthorizedException ||
+        error is InvalidPasswordException) {
       return AuthFlowException(
         'Incorrect username or password. Please try again.',
         cause: error,

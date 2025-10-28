@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 class Profile {
   Profile({
     required this.userId,
@@ -8,7 +10,10 @@ class Profile {
     this.isFollowing = false,
     this.followersCount = 0,
     this.followingCount = 0,
-  });
+    this.candidateAccessStatus = 'none',
+    List<String>? roles,
+    this.isAdmin = false,
+  }) : roles = _normalizeProfileRoles(roles);
 
   factory Profile.fromJson(Map<String, dynamic> json) {
     String? stringValue(dynamic value) {
@@ -22,7 +27,14 @@ class Profile {
       return null;
     }
 
-    return Profile(
+    final rawRoles = json['roles'];
+    final rawIsAdmin = json['isAdmin'];
+    debugPrint(
+      '[Profile][TEMP] raw roles type=${rawRoles.runtimeType} value=$rawRoles | isAdmin raw=$rawIsAdmin',
+    );
+    final parsedRoles = _parseRoles(rawRoles);
+
+    final profile = Profile(
       userId: stringValue(json['userId']) ??
           stringValue(json['id']) ??
           stringValue(json['sub']) ??
@@ -40,7 +52,17 @@ class Profile {
       isFollowing: (json['isFollowing'] as bool?) ?? false,
       followersCount: (json['followersCount'] as num?)?.toInt() ?? 0,
       followingCount: (json['followingCount'] as num?)?.toInt() ?? 0,
+      candidateAccessStatus:
+          stringValue(json['candidateAccessStatus'])?.toLowerCase() ?? 'none',
+      roles: parsedRoles,
+      isAdmin: (rawIsAdmin as bool?) ?? false,
     );
+
+    debugPrint(
+      '[Profile][TEMP] normalized roles len=${profile.roles.length} roles=${profile.roles}',
+    );
+
+    return profile;
   }
 
   final String userId;
@@ -51,6 +73,14 @@ class Profile {
   final bool isFollowing;
   final int followersCount;
   final int followingCount;
+  /// 'approved' | 'pending' | 'none' (default)
+  final String candidateAccessStatus;
+  /// Normalized roles returned by the server.
+  final List<String> roles;
+  /// Explicit admin flag from the API response.
+  final bool isAdmin;
+
+  bool get hasAdminAccess => isAdmin || roles.contains('admin');
 
   bool get isEmpty => userId.isEmpty && displayName == null && username == null;
 
@@ -62,6 +92,9 @@ class Profile {
     bool? isFollowing,
     int? followersCount,
     int? followingCount,
+    String? candidateAccessStatus,
+    List<String>? roles,
+    bool? isAdmin,
   }) {
     return Profile(
       userId: userId,
@@ -72,8 +105,44 @@ class Profile {
       isFollowing: isFollowing ?? this.isFollowing,
       followersCount: followersCount ?? this.followersCount,
       followingCount: followingCount ?? this.followingCount,
+      candidateAccessStatus:
+          candidateAccessStatus ?? this.candidateAccessStatus,
+      roles: roles ?? this.roles,
+      isAdmin: isAdmin ?? this.isAdmin,
     );
   }
+}
+
+List<String> _normalizeProfileRoles(List<String>? roles) {
+  if (roles == null || roles.isEmpty) {
+    return const <String>[];
+  }
+  final normalized = <String>{};
+  for (final entry in roles) {
+    final trimmed = entry.trim();
+    if (trimmed.isNotEmpty) {
+      normalized.add(trimmed.toLowerCase());
+    }
+  }
+  if (normalized.isEmpty) {
+    return const <String>[];
+  }
+  return List<String>.unmodifiable(normalized);
+}
+
+List<String> _parseRoles(dynamic raw) {
+  if (raw is List) {
+    return _normalizeProfileRoles(raw.whereType<String>().toList());
+  }
+  if (raw is String) {
+    final parts = raw
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    return _normalizeProfileRoles(parts);
+  }
+  return const <String>[];
 }
 
 class ProfileUpdate {

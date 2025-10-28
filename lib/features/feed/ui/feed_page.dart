@@ -1,3 +1,5 @@
+import 'package:coalition_app_v2/router/app_router.dart' show rootNavigatorKey;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -124,11 +126,20 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   void _handleProfileTap(Post post) {
-    final target = post.userId;
-    if (target == null || target.isEmpty) {
+    final rawUserId = post.userId;
+    final targetUserId = (rawUserId ?? '').trim();
+    debugPrint(
+      '[NAV] profile tap received | postId=${post.id} userId=${rawUserId ?? '<null>'} resolved=$targetUserId',
+    );
+    if (targetUserId.isEmpty) {
+      if (kDebugMode) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('Missing user id for profile')),
+        );
+      }
       return;
     }
-    context.push('/profile', extra: target);
+    _pushProfile(targetUserId);
   }
 
   void _handleCommentsTap(Post post) {
@@ -144,18 +155,32 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       builder: (context) => CommentsSheet(
         postId: post.id,
         onProfileTap: (userId) {
-          if (userId.isEmpty) {
+          final resolvedUserId = userId.trim();
+          if (resolvedUserId.isEmpty) {
             return;
           }
-          context.push('/profile', extra: userId);
+          _pushProfile(resolvedUserId);
         },
       ),
     );
   }
 
+  void _pushProfile(String userId) {
+    final rootContext = rootNavigatorKey.currentContext;
+    if (rootContext == null) {
+      debugPrint(
+          '[NAV][ERROR] rootNavigatorKey.currentContext is null; aborting profile navigation');
+      return;
+    }
+    debugPrint(
+        '[NAV] pushing profile route | userId=$userId via root navigator');
+    GoRouter.of(rootContext).pushNamed('profile', extra: userId);
+  }
+
   void _cleanupKeys(List<Post> posts) {
     final validIds = posts.map((post) => post.id).toSet();
-    final staleIds = _postKeys.keys.where((id) => !validIds.contains(id)).toList();
+    final staleIds =
+        _postKeys.keys.where((id) => !validIds.contains(id)).toList();
     for (final id in staleIds) {
       _postKeys.remove(id);
     }

@@ -116,7 +116,8 @@ class UploadManager extends ChangeNotifier {
   }
 
   bool _clearCurrentUpload() {
-    final hasChanges = _currentTaskId != null || _progress != null || _status != null;
+    final hasChanges =
+        _currentTaskId != null || _progress != null || _status != null;
     _currentTaskId = null;
     _progress = null;
     _status = null;
@@ -138,7 +139,8 @@ class UploadManager extends ChangeNotifier {
   }
 
   void _handlePendingPostCreated(PostItem post) {
-    final index = _pendingPosts.indexWhere((existing) => existing.id == post.id);
+    final index =
+        _pendingPosts.indexWhere((existing) => existing.id == post.id);
     if (index >= 0) {
       _pendingPosts[index] = post;
     } else {
@@ -148,7 +150,8 @@ class UploadManager extends ChangeNotifier {
   }
 
   void _handlePostStatusUpdated(PostItem post) {
-    final index = _pendingPosts.indexWhere((existing) => existing.id == post.id);
+    final index =
+        _pendingPosts.indexWhere((existing) => existing.id == post.id);
     final isReady = post.isReady;
     if (isReady) {
       if (index >= 0) {

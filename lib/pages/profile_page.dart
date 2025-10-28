@@ -8,11 +8,13 @@ import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
 import '../features/auth/providers/auth_state.dart';
+import '../features/auth/providers/current_user_roles_provider.dart';
 import '../models/posts_page.dart';
 import '../models/profile.dart';
 import '../providers/app_providers.dart';
 import '../providers/upload_manager.dart';
 import '../services/api_client.dart';
+import '../router/app_router.dart' show rootNavigatorKey;
 import 'edit_profile_page.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
@@ -170,7 +172,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     try {
       final page = _isViewingSelf
           ? await apiClient.getMyPosts(limit: 30, cursor: _cursor)
-          : await apiClient.getUserPosts(targetUserId!, limit: 30, cursor: _cursor);
+          : await apiClient.getUserPosts(targetUserId!,
+              limit: 30, cursor: _cursor);
       if (!mounted) {
         return;
       }
@@ -236,9 +239,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       }
       setState(() {
         final current = _profile ?? profile;
-        if (current == null) {
-          return;
-        }
         _profile = current.copyWith(
           isFollowing: previousIsFollowing,
           followersCount: previousFollowersCount,
@@ -289,8 +289,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         final username = authState.user?.username;
         final update = ProfileUpdate(
           displayName: defaultDisplayName,
-          username:
-              (username != null && username.isNotEmpty) ? username : null,
+          username: (username != null && username.isNotEmpty) ? username : null,
         );
         final upserted = await apiClient.upsertMyProfile(update);
         try {
@@ -349,8 +348,23 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
+    final rolesAsync = ref.watch(currentUserRolesProvider);
+    final hasAdminAccess = ref.watch(hasAdminAccessProvider);
+    final rolesState = rolesAsync.isLoading
+        ? 'loading'
+        : rolesAsync.hasError
+            ? 'error'
+            : 'data';
+    final rolesValueForLog = rolesAsync.maybeWhen<List<String>?>(
+      data: (roles) => roles,
+      orElse: () => null,
+    );
+    debugPrint(
+      '[ProfilePage][TEMP] rolesAsync state=$rolesState roles=$rolesValueForLog hasAdminAccess=$hasAdminAccess',
+    );
     final uploadManager = ref.watch(uploadManagerProvider);
-    final pendingPosts = _isViewingSelf ? uploadManager.pendingPosts : const <PostItem>[];
+    final pendingPosts =
+        _isViewingSelf ? uploadManager.pendingPosts : const <PostItem>[];
     final seenIds = <String>{};
     final combinedPosts = <PostItem>[];
     for (final pending in pendingPosts) {
@@ -373,6 +387,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         : (_isViewingSelf ? (authState.user?.username ?? '').trim() : '');
     final usernameLabel =
         usernameValue.isNotEmpty ? '@$usernameValue' : 'Username pending';
+    final showAdminDashboardMenu = _isViewingSelf && hasAdminAccess;
+    final adminMenuEnabled = !rolesAsync.isLoading && !rolesAsync.hasError;
+    debugPrint(
+      '[ProfilePage][TEMP] overflow gating isViewingSelf=$_isViewingSelf showAdminDashboardMenu=$showAdminDashboardMenu adminMenuEnabled=$adminMenuEnabled',
+    );
 
     return Scaffold(
       body: SafeArea(
@@ -389,10 +408,15 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     profile: profile,
                     isLoading: profileIsLoading,
                     onEditProfile: _handleEditProfile,
+                    onEditCandidatePage: _handleEditCandidatePage,
                     onSignOut: _signOut,
                     usernameLabel: usernameLabel,
                     showActions: _isViewingSelf,
                     onToggleFollow: onToggleFollow,
+                    showAdminDashboardMenu: showAdminDashboardMenu,
+                    adminMenuEnabled: adminMenuEnabled,
+                    onOpenAdminDashboard:
+                        showAdminDashboardMenu ? _openAdminDashboard : null,
                   ),
                 ),
               ),
@@ -473,6 +497,25 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     }
   }
 
+  void _handleEditCandidatePage() {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Candidate page editor coming soon'),
+        ),
+      );
+  }
+
+  void _openAdminDashboard() {
+    final targetContext = rootNavigatorKey.currentContext ?? context;
+    GoRouter.of(targetContext).push('/admin');
+  }
+
   Future<void> _signOut() async {
     await ref.read(authStateProvider.notifier).signOut();
     if (!mounted) {
@@ -504,19 +547,27 @@ class _ProfileDetailsSection extends StatelessWidget {
     required this.profile,
     required this.isLoading,
     required this.onEditProfile,
+    this.onEditCandidatePage,
     required this.onSignOut,
     required this.usernameLabel,
     this.showActions = true,
     this.onToggleFollow,
+    this.showAdminDashboardMenu = false,
+    this.adminMenuEnabled = true,
+    this.onOpenAdminDashboard,
   });
 
   final Profile? profile;
   final bool isLoading;
   final VoidCallback onEditProfile;
+  final VoidCallback? onEditCandidatePage;
   final VoidCallback onSignOut;
   final String usernameLabel;
   final bool showActions;
   final Future<void> Function(String targetUserId, bool next)? onToggleFollow;
+  final bool showAdminDashboardMenu;
+  final bool adminMenuEnabled;
+  final VoidCallback? onOpenAdminDashboard;
 
   @override
   Widget build(BuildContext context) {
@@ -526,6 +577,19 @@ class _ProfileDetailsSection extends StatelessWidget {
     final bio = profile?.bio;
     final profileData = profile;
     final toggleFollow = onToggleFollow;
+    final candidateStatus = (profile?.candidateAccessStatus ?? 'none').trim();
+    final candidateEditHandler = onEditCandidatePage;
+    final bool showCandidateEditButton = showActions &&
+        candidateStatus == 'approved' &&
+        candidateEditHandler != null;
+    final statusBanner = _candidateStatusBanner(
+      context: context,
+      theme: theme,
+      status: candidateStatus,
+    );
+    final showAdminMenu = showAdminDashboardMenu && showActions;
+    final adminMenuHandler = onOpenAdminDashboard;
+    final bool adminEnabled = adminMenuEnabled;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -565,16 +629,26 @@ class _ProfileDetailsSection extends StatelessWidget {
                       icon: const Icon(Icons.edit_outlined),
                       label: const Text('Edit profile'),
                     ),
+                    if (showCandidateEditButton)
+                      ...[
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: isLoading ? null : candidateEditHandler,
+                          icon: const Icon(Icons.campaign_outlined),
+                          label: const Text('Edit candidate page'),
+                        ),
+                      ],
                   ],
-                  if (!showActions && profileData != null && toggleFollow != null)
-                    ...[
-                      const SizedBox(height: 12),
-                      _FollowButton(
-                        targetUserId: profileData.userId,
-                        isFollowing: profileData.isFollowing,
-                        onToggle: toggleFollow,
-                      ),
-                    ],
+                  if (!showActions &&
+                      profileData != null &&
+                      toggleFollow != null) ...[
+                    const SizedBox(height: 12),
+                    _FollowButton(
+                      targetUserId: profileData.userId,
+                      isFollowing: profileData.isFollowing,
+                      onToggle: toggleFollow,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -585,30 +659,112 @@ class _ProfileDetailsSection extends StatelessWidget {
                     case 'edit':
                       onEditProfile();
                       break;
+                    case 'candidate':
+                      context.push('/settings/candidate-access');
+                      break;
+                    case 'admin':
+                      adminMenuHandler?.call();
+                      break;
                     case 'signout':
                       onSignOut();
                       break;
                   }
                 },
-                itemBuilder: (context) => const [
-                  PopupMenuItem<String>(
-                    value: 'edit',
-                    child: Text('Edit profile'),
-                  ),
-                  PopupMenuItem<String>(
-                    value: 'signout',
-                    child: Text('Sign out'),
-                  ),
-                ],
+                itemBuilder: (context) {
+                  debugPrint(
+                    '[ProfilePage][TEMP] menu builder candidateStatus=$candidateStatus showAdminMenu=$showAdminMenu adminEnabled=$adminEnabled',
+                  );
+                  final entries = <PopupMenuEntry<String>>[
+                    const PopupMenuItem<String>(
+                      value: 'edit',
+                      child: Text('Edit profile'),
+                    ),
+                  ];
+                  var adminEntryAdded = false;
+                  if (candidateStatus != 'approved') {
+                    entries.add(
+                      const PopupMenuItem<String>(
+                        value: 'candidate',
+                        child: Text('Apply for candidate access'),
+                      ),
+                    );
+                  }
+                  if (showAdminMenu) {
+                    adminEntryAdded = true;
+                    entries.add(
+                      PopupMenuItem<String>(
+                        value: 'admin',
+                        enabled: adminEnabled,
+                        child: const Text('Admin dashboard'),
+                      ),
+                    );
+                  }
+                  debugPrint(
+                    '[ProfilePage][TEMP] menu entries adminAdded=$adminEntryAdded candidateStatus=$candidateStatus',
+                  );
+                  entries.add(
+                    const PopupMenuItem<String>(
+                      value: 'signout',
+                      child: Text('Sign out'),
+                    ),
+                  );
+                  return entries;
+                },
               ),
           ],
         ),
         const SizedBox(height: 16),
+        if (statusBanner != null) ...[
+          statusBanner,
+          const SizedBox(height: 12),
+        ],
         Text(
           bio?.isNotEmpty == true ? bio! : 'Tell the community more about you.',
           style: theme.textTheme.bodyMedium,
         ),
       ],
+    );
+  }
+
+  Widget? _candidateStatusBanner({
+    required BuildContext context,
+    required ThemeData theme,
+    required String status,
+  }) {
+    if (status != 'approved' && status != 'pending') {
+      return null;
+    }
+    final bool isApproved = status == 'approved';
+    final Color background = isApproved
+        ? theme.colorScheme.secondaryContainer
+        : theme.colorScheme.surfaceContainerHighest;
+    final Color foreground = isApproved
+        ? theme.colorScheme.onSecondaryContainer
+        : theme.colorScheme.onSurfaceVariant;
+    final IconData icon = isApproved
+        ? Icons.campaign_outlined
+        : Icons.hourglass_top_outlined;
+    final String message = isApproved
+        ? 'Candidate access approved.'
+        : 'Candidate access application pending review.';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: foreground),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: theme.textTheme.bodyMedium?.copyWith(color: foreground),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -679,8 +835,7 @@ class _PostGridTile extends StatelessWidget {
               children: [
                 Hero(
                   tag: 'profile_post_${item.id}',
-                  child:
-                      _buildThumbnail(memCacheWidth, memCacheHeight),
+                  child: _buildThumbnail(memCacheWidth, memCacheHeight),
                 ),
                 if (showDuration)
                   Positioned(
@@ -721,7 +876,8 @@ class _PostGridTile extends StatelessWidget {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: const [
-                        Icon(Icons.error_outline, color: Colors.white, size: 28),
+                        Icon(Icons.error_outline,
+                            color: Colors.white, size: 28),
                         SizedBox(height: 8),
                         Text(
                           'Video processing failed.',
@@ -848,7 +1004,8 @@ class _ProfilePostPlaybackPage extends StatefulWidget {
   final PostItem item;
 
   @override
-  State<_ProfilePostPlaybackPage> createState() => _ProfilePostPlaybackPageState();
+  State<_ProfilePostPlaybackPage> createState() =>
+      _ProfilePostPlaybackPageState();
 }
 
 class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
@@ -926,8 +1083,9 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
 
     if (hasError) {
       child = _buildFallback(safeThumb);
-    } else if (isInitialized && controller != null) {
-      var aspectRatio = controller.value.aspectRatio;
+    } else if (isInitialized) {
+      final videoController = controller;
+      var aspectRatio = videoController.value.aspectRatio;
       if (!aspectRatio.isFinite || aspectRatio <= 0) {
         aspectRatio = widget.item.aspectRatio;
       }
@@ -941,9 +1099,9 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
           children: [
             AspectRatio(
               aspectRatio: aspectRatio,
-              child: VideoPlayer(controller),
+              child: VideoPlayer(videoController),
             ),
-            if (!controller.value.isPlaying)
+            if (!videoController.value.isPlaying)
               const Center(
                 child: Icon(
                   Icons.play_arrow,
@@ -1022,7 +1180,8 @@ class _ProfilePostViewerPage extends StatelessWidget {
             imageUrl: safeThumb,
             fit: BoxFit.contain,
             placeholder: (context, url) => const _ShimmerTile(),
-            errorWidget: (context, url, error) => _profileFullScreenPlaceholder(),
+            errorWidget: (context, url, error) =>
+                _profileFullScreenPlaceholder(),
           )
         : _profileFullScreenPlaceholder();
 

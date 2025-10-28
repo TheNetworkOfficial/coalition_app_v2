@@ -112,8 +112,9 @@ class CreateUploadResponse {
           : snippetRaw.length > 200
               ? '${snippetRaw.substring(0, 200)}...'
               : snippetRaw;
-      final sanitized =
-          truncated == null ? null : truncated.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
+      final sanitized = truncated == null
+          ? null
+          : truncated.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
       final details =
           sanitized == null || sanitized.isEmpty ? '' : ' | raw: $sanitized';
       throw FormatException(
@@ -121,10 +122,9 @@ class CreateUploadResponse {
       );
     }
 
-    final requiresMultipart =
-        _boolValue(json['requiresMultipart']) ??
-            _boolValue(cfAssetMap?['requiresMultipart']) ??
-            false;
+    final requiresMultipart = _boolValue(json['requiresMultipart']) ??
+        _boolValue(cfAssetMap?['requiresMultipart']) ??
+        false;
     final headers =
         _stringMap(json['headers']) ?? _stringMap(cfAssetMap?['headers']);
     final fields =
@@ -185,7 +185,8 @@ class TusInfo {
     String? fallbackEndpoint,
   }) {
     String? endpointString;
-    final dynamic endpointRaw = json['endpoint'] ?? json['uploadUrl'] ?? json['uploadURL'];
+    final dynamic endpointRaw =
+        json['endpoint'] ?? json['uploadUrl'] ?? json['uploadURL'];
     if (endpointRaw is String && endpointRaw.isNotEmpty) {
       endpointString = endpointRaw;
     } else if (fallbackEndpoint != null && fallbackEndpoint.isNotEmpty) {

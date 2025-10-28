@@ -202,6 +202,9 @@ class PostViewState extends State<PostView>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    debugPrint(
+      '[PostView] bind onProfileTap | postId=${widget.post.id} userId=${widget.post.userId ?? '<null>'}',
+    );
     return Stack(
       fit: StackFit.expand,
       children: [

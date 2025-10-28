@@ -1,4 +1,4 @@
-import 'package:coalition_app_v2/router/app_router.dart';
+import 'package:coalition_app_v2/router/app_router.dart' as router;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -29,7 +29,7 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         colorSchemeSeed: Colors.blue,
       ),
-      routerConfig: appRouter,
+      routerConfig: router.appRouter,
     );
   }
 }
