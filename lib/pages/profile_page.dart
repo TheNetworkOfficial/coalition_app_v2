@@ -7,14 +7,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
-import '../features/auth/providers/auth_state.dart';
-import '../features/auth/providers/current_user_roles_provider.dart';
-import '../models/posts_page.dart';
-import '../models/profile.dart';
-import '../providers/app_providers.dart';
-import '../providers/upload_manager.dart';
-import '../services/api_client.dart';
-import '../router/app_router.dart' show rootNavigatorKey;
+import 'package:coalition_app_v2/features/auth/providers/auth_state.dart';
+import 'package:coalition_app_v2/features/auth/providers/current_user_roles_provider.dart';
+import 'package:coalition_app_v2/models/posts_page.dart';
+import 'package:coalition_app_v2/models/profile.dart';
+import 'package:coalition_app_v2/providers/app_providers.dart';
+import 'package:coalition_app_v2/providers/upload_manager.dart';
+import 'package:coalition_app_v2/router/app_router.dart' show rootNavigatorKey;
+import 'package:coalition_app_v2/services/api_client.dart';
+import 'package:coalition_app_v2/widgets/post_grid_tile.dart';
+
 import 'edit_profile_page.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
@@ -421,14 +423,14 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                 ),
               ),
               if (isInitialLoading)
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  sliver: SliverGrid(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) => const _ShimmerTile(),
-                      childCount: 9,
-                    ),
-                    gridDelegate:
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                sliver: SliverGrid(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => const PostGridShimmer(),
+                    childCount: 9,
+                  ),
+                  gridDelegate:
                         const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 3,
                       crossAxisSpacing: 6,
@@ -449,7 +451,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         final post = posts[index];
-                        return _PostGridTile(
+                        return PostGridTile(
                           item: post,
                           onTap: () => _openPost(post),
                         );
@@ -501,14 +503,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     if (!mounted) {
       return;
     }
-    final messenger = ScaffoldMessenger.of(context);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(
-          content: Text('Candidate page editor coming soon'),
-        ),
-      );
+    context.pushNamed('candidate_edit');
   }
 
   void _openAdminDashboard() {
@@ -806,198 +801,6 @@ class _NoPostsView extends StatelessWidget {
   }
 }
 
-class _PostGridTile extends StatelessWidget {
-  const _PostGridTile({required this.item, required this.onTap});
-
-  final PostItem item;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
-        final width = (constraints.maxWidth * devicePixelRatio).round();
-        final height = (constraints.maxHeight * devicePixelRatio).round();
-        final memCacheWidth = width > 0 ? width : 1;
-        final memCacheHeight = height > 0 ? height : 1;
-        final hasThumbnail = _validThumbUrl(item.thumbUrl) != null;
-        final isFailed = item.status.toUpperCase() == 'FAILED';
-        final showSpinner = !hasThumbnail;
-        final showDuration = item.durationMs > 0 && hasThumbnail;
-
-        return GestureDetector(
-          onTap: (!isFailed && hasThumbnail) ? onTap : null,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Hero(
-                  tag: 'profile_post_${item.id}',
-                  child: _buildThumbnail(memCacheWidth, memCacheHeight),
-                ),
-                if (showDuration)
-                  Positioned(
-                    right: 6,
-                    bottom: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black87,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        _formatDuration(item.duration),
-                        style:
-                            const TextStyle(color: Colors.white, fontSize: 12),
-                      ),
-                    ),
-                  ),
-                if (showSpinner && !isFailed)
-                  Container(
-                    color: Colors.black26,
-                    child: const Center(
-                      child: SizedBox(
-                        width: 28,
-                        height: 28,
-                        child: CircularProgressIndicator(strokeWidth: 2.5),
-                      ),
-                    ),
-                  ),
-                if (isFailed)
-                  Container(
-                    color: Colors.black54,
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.error_outline,
-                            color: Colors.white, size: 28),
-                        SizedBox(height: 8),
-                        Text(
-                          'Video processing failed.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildThumbnail(int memCacheWidth, int memCacheHeight) {
-    final safeThumb = _validThumbUrl(item.thumbUrl);
-    if (safeThumb == null) {
-      return _placeholderTile();
-    }
-    return CachedNetworkImage(
-      imageUrl: safeThumb,
-      fit: BoxFit.cover,
-      memCacheWidth: memCacheWidth,
-      memCacheHeight: memCacheHeight,
-      placeholder: (context, url) => const _ShimmerTile(),
-      errorWidget: (context, url, error) => _placeholderTile(),
-    );
-  }
-
-  Widget _placeholderTile() {
-    return Container(
-      color: Colors.grey.shade300,
-      alignment: Alignment.center,
-      child: const Icon(Icons.videocam_outlined, color: Colors.black38),
-    );
-  }
-
-  String _formatDuration(Duration duration) {
-    final totalSeconds = duration.inSeconds;
-    final minutes = totalSeconds ~/ 60;
-    final seconds = totalSeconds % 60;
-    final minutesStr = minutes.toString().padLeft(2, '0');
-    final secondsStr = seconds.toString().padLeft(2, '0');
-    return '$minutesStr:$secondsStr';
-  }
-}
-
-class _ShimmerTile extends StatefulWidget {
-  const _ShimmerTile();
-
-  @override
-  State<_ShimmerTile> createState() => _ShimmerTileState();
-}
-
-class _ShimmerTileState extends State<_ShimmerTile>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            Container(color: Colors.grey.shade300),
-            AnimatedBuilder(
-              animation: _controller,
-              builder: (context, child) {
-                final shimmerWidth = width * 0.6;
-                final dx =
-                    (width + shimmerWidth) * _controller.value - shimmerWidth;
-                return Transform.translate(
-                  offset: Offset(dx, 0),
-                  child: Container(
-                    width: shimmerWidth,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.grey.shade200.withAlpha(0),
-                          Colors.grey.shade100.withAlpha(179),
-                          Colors.grey.shade200.withAlpha(0),
-                        ],
-                        begin: Alignment.centerLeft,
-                        end: Alignment.centerRight,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
 class _ProfilePostPlaybackPage extends StatefulWidget {
   const _ProfilePostPlaybackPage({required this.item});
 
@@ -1077,7 +880,7 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
     final controller = _controller;
     final hasError = _loadError != null;
     final isInitialized = controller != null && controller.value.isInitialized;
-    final safeThumb = _validThumbUrl(widget.item.thumbUrl);
+    final safeThumb = validPostThumbUrl(widget.item.thumbUrl);
 
     Widget child;
 
@@ -1120,7 +923,7 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
             CachedNetworkImage(
               imageUrl: safeThumb,
               fit: BoxFit.contain,
-              placeholder: (context, url) => const _ShimmerTile(),
+              placeholder: (context, url) => const PostGridShimmer(),
               errorWidget: (context, url, error) =>
                   _profileFullScreenPlaceholder(),
             )
@@ -1159,7 +962,7 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
       return CachedNetworkImage(
         imageUrl: safeThumb,
         fit: BoxFit.contain,
-        placeholder: (context, url) => const _ShimmerTile(),
+        placeholder: (context, url) => const PostGridShimmer(),
         errorWidget: (context, url, error) => _profileFullScreenPlaceholder(),
       );
     }
@@ -1174,12 +977,12 @@ class _ProfilePostViewerPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final safeThumb = _validThumbUrl(item.thumbUrl);
+    final safeThumb = validPostThumbUrl(item.thumbUrl);
     final Widget heroChild = safeThumb != null
         ? CachedNetworkImage(
             imageUrl: safeThumb,
             fit: BoxFit.contain,
-            placeholder: (context, url) => const _ShimmerTile(),
+            placeholder: (context, url) => const PostGridShimmer(),
             errorWidget: (context, url, error) =>
                 _profileFullScreenPlaceholder(),
           )
@@ -1201,21 +1004,6 @@ class _ProfilePostViewerPage extends StatelessWidget {
       ),
     );
   }
-}
-
-String? _validThumbUrl(String? url) {
-  if (url == null) {
-    return null;
-  }
-  final trimmed = url.trim();
-  if (trimmed.isEmpty) {
-    return null;
-  }
-  final base = trimmed.toLowerCase().split('?').first;
-  if (base.endsWith('.m3u8')) {
-    return null;
-  }
-  return trimmed;
 }
 
 Widget _profileFullScreenPlaceholder() {

@@ -14,6 +14,7 @@ import '../pages/candidate_viewer_page.dart';
 import '../pages/candidates_page.dart';
 import '../pages/create_entry_page.dart';
 import '../pages/events_page.dart';
+import '../pages/edit_candidate_page.dart';
 import '../pages/profile_page.dart';
 
 /// Root navigator for pages rendered above the shell/tabs.
@@ -67,6 +68,19 @@ final GoRouter appRouter = GoRouter(
       pageBuilder: (context, state) => const NoTransitionPage(
         child: CandidateAccessPage(),
       ),
+    ),
+    GoRoute(
+      path: '/settings/candidate-edit',
+      name: 'candidate_edit',
+      parentNavigatorKey: rootNavigatorKey,
+      pageBuilder: (context, state) {
+        final candidateId =
+            state.extra is String ? state.extra as String : null;
+        return MaterialPage<void>(
+          key: state.pageKey,
+          child: EditCandidatePage(candidateId: candidateId),
+        );
+      },
     ),
     GoRoute(
       path: '/admin',

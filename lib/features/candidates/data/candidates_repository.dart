@@ -1,4 +1,6 @@
 import 'package:coalition_app_v2/features/candidates/models/candidate.dart';
+import 'package:coalition_app_v2/features/candidates/models/candidate_update.dart';
+import 'package:coalition_app_v2/models/posts_page.dart';
 import 'package:coalition_app_v2/services/api_client.dart';
 
 class CandidatesRepository {
@@ -24,5 +26,21 @@ class CandidatesRepository {
 
   Future<void> toggleFollow(String id) {
     return apiClient.toggleCandidateFollow(id);
+  }
+
+  Future<Candidate> updateCandidate(String id, CandidateUpdate update) {
+    return apiClient.updateCandidate(id, update);
+  }
+
+  Future<PostsPage> getCandidatePosts(
+    String id, {
+    int limit = 30,
+    String? cursor,
+  }) {
+    return apiClient.getCandidatePosts(
+      id,
+      limit: limit,
+      cursor: cursor,
+    );
   }
 }

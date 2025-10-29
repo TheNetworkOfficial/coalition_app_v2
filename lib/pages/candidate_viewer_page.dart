@@ -1,12 +1,12 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../features/candidates/models/candidate.dart';
 import '../features/candidates/providers/candidates_providers.dart';
-import '../providers/app_providers.dart';
-import '../widgets/user_avatar.dart';
+import '../features/candidates/ui/candidate_views.dart';
+import '../models/posts_page.dart';
+import '../widgets/post_grid_tile.dart';
 
 class CandidateViewerPage extends ConsumerStatefulWidget {
   const CandidateViewerPage({super.key, required this.candidateId});
@@ -19,172 +19,208 @@ class CandidateViewerPage extends ConsumerStatefulWidget {
 }
 
 class _CandidateViewerPageState extends ConsumerState<CandidateViewerPage> {
-  AsyncValue<Candidate> _state = const AsyncValue.loading();
-
-  @override
-  void initState() {
-    super.initState();
-    _loadCandidate();
-  }
-
-  Future<void> _loadCandidate() async {
-    setState(() => _state = const AsyncValue.loading());
-    final apiClient = ref.read(apiClientProvider);
-    try {
-      final response = await apiClient.getCandidate(widget.candidateId);
-      if (!mounted) {
-        return;
-      }
-      setState(() => _state = AsyncValue.data(response.candidate));
-    } catch (error, stackTrace) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _state = AsyncValue.error(error, stackTrace));
-    }
-  }
-
-  Future<void> _toggleFollow(Candidate candidate) async {
-    final next = !candidate.isFollowing;
-    final delta = next ? 1 : -1;
-    final optimistic = candidate.copyWith(
-      isFollowing: next,
-      followersCount: max(0, candidate.followersCount + delta),
-    );
-
-    setState(() => _state = AsyncValue.data(optimistic));
-
-    try {
-      await ref.read(candidatesPagerProvider.notifier).optimisticToggle(
-            candidate.candidateId,
-            next,
-          );
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _state = AsyncValue.data(candidate));
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(content: Text('Failed to update follow: $error')),
-        );
-      return;
-    }
-
-    try {
-      final refreshed =
-          await ref.read(apiClientProvider).getCandidate(candidate.candidateId);
-      if (!mounted) {
-        return;
-      }
-      setState(() => _state = AsyncValue.data(refreshed.candidate));
-    } catch (_) {
-      // Keep optimistic state if refresh fails.
-    }
-  }
+  bool _isTogglingFollow = false;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Candidate'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh',
-            onPressed: _loadCandidate,
-          ),
-        ],
+    final candidateAsync =
+        ref.watch(candidateDetailProvider(widget.candidateId));
+
+    return candidateAsync.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
       ),
-      body: _state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(
+      error: (error, _) => Scaffold(
+        appBar: AppBar(title: const Text('Candidate')),
+        body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text('Failed to load candidate: $error'),
           ),
         ),
-        data: (candidate) => RefreshIndicator(
-          onRefresh: _loadCandidate,
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16),
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      ),
+      data: (candidate) {
+        if (candidate == null) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Candidate')),
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  UserAvatar(
-                    url: candidate.headshotUrl,
-                    size: 72,
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          candidate.name.isNotEmpty
-                              ? candidate.name
-                              : 'Unnamed candidate',
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            if ((candidate.level ?? '').isNotEmpty)
-                              Chip(label: Text(candidate.level!)),
-                            if ((candidate.district ?? '').isNotEmpty)
-                              Chip(label: Text(candidate.district!)),
-                            Chip(
-                                label: Text(
-                                    '${candidate.followersCount} followers')),
-                          ],
-                        ),
-                      ],
-                    ),
+                  const Text('Your candidate page is not created yet.'),
+                  const SizedBox(height: 12),
+                  ElevatedButton(
+                    onPressed: () => context.pushNamed('candidate_edit'),
+                    child: const Text('Create / Edit Candidate Page'),
                   ),
                 ],
               ),
-              if ((candidate.description ?? '').isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text(
-                  candidate.description!,
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-              ],
-              if (candidate.tags.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final tag in candidate.tags.take(5))
-                      Chip(label: Text(tag)),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 24),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: () => _toggleFollow(candidate),
-                  icon: Icon(candidate.isFollowing
-                      ? Icons.check
-                      : Icons.person_add_alt),
-                  label: Text(
-                    candidate.isFollowing
-                        ? 'Following • ${candidate.followersCount}'
-                        : 'Follow • ${candidate.followersCount}',
-                  ),
-                ),
+            ),
+          );
+        }
+
+        final postsAsync =
+            ref.watch(candidatePostsProvider(widget.candidateId));
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Candidate'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh',
+                onPressed: _refresh,
               ),
             ],
           ),
+          body: RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              children: [
+                CandidateHeaderView(
+                  avatarUrl: candidate.avatarUrl ?? candidate.headshotUrl,
+                  displayName: candidate.name,
+                  levelOfOffice: candidate.level,
+                  district: candidate.district,
+                  extraChips: [
+                    Chip(label: Text('${candidate.followersCount} followers')),
+                  ],
+                ),
+                if ((candidate.description ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  CandidateBioView(bio: candidate.description),
+                ],
+                if (candidate.tags.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  CandidateTagsView(
+                    priorityTags:
+                        candidate.tags.take(5).toList(growable: false),
+                  ),
+                ],
+                const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.icon(
+                    onPressed: _isTogglingFollow
+                        ? null
+                        : () => _toggleFollow(candidate),
+                    icon: Icon(candidate.isFollowing
+                        ? Icons.check
+                        : Icons.person_add_alt),
+                    label: Text(
+                      candidate.isFollowing
+                          ? 'Following • ${candidate.followersCount}'
+                          : 'Follow • ${candidate.followersCount}',
+                    ),
+                  ),
+                ),
+                CandidateSocialsView(
+                  socials: candidate.socials ?? const {},
+                  title: const CandidateSectionTitle(text: 'Connect'),
+                ),
+                const SizedBox(height: 24),
+                const CandidateSectionTitle(text: 'Posts'),
+                const SizedBox(height: 12),
+                _buildPostsSection(postsAsync),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _refresh() async {
+    ref.invalidate(candidateDetailProvider(widget.candidateId));
+    ref.invalidate(candidatePostsProvider(widget.candidateId));
+    try {
+      await Future.wait([
+        ref.read(candidateDetailProvider(widget.candidateId).future),
+        ref.read(candidatePostsProvider(widget.candidateId).future),
+      ]);
+    } catch (_) {
+      // Ignore refresh errors; UI will display latest AsyncValue state.
+    }
+  }
+
+  Future<void> _toggleFollow(Candidate candidate) async {
+    if (_isTogglingFollow) {
+      return;
+    }
+    setState(() => _isTogglingFollow = true);
+
+    try {
+      await ref.read(candidatesPagerProvider.notifier).optimisticToggle(
+            candidate.candidateId,
+            !candidate.isFollowing,
+          );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('Failed to update follow: $error')),
+        );
+    } finally {
+      ref.invalidate(candidateDetailProvider(candidate.candidateId));
+      try {
+        await ref
+            .read(candidateDetailProvider(candidate.candidateId).future);
+      } catch (_) {}
+      if (mounted) {
+        setState(() => _isTogglingFollow = false);
+      }
+    }
+  }
+
+  Widget _buildPostsSection(AsyncValue<PostsPage> postsAsync) {
+    return postsAsync.when(
+      loading: () => GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: 6,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 6,
+          mainAxisSpacing: 6,
+          childAspectRatio: 1,
         ),
+        itemBuilder: (context, index) => const PostGridShimmerTile(),
       ),
+      error: (error, _) => Text(
+        'Failed to load posts: $error',
+        style: Theme.of(context)
+            .textTheme
+            .bodyMedium
+            ?.copyWith(color: Theme.of(context).colorScheme.error),
+      ),
+      data: (page) {
+        if (page.items.isEmpty) {
+          return const Text('No posts yet.');
+        }
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: page.items.length,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 6,
+            mainAxisSpacing: 6,
+            childAspectRatio: 1,
+          ),
+          itemBuilder: (context, index) {
+            final item = page.items[index];
+            return PostGridTile(
+              item: item,
+              onTap: () {},
+            );
+          },
+        );
+      },
     );
   }
 }

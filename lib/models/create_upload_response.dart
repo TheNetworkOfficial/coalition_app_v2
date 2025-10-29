@@ -10,6 +10,8 @@ class CreateUploadResponse {
     this.fileFieldName,
     this.contentType,
     this.tus,
+    this.publicUrl,
+    this.deliveryUrl,
   })  : requiresMultipart = requiresMultipart ?? false,
         headers = headers ?? const {},
         fields = fields ?? const {},
@@ -122,6 +124,36 @@ class CreateUploadResponse {
       );
     }
 
+    String? publicUrlString;
+    for (final entry in <MapEntry<String, dynamic>>[
+      MapEntry('publicUrl', json['publicUrl']),
+      MapEntry('public_url', json['public_url']),
+      if (cfAssetMap != null) MapEntry('cfAsset.publicUrl', cfAssetMap['publicUrl']),
+    ]) {
+      final candidate = _stringValue(entry.value);
+      if (candidate != null && candidate.isNotEmpty) {
+        publicUrlString = candidate;
+        break;
+      }
+    }
+
+    String? deliveryUrlString;
+    for (final entry in <MapEntry<String, dynamic>>[
+      MapEntry('deliveryUrl', json['deliveryUrl']),
+      MapEntry('delivery_url', json['delivery_url']),
+      MapEntry('deliveryURL', json['deliveryURL']),
+      if (cfAssetMap != null)
+        MapEntry('cfAsset.deliveryUrl', cfAssetMap['deliveryUrl']),
+      if (json['result'] is Map<String, dynamic>)
+        MapEntry('result.deliveryUrl', (json['result'] as Map<String, dynamic>)['deliveryUrl']),
+    ]) {
+      final candidate = _stringValue(entry.value);
+      if (candidate != null && candidate.isNotEmpty) {
+        deliveryUrlString = candidate;
+        break;
+      }
+    }
+
     final requiresMultipart = _boolValue(json['requiresMultipart']) ??
         _boolValue(cfAssetMap?['requiresMultipart']) ??
         false;
@@ -158,6 +190,8 @@ class CreateUploadResponse {
       fileFieldName: fileFieldName,
       contentType: contentType,
       tus: tus,
+      publicUrl: publicUrlString,
+      deliveryUrl: deliveryUrlString,
     );
   }
 
@@ -171,6 +205,8 @@ class CreateUploadResponse {
   final String? fileFieldName;
   final String? contentType;
   final TusInfo? tus;
+  final String? publicUrl;
+  final String? deliveryUrl;
 }
 
 class TusInfo {

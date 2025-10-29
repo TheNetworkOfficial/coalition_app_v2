@@ -1,17 +1,58 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider, AsyncValue, Ref;
+import 'package:flutter_riverpod/flutter_riverpod.dart'
+    show AsyncValue, FutureProvider, Provider, Ref;
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../providers/app_providers.dart';
+import '../../../services/api_client.dart';
 import '../data/candidates_repository.dart';
 import '../models/candidate.dart';
+import '../models/candidate_update.dart';
+import '../../../models/posts_page.dart';
 
 final candidatesRepositoryProvider = Provider<CandidatesRepository>((ref) {
   final apiClient = ref.watch(apiClientProvider);
   return CandidatesRepository(apiClient: apiClient);
+});
+
+final candidateDetailProvider =
+    FutureProvider.family<Candidate?, String>((ref, id) async {
+  final apiClient = ref.watch(apiClientProvider);
+  final trimmed = id.trim();
+  if (trimmed.isEmpty) {
+    return null;
+  }
+  try {
+    final response = await apiClient.getCandidate(trimmed);
+    return response.candidate;
+  } on ApiException catch (error) {
+    if (error.statusCode == HttpStatus.notFound) {
+      return null;
+    }
+    rethrow;
+  }
+});
+
+final candidatePostsProvider =
+    FutureProvider.family<PostsPage, String>((ref, id) {
+  final repository = ref.watch(candidatesRepositoryProvider);
+  return repository.getCandidatePosts(id);
+});
+
+final candidateUpdateControllerProvider =
+    Provider<Future<Candidate> Function(String, CandidateUpdate)>((ref) {
+  final repository = ref.watch(candidatesRepositoryProvider);
+  return (String id, CandidateUpdate update) async {
+    final updated = await repository.updateCandidate(id, update);
+    ref.invalidate(candidateDetailProvider(id));
+    ref.invalidate(candidatePostsProvider(id));
+    ref.invalidate(candidatesPagerProvider);
+    return updated;
+  };
 });
 
 class CandidatesPager extends StateNotifier<AsyncValue<List<Candidate>>> {

@@ -91,7 +91,7 @@ class CandidateCard extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 UserAvatar(
-                  url: candidate.headshotUrl,
+                  url: candidate.avatarUrl ?? candidate.headshotUrl,
                   size: 56,
                 ),
                 const SizedBox(width: 12),

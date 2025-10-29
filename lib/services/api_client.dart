@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:coalition_app_v2/features/admin/models/admin_application.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate.dart';
+import 'package:coalition_app_v2/features/candidates/models/candidate_update.dart';
 
 import '../debug/logging.dart';
 import '../debug/logging_http_client.dart';
@@ -1007,6 +1008,119 @@ class ApiClient {
     return PostsPage(items: items, nextCursor: nextCursor);
   }
 
+  Future<PostsPage> getCandidatePosts(
+    String candidateId, {
+    int limit = 30,
+    String? cursor,
+  }) async {
+    final trimmed = candidateId.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('candidateId must not be empty');
+    }
+    final resolvedLimit = limit <= 0 ? 30 : limit;
+    final encodedId = Uri.encodeComponent(trimmed);
+    final baseUri = _resolve('/api/candidates/$encodedId/posts');
+    final queryParameters = <String, String>{
+      'limit': resolvedLimit.toString(),
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+    };
+    final uri = baseUri.replace(queryParameters: queryParameters);
+
+    http.Response? response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final forceRefresh = attempt == 1;
+      final headers = await _composeHeaders(
+        null,
+        forceRefreshAuth: forceRefresh,
+      );
+      response = await _httpClient.get(
+        uri,
+        headers: headers.isEmpty ? null : headers,
+      );
+
+      final statusCode = response.statusCode;
+      final isAuthError = statusCode == HttpStatus.unauthorized ||
+          statusCode == HttpStatus.forbidden;
+      if (isAuthError && !forceRefresh) {
+        await _authService?.fetchAuthToken(forceRefresh: true);
+        continue;
+      }
+      debugPrint(
+        '[ApiClient] getCandidatePosts attempt=$attempt status=$statusCode',
+      );
+      break;
+    }
+
+    if (response == null) {
+      throw ApiException('Failed to load candidate posts: no response');
+    }
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while loading candidate posts',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      return PostsPage(items: const <PostItem>[], nextCursor: null);
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to load candidate posts: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return PostsPage(items: const <PostItem>[], nextCursor: null);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected candidate posts response format');
+    }
+
+    final rawItems = decoded['items'];
+    if (rawItems is! List) {
+      throw ApiException('Unexpected candidate posts response: missing items');
+    }
+
+    final items = <PostItem>[];
+    for (final entry in rawItems) {
+      if (entry is! Map<String, dynamic>) {
+        debugPrint(
+            '[ApiClient] Ignoring non-map candidate post item: ${entry.runtimeType}');
+        continue;
+      }
+      try {
+        items.add(PostItem.fromJson(entry));
+      } catch (error, stackTrace) {
+        debugPrint(
+            '[ApiClient] Skipping malformed candidate post item: $error\n$stackTrace');
+      }
+    }
+
+    final nextCursorRaw = decoded['nextCursor'];
+    String? nextCursor;
+    if (nextCursorRaw is String && nextCursorRaw.trim().isNotEmpty) {
+      nextCursor = nextCursorRaw;
+    } else if (nextCursorRaw != null && nextCursorRaw is! String) {
+      debugPrint(
+          '[ApiClient] Unexpected candidate posts nextCursor type: ${nextCursorRaw.runtimeType}');
+    }
+
+    debugPrint(
+      '[ApiClient] getCandidatePosts items=${items.length} nextCursor=${nextCursor ?? 'null'}',
+    );
+    return PostsPage(items: items, nextCursor: nextCursor);
+  }
+
   Future<({List<Candidate> items, String? cursor})> getCandidates({
     int limit = 20,
     String? cursor,
@@ -1158,6 +1272,51 @@ class ApiClient {
     }
 
     return (candidate: Candidate.fromJson(map));
+  }
+
+  Future<Candidate> updateCandidate(String id, CandidateUpdate update) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('id must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmed);
+    final uri = _resolve('/api/candidates/$encodedId');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.patch(
+      uri,
+      headers: headers,
+      body: jsonEncode(update.toJson()),
+    );
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Candidate not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to update candidate: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (response.body.isEmpty) {
+      throw ApiException('Empty response while updating candidate');
+    }
+
+    final decoded = jsonDecode(response.body);
+    final map = _extractCandidateMap(decoded);
+    if (map == null) {
+      throw ApiException('Unexpected candidate response format');
+    }
+
+    return Candidate.fromJson(map);
   }
 
   Future<void> toggleCandidateFollow(String id) async {
