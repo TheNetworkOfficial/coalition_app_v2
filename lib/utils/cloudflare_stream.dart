@@ -10,16 +10,18 @@ String get cloudflareStreamBaseUrl {
   if (configured.isEmpty) {
     return _defaultStreamBaseUrl;
   }
-  final withScheme = configured.startsWith('http://') || configured.startsWith('https://')
-      ? configured
-      : 'https://$configured';
+  final withScheme =
+      configured.startsWith('http://') || configured.startsWith('https://')
+          ? configured
+          : 'https://$configured';
   return withScheme.endsWith('/')
       ? withScheme.substring(0, withScheme.length - 1)
       : withScheme;
 }
 
 String? resolveCloudflareHlsUrl(Map<String, dynamic> json) {
-  final direct = _findString(json, _directHlsUrlKeys, predicate: _looksLikeHttpUrl);
+  final direct =
+      _findString(json, _directHlsUrlKeys, predicate: _looksLikeHttpUrl);
   if (direct != null) {
     return direct;
   }
@@ -50,7 +52,8 @@ String? _findString(
         final value = entry.value;
         if (candidateKeys.contains(key)) {
           final stringValue = _stringValue(value);
-          if (stringValue != null && (predicate == null || predicate(stringValue))) {
+          if (stringValue != null &&
+              (predicate == null || predicate(stringValue))) {
             return stringValue;
           }
         }
@@ -59,7 +62,8 @@ String? _findString(
           queue.add(value);
         } else if (value is Iterable && value is! String) {
           for (final element in value) {
-            if (element is Map<String, dynamic> || (element is Iterable && element is! String)) {
+            if (element is Map<String, dynamic> ||
+                (element is Iterable && element is! String)) {
               queue.add(element);
             }
           }
@@ -67,7 +71,8 @@ String? _findString(
       }
     } else if (current is Iterable && current is! String) {
       for (final element in current) {
-        if (element is Map<String, dynamic> || (element is Iterable && element is! String)) {
+        if (element is Map<String, dynamic> ||
+            (element is Iterable && element is! String)) {
           queue.add(element);
         }
       }

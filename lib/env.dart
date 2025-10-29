@@ -10,6 +10,14 @@ const bool kPreferVideoProxyUploads =
 // Enabled by default; pass --dart-define=ENABLE_SEGMENTED_PREVIEW=false to opt out.
 const bool kEnableSegmentedPreview =
     bool.fromEnvironment('ENABLE_SEGMENTED_PREVIEW', defaultValue: true);
+const String kCloudflareImagesAccountHash =
+    String.fromEnvironment('CF_IMAGES_ACCOUNT_HASH', defaultValue: '');
+const String kCloudflareImagesVariant =
+    String.fromEnvironment('CF_IMAGES_VARIANT', defaultValue: 'public');
+const String kImagesPublicBaseUrl = String.fromEnvironment(
+  'IMAGE_PUBLIC_BASE_URL',
+  defaultValue: '',
+);
 
 String normalizeApiBaseUrl(String base) {
   if (base.isEmpty) {
@@ -27,6 +35,43 @@ Uri resolveApiUri(String path, {String? baseOverride}) {
     return Uri.parse(path);
   }
   return Uri.parse('$base$path');
+}
+
+String? buildImageDeliveryUrl(String? primaryKey, {String? fallbackKey}) {
+  String? normalize(String? value) {
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  final key = normalize(primaryKey) ?? normalize(fallbackKey);
+  if (key == null) {
+    return null;
+  }
+
+  final accountHash = kCloudflareImagesAccountHash.trim();
+  if (accountHash.isNotEmpty) {
+    final variant = kCloudflareImagesVariant.trim().isEmpty
+        ? 'public'
+        : kCloudflareImagesVariant.trim();
+    final normalizedKey = key.contains('/')
+        ? key
+        : '$key/$variant';
+    return 'https://imagedelivery.net/$accountHash/$normalizedKey';
+  }
+
+  final publicBase = kImagesPublicBaseUrl.trim();
+  if (publicBase.isNotEmpty) {
+    final sanitizedBase = publicBase.endsWith('/')
+        ? publicBase.substring(0, publicBase.length - 1)
+        : publicBase;
+    final sanitizedKey = key.startsWith('/') ? key.substring(1) : key;
+    return '$sanitizedBase/$sanitizedKey';
+  }
+
+  return null;
 }
 
 void assertApiBaseConfigured() {

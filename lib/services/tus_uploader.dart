@@ -82,8 +82,7 @@ class TusUploader {
         ),
         onSendProgress: (sent, total) {
           final overallSent = start + sent;
-          final clampedSent =
-              overallSent > length ? length : overallSent;
+          final clampedSent = overallSent > length ? length : overallSent;
           onProgress?.call(clampedSent, length);
         },
         cancelToken: cancelToken,
@@ -98,8 +97,7 @@ class TusUploader {
           // If no header, assume success and advance by chunk size
           offset = end;
         } else {
-          final newOffset =
-              int.tryParse(newOffsetHeader) ?? (start + chunkLen);
+          final newOffset = int.tryParse(newOffsetHeader) ?? (start + chunkLen);
           if (newOffset < start) {
             throw Exception(
                 'Server returned decreasing offset: $newOffset < $start');

@@ -28,6 +28,11 @@ class PostViewState extends State<PostView>
   VideoPlayerController? _videoController;
   bool _isFavorite = false;
   bool _isActive = false;
+  // --- NEW: user-intent & speed coordination ---
+  bool _userPaused = false; // true if user explicitly paused via tap
+  double _userSpeed = 1.0; // baseline playback speed user expects
+  double? _holdPrevSpeed; // temporary cache used during long-press
+  bool _holdWasPaused = false; // whether video was paused before the hold
 
   @override
   bool get wantKeepAlive => true;
@@ -42,15 +47,22 @@ class PostViewState extends State<PostView>
   @override
   void didUpdateWidget(covariant PostView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final mediaChanged =
-        widget.post.mediaUrl != oldWidget.post.mediaUrl ||
-            widget.post.isVideo != oldWidget.post.isVideo;
+    final mediaChanged = widget.post.mediaUrl != oldWidget.post.mediaUrl ||
+        widget.post.isVideo != oldWidget.post.isVideo;
     if (mediaChanged) {
       _disposeVideo();
+      _userPaused = false;
+      _userSpeed = 1.0;
+      _holdPrevSpeed = null;
+      _holdWasPaused = false;
       _updatePlayback();
     }
     if (widget.post.id != oldWidget.post.id) {
       _isActive = widget.initiallyActive;
+      _userPaused = false;
+      _userSpeed = 1.0;
+      _holdPrevSpeed = null;
+      _holdWasPaused = false;
       _updatePlayback();
     }
   }
@@ -78,17 +90,33 @@ class PostViewState extends State<PostView>
 
     final controller = VideoPlayerController.networkUrl(uri);
     controller.setLooping(true);
-    controller.setVolume(0);
+    // Always start audible; device hardware buttons control loudness.
+    // Do not set volume to 0 on feed.
 
     controller.initialize().then((_) {
       if (!mounted || _videoController != controller) {
         return;
       }
+      // Ensure audible after init (some platforms default to 1.0, this is explicit).
+      _ensureAudible(controller);
       setState(() {});
       _updatePlayback();
     }).catchError((_) {});
 
     _videoController = controller;
+  }
+
+  void _ensureAudible(VideoPlayerController c) {
+    try {
+      final value = c.value;
+      if (!value.isInitialized || value.volume == 0.0) {
+        c.setVolume(1.0);
+      }
+    } catch (_) {
+      try {
+        c.setVolume(1.0);
+      } catch (_) {}
+    }
   }
 
   void _updatePlayback() {
@@ -97,6 +125,8 @@ class PostViewState extends State<PostView>
     }
 
     final controller = _videoController;
+    debugPrint(
+        '[PostView] _updatePlayback: isActive=$_isActive controller=${controller != null} userPaused=$_userPaused');
     if (_isActive) {
       if (controller == null) {
         _initializeVideoIfNeeded();
@@ -105,7 +135,21 @@ class PostViewState extends State<PostView>
       if (!controller.value.isInitialized) {
         return;
       }
-      controller.play();
+      // Respect user intent: don't auto-play if user explicitly paused.
+      if (_userPaused) {
+        debugPrint(
+            '[PostView] _updatePlayback: honoring _userPaused -> pause()');
+        controller.pause();
+        return;
+      }
+      // Auto-play when active, applying user's chosen baseline speed.
+      debugPrint(
+          '[PostView] _updatePlayback: auto-play -> play() at speed=$_userSpeed');
+      // Safety: if some earlier code or recycled state zeroed volume, restore it.
+      _ensureAudible(controller);
+      controller
+        ..play()
+        ..setPlaybackSpeed(_userSpeed);
       return;
     }
 
@@ -118,6 +162,9 @@ class PostViewState extends State<PostView>
         ..pause()
         ..seekTo(Duration.zero);
     }
+    // Clear transient hold-only state when deactivating
+    _holdPrevSpeed = null;
+    _holdWasPaused = false;
     _disposeVideo();
   }
 
@@ -155,6 +202,9 @@ class PostViewState extends State<PostView>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    debugPrint(
+      '[PostView] bind onProfileTap | postId=${widget.post.id} userId=${widget.post.userId ?? '<null>'}',
+    );
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -185,6 +235,7 @@ class PostViewState extends State<PostView>
                     child: ExpandableDescription(
                       displayName: widget.post.userDisplayName,
                       description: widget.post.description,
+                      onDisplayNameTap: widget.onProfileTap,
                     ),
                   ),
                 ),
@@ -207,12 +258,18 @@ class PostViewState extends State<PostView>
     final controller = _videoController;
     if (controller != null && controller.value.isInitialized) {
       final size = controller.value.size;
-      return FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: size.width,
-          height: size.height,
-          child: VideoPlayer(controller),
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _onSurfaceTapTogglePlayPause,
+        onLongPressStart: (_) => _onSurfaceHoldStart(),
+        onLongPressEnd: (_) => _onSurfaceHoldEnd(),
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: VideoPlayer(controller),
+          ),
         ),
       );
     }
@@ -262,18 +319,23 @@ class PostViewState extends State<PostView>
   }
 
   Widget _buildGradientOverlay() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.black.withValues(alpha: 0.2),
-            Colors.black.withValues(alpha: 0.05),
-            Colors.black.withValues(alpha: 0.4),
-            Colors.black.withValues(alpha: 0.8),
-          ],
-          stops: const [0, 0.4, 0.7, 1],
+    // Visual-only overlay; ignore pointer events so taps fall through to
+    // the video surface beneath.
+    return IgnorePointer(
+      ignoring: true,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withValues(alpha: 0.2),
+              Colors.black.withValues(alpha: 0.05),
+              Colors.black.withValues(alpha: 0.4),
+              Colors.black.withValues(alpha: 0.8),
+            ],
+            stops: const [0, 0.4, 0.7, 1],
+          ),
         ),
       ),
     );
@@ -284,5 +346,62 @@ class PostViewState extends State<PostView>
       _isActive = isActive;
     }
     _updatePlayback();
+  }
+
+  void _onSurfaceTapTogglePlayPause() {
+    final c = _videoController;
+    if (c == null || !c.value.isInitialized) {
+      return;
+    }
+    debugPrint(
+        '[PostView] _onSurfaceTapTogglePlayPause: wasPlaying=${c.value.isPlaying}');
+    // Toggle play/pause and set user intent flag
+    if (c.value.isPlaying) {
+      _userPaused = true;
+      c.pause();
+    } else {
+      _userPaused = false;
+      c
+        ..play()
+        ..setPlaybackSpeed(_userSpeed);
+    }
+    setState(() {});
+  }
+
+  void _onSurfaceHoldStart() {
+    final c = _videoController;
+    if (c == null || !c.value.isInitialized) {
+      return;
+    }
+    _holdPrevSpeed ??= c.value.playbackSpeed;
+    _holdWasPaused = !c.value.isPlaying;
+    // During hold: ensure playing at 2.0x regardless of prior speed
+    c.play();
+    c.setPlaybackSpeed(2.0);
+    // Do NOT change _userPaused here; this is a transient hold state
+    setState(() {});
+  }
+
+  void _onSurfaceHoldEnd() {
+    final c = _videoController;
+    if (c == null || !c.value.isInitialized) {
+      return;
+    }
+    // Restore user's baseline speed and prior pause/play state
+    final targetSpeed = _holdPrevSpeed ?? _userSpeed;
+    c.setPlaybackSpeed(targetSpeed);
+    if (_holdWasPaused) {
+      c.pause();
+    } else {
+      if (!_userPaused) {
+        c.play();
+      } else {
+        c.pause();
+      }
+    }
+    // Clear transient hold flags
+    _holdPrevSpeed = null;
+    _holdWasPaused = false;
+    setState(() {});
   }
 }

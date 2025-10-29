@@ -1,5 +1,8 @@
+import 'package:coalition_app_v2/router/app_router.dart' show rootNavigatorKey;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../models/post.dart';
 import '../providers/feed_providers.dart';
@@ -123,26 +126,61 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   void _handleProfileTap(Post post) {
-    Navigator.of(context).pushNamed(
-      '/profile',
-      arguments: post.userId ?? post.id,
+    final rawUserId = post.userId;
+    final targetUserId = (rawUserId ?? '').trim();
+    debugPrint(
+      '[NAV] profile tap received | postId=${post.id} userId=${rawUserId ?? '<null>'} resolved=$targetUserId',
     );
+    if (targetUserId.isEmpty) {
+      if (kDebugMode) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('Missing user id for profile')),
+        );
+      }
+      return;
+    }
+    _pushProfile(targetUserId);
   }
 
   void _handleCommentsTap(Post post) {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.black87,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      // Opaque backdrop: no transparency
+      barrierColor: Colors.black,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => const CommentsSheet(),
+      builder: (context) => CommentsSheet(
+        postId: post.id,
+        onProfileTap: (userId) {
+          final resolvedUserId = userId.trim();
+          if (resolvedUserId.isEmpty) {
+            return;
+          }
+          _pushProfile(resolvedUserId);
+        },
+      ),
     );
+  }
+
+  void _pushProfile(String userId) {
+    final rootContext = rootNavigatorKey.currentContext;
+    if (rootContext == null) {
+      debugPrint(
+          '[NAV][ERROR] rootNavigatorKey.currentContext is null; aborting profile navigation');
+      return;
+    }
+    debugPrint(
+        '[NAV] pushing profile route | userId=$userId via root navigator');
+    GoRouter.of(rootContext).pushNamed('profile', extra: userId);
   }
 
   void _cleanupKeys(List<Post> posts) {
     final validIds = posts.map((post) => post.id).toSet();
-    final staleIds = _postKeys.keys.where((id) => !validIds.contains(id)).toList();
+    final staleIds =
+        _postKeys.keys.where((id) => !validIds.contains(id)).toList();
     for (final id in staleIds) {
       _postKeys.remove(id);
     }

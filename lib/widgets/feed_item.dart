@@ -47,7 +47,8 @@ class FeedEntry {
     }
 
     final typeString = _asString(json['type'])?.toLowerCase() ?? '';
-    final type = typeString == 'video' ? FeedMediaType.video : FeedMediaType.image;
+    final type =
+        typeString == 'video' ? FeedMediaType.video : FeedMediaType.image;
 
     final id = _asString(json['id']) ??
         _asString(json['postId']) ??
@@ -151,6 +152,7 @@ class FeedItem extends StatefulWidget {
 class _FeedItemState extends State<FeedItem> {
   VideoPlayerController? _controller;
   Future<void>? _initializeFuture;
+  bool _userPaused = false;
 
   @override
   void initState() {
@@ -186,7 +188,8 @@ class _FeedItemState extends State<FeedItem> {
     if (!widget.isActive) {
       return;
     }
-    if (widget.item.type != FeedMediaType.video || widget.item.videoUrl == null) {
+    if (widget.item.type != FeedMediaType.video ||
+        widget.item.videoUrl == null) {
       return;
     }
 
@@ -203,7 +206,7 @@ class _FeedItemState extends State<FeedItem> {
       }
       controller
         ..setLooping(true)
-        ..setVolume(0);
+        ..setVolume(1.0);
       setState(() {});
       _updatePlayback();
     });
@@ -217,6 +220,8 @@ class _FeedItemState extends State<FeedItem> {
     }
 
     final controller = _controller;
+    debugPrint(
+        '[FeedItem] _updatePlayback: isActive=${widget.isActive} controller=${controller != null} userPaused=$_userPaused');
     if (widget.isActive) {
       if (controller == null) {
         _maybeInitializeController();
@@ -225,7 +230,14 @@ class _FeedItemState extends State<FeedItem> {
       if (!controller.value.isInitialized) {
         return;
       }
-      controller.play();
+      if (_userPaused) {
+        debugPrint(
+            '[FeedItem] _updatePlayback: honoring _userPaused -> pause()');
+        controller.pause();
+      } else {
+        debugPrint('[FeedItem] _updatePlayback: auto-play -> play()');
+        controller.play();
+      }
       return;
     }
 
@@ -245,7 +257,29 @@ class _FeedItemState extends State<FeedItem> {
     final controller = _controller;
     _controller = null;
     _initializeFuture = null;
+    _userPaused = false;
     controller?.dispose();
+  }
+
+  void _onVideoTap() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+    debugPrint(
+        '[FeedItem] _onVideoTap: wasPlaying=${controller.value.isPlaying}');
+    final wasPlaying = controller.value.isPlaying;
+    if (wasPlaying) {
+      controller.pause();
+      setState(() {
+        _userPaused = true;
+      });
+    } else {
+      controller.play();
+      setState(() {
+        _userPaused = false;
+      });
+    }
   }
 
   @override
@@ -270,6 +304,7 @@ class _FeedItemState extends State<FeedItem> {
             controller: _controller,
             initializeFuture: _initializeFuture,
             item: item,
+            onVideoTap: _onVideoTap,
           ),
           if ((item.description ?? '').trim().isNotEmpty)
             Padding(
@@ -290,11 +325,13 @@ class _MediaContent extends StatelessWidget {
     required this.controller,
     required this.initializeFuture,
     required this.item,
+    required this.onVideoTap,
   });
 
   final VideoPlayerController? controller;
   final Future<void>? initializeFuture;
   final FeedEntry item;
+  final VoidCallback? onVideoTap;
 
   @override
   Widget build(BuildContext context) {
@@ -306,6 +343,7 @@ class _MediaContent extends StatelessWidget {
           controller: controller,
           initializeFuture: initializeFuture,
           item: item,
+          onTap: onVideoTap,
         );
     }
   }
@@ -349,40 +387,139 @@ class _VideoContent extends StatelessWidget {
     required this.controller,
     required this.initializeFuture,
     required this.item,
+    required this.onTap,
   });
 
   final VideoPlayerController? controller;
   final Future<void>? initializeFuture;
   final FeedEntry item;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final aspectRatio = controller?.value.isInitialized == true
-        ? controller!.value.aspectRatio
+    final videoController = controller;
+    final aspectRatio = videoController?.value.isInitialized == true
+        ? videoController!.value.aspectRatio
         : (item.aspectRatio ?? 9 / 16);
+    Widget mediaContent;
+
+    if (videoController != null) {
+      mediaContent = FutureBuilder<void>(
+        future: initializeFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.done &&
+              videoController.value.isInitialized) {
+            return VideoPlayer(videoController);
+          }
+          return _VideoPlaceholder(item: item);
+        },
+      );
+    } else {
+      mediaContent = _VideoPlaceholder(item: item);
+    }
 
     return AspectRatio(
       aspectRatio: aspectRatio,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (controller != null)
-            FutureBuilder<void>(
-              future: initializeFuture,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.done &&
-                    controller!.value.isInitialized) {
-                  return VideoPlayer(controller!);
-                }
-                return _VideoPlaceholder(item: item);
-              },
-            )
-          else
-            _VideoPlaceholder(item: item),
-          if (controller == null || controller!.value.isInitialized == false)
+          mediaContent,
+          if (onTap != null)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: onTap,
+              ),
+            ),
+          if (videoController != null)
+            _VideoControlsOverlay(controller: videoController),
+          if (videoController == null ||
+              videoController.value.isInitialized == false)
             const _LoadingOverlay(),
+          if (videoController != null)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: _VideoProgressBar(controller: videoController),
+            ),
         ],
       ),
+    );
+  }
+}
+
+bool _overlayVisible(VideoPlayerValue value, bool isReady) =>
+    isReady && !value.isPlaying;
+
+class _VideoControlsOverlay extends StatelessWidget {
+  const _VideoControlsOverlay({required this.controller});
+
+  final VideoPlayerController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<VideoPlayerValue>(
+      valueListenable: controller,
+      builder: (context, value, child) {
+        final isReady = value.isInitialized;
+        final isVisible = _overlayVisible(value, isReady);
+        // Do not block pointer events from reaching the underlying
+        // GestureDetector. The overlay is purely visual; taps should
+        // always be handled by the video tap handler so the user can
+        // toggle playback even when the overlay is visible.
+        return IgnorePointer(
+          // Always ignore pointers here so the overlay never intercepts
+          // hit testing. This lets the Positioned.fill GestureDetector
+          // receive taps reliably.
+          ignoring: true,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 180),
+            opacity: isVisible ? 1.0 : 0.0,
+            child: Container(
+              color: Colors.black38,
+              alignment: Alignment.center,
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 56,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _VideoProgressBar extends StatelessWidget {
+  const _VideoProgressBar({required this.controller});
+
+  final VideoPlayerController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<VideoPlayerValue>(
+      valueListenable: controller,
+      builder: (context, value, child) {
+        if (!value.isInitialized || value.duration == Duration.zero) {
+          return const SizedBox.shrink();
+        }
+        final progress =
+            value.position.inMilliseconds / value.duration.inMilliseconds;
+        final clampedProgress = progress.clamp(0.0, 1.0).toDouble();
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: clampedProgress,
+              backgroundColor: Colors.white.withValues(alpha: 0.2),
+              valueColor: AlwaysStoppedAnimation<Color>(
+                  Colors.white.withValues(alpha: 0.9)),
+              minHeight: 3,
+            ),
+          ),
+        );
+      },
     );
   }
 }

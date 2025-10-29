@@ -13,7 +13,8 @@ class SessionManager {
     try {
       await _storage.write(key: _sessionKey, value: value);
     } catch (error, stackTrace) {
-      debugPrint('[SessionManager] Failed to persist session marker: $error\n$stackTrace');
+      debugPrint(
+          '[SessionManager] Failed to persist session marker: $error\n$stackTrace');
     }
   }
 
@@ -21,7 +22,8 @@ class SessionManager {
     try {
       return await _storage.read(key: _sessionKey);
     } catch (error, stackTrace) {
-      debugPrint('[SessionManager] Failed to read session marker: $error\n$stackTrace');
+      debugPrint(
+          '[SessionManager] Failed to read session marker: $error\n$stackTrace');
       return null;
     }
   }
@@ -30,7 +32,8 @@ class SessionManager {
     try {
       await _storage.delete(key: _sessionKey);
     } catch (error, stackTrace) {
-      debugPrint('[SessionManager] Failed to clear session marker: $error\n$stackTrace');
+      debugPrint(
+          '[SessionManager] Failed to clear session marker: $error\n$stackTrace');
     }
   }
 }

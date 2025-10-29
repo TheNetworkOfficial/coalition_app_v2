@@ -49,8 +49,7 @@ class _ConfirmCodePageState extends ConsumerState<ConfirmCodePage> {
     final destination =
         awaiting?.deliveryDestination ?? awaiting?.email ?? 'your email';
     final isLoading = authState.isLoading;
-    final serverError =
-        awaiting != null ? authState.errorMessage : null;
+    final serverError = awaiting != null ? authState.errorMessage : null;
     final errorText = _inputError ?? serverError;
 
     return Scaffold(

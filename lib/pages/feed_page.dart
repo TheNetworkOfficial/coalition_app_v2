@@ -204,8 +204,7 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       final viewport = RenderAbstractViewport.of(renderObject);
 
       final metricsTop = viewport.getOffsetToReveal(renderObject, 0).offset;
-      final metricsBottom =
-          viewport.getOffsetToReveal(renderObject, 1).offset;
+      final metricsBottom = viewport.getOffsetToReveal(renderObject, 1).offset;
 
       final itemExtent = metricsBottom - metricsTop;
       if (itemExtent <= 0) {
@@ -293,13 +292,13 @@ class _FeedPageState extends ConsumerState<FeedPage> {
                 ? Container(
                     key: const ValueKey('video-processing-banner'),
                     width: double.infinity,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surface,
                       border: Border(
                         bottom: BorderSide(
-                          color: theme.dividerColor.withOpacity(0.2),
+                          color: theme.dividerColor.withValues(alpha: 0.2),
                         ),
                       ),
                     ),
@@ -323,7 +322,7 @@ class _FeedPageState extends ConsumerState<FeedPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            processingMessage!,
+                            processingMessage,
                             style: theme.textTheme.bodyMedium,
                           ),
                         ),
@@ -344,11 +343,13 @@ class _FeedPageState extends ConsumerState<FeedPage> {
                   valueListenable: _pagingController,
                   builder: (context, state, _) {
                     return PagedListView<int, FeedEntry>.separated(
-                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 16, horizontal: 12),
                       state: state,
                       fetchNextPage: _pagingController.fetchNextPage,
                       scrollController: _scrollController,
-                      separatorBuilder: (context, index) => const SizedBox(height: 12),
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 12),
                       builderDelegate: PagedChildBuilderDelegate<FeedEntry>(
                         itemBuilder: (context, item, index) {
                           final key = _itemKeys[index] ??
@@ -368,21 +369,26 @@ class _FeedPageState extends ConsumerState<FeedPage> {
                             ),
                           );
                         },
-                        firstPageProgressIndicatorBuilder: (context) => const Center(
+                        firstPageProgressIndicatorBuilder: (context) =>
+                            const Center(
                           child: CircularProgressIndicator(),
                         ),
-                        newPageProgressIndicatorBuilder: (context) => const Center(
+                        newPageProgressIndicatorBuilder: (context) =>
+                            const Center(
                           child: CircularProgressIndicator(),
                         ),
-                        firstPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
+                        firstPageErrorIndicatorBuilder: (context) =>
+                            _FeedErrorIndicator(
                           onRetry: _pagingController.refresh,
                           error: _pagingController.error,
                         ),
-                        newPageErrorIndicatorBuilder: (context) => _FeedErrorIndicator(
+                        newPageErrorIndicatorBuilder: (context) =>
+                            _FeedErrorIndicator(
                           onRetry: _pagingController.fetchNextPage,
                           error: _pagingController.error,
                         ),
-                        noItemsFoundIndicatorBuilder: (context) => const _FeedEmptyIndicator(),
+                        noItemsFoundIndicatorBuilder: (context) =>
+                            const _FeedEmptyIndicator(),
                       ),
                     );
                   },

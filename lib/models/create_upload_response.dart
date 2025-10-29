@@ -10,6 +10,8 @@ class CreateUploadResponse {
     this.fileFieldName,
     this.contentType,
     this.tus,
+    this.publicUrl,
+    this.deliveryUrl,
   })  : requiresMultipart = requiresMultipart ?? false,
         headers = headers ?? const {},
         fields = fields ?? const {},
@@ -112,8 +114,9 @@ class CreateUploadResponse {
           : snippetRaw.length > 200
               ? '${snippetRaw.substring(0, 200)}...'
               : snippetRaw;
-      final sanitized =
-          truncated == null ? null : truncated.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
+      final sanitized = truncated == null
+          ? null
+          : truncated.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
       final details =
           sanitized == null || sanitized.isEmpty ? '' : ' | raw: $sanitized';
       throw FormatException(
@@ -121,10 +124,39 @@ class CreateUploadResponse {
       );
     }
 
-    final requiresMultipart =
-        _boolValue(json['requiresMultipart']) ??
-            _boolValue(cfAssetMap?['requiresMultipart']) ??
-            false;
+    String? publicUrlString;
+    for (final entry in <MapEntry<String, dynamic>>[
+      MapEntry('publicUrl', json['publicUrl']),
+      MapEntry('public_url', json['public_url']),
+      if (cfAssetMap != null) MapEntry('cfAsset.publicUrl', cfAssetMap['publicUrl']),
+    ]) {
+      final candidate = _stringValue(entry.value);
+      if (candidate != null && candidate.isNotEmpty) {
+        publicUrlString = candidate;
+        break;
+      }
+    }
+
+    String? deliveryUrlString;
+    for (final entry in <MapEntry<String, dynamic>>[
+      MapEntry('deliveryUrl', json['deliveryUrl']),
+      MapEntry('delivery_url', json['delivery_url']),
+      MapEntry('deliveryURL', json['deliveryURL']),
+      if (cfAssetMap != null)
+        MapEntry('cfAsset.deliveryUrl', cfAssetMap['deliveryUrl']),
+      if (json['result'] is Map<String, dynamic>)
+        MapEntry('result.deliveryUrl', (json['result'] as Map<String, dynamic>)['deliveryUrl']),
+    ]) {
+      final candidate = _stringValue(entry.value);
+      if (candidate != null && candidate.isNotEmpty) {
+        deliveryUrlString = candidate;
+        break;
+      }
+    }
+
+    final requiresMultipart = _boolValue(json['requiresMultipart']) ??
+        _boolValue(cfAssetMap?['requiresMultipart']) ??
+        false;
     final headers =
         _stringMap(json['headers']) ?? _stringMap(cfAssetMap?['headers']);
     final fields =
@@ -158,6 +190,8 @@ class CreateUploadResponse {
       fileFieldName: fileFieldName,
       contentType: contentType,
       tus: tus,
+      publicUrl: publicUrlString,
+      deliveryUrl: deliveryUrlString,
     );
   }
 
@@ -171,6 +205,8 @@ class CreateUploadResponse {
   final String? fileFieldName;
   final String? contentType;
   final TusInfo? tus;
+  final String? publicUrl;
+  final String? deliveryUrl;
 }
 
 class TusInfo {
@@ -185,7 +221,8 @@ class TusInfo {
     String? fallbackEndpoint,
   }) {
     String? endpointString;
-    final dynamic endpointRaw = json['endpoint'] ?? json['uploadUrl'] ?? json['uploadURL'];
+    final dynamic endpointRaw =
+        json['endpoint'] ?? json['uploadUrl'] ?? json['uploadURL'];
     if (endpointRaw is String && endpointRaw.isNotEmpty) {
       endpointString = endpointRaw;
     } else if (fallbackEndpoint != null && fallbackEndpoint.isNotEmpty) {

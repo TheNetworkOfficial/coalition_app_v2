@@ -16,7 +16,8 @@ import '../models/posts_page.dart';
 import 'api_client.dart';
 import 'tus_uploader.dart';
 
-const int _kDefaultTusChunkSizeBytes = 5 * 1024 * 1024; // 5 MB default TUS chunk size.
+const int _kDefaultTusChunkSizeBytes =
+    5 * 1024 * 1024; // 5 MB default TUS chunk size.
 
 class UploadService {
   UploadService({
@@ -82,12 +83,14 @@ class UploadService {
     required String description,
     VoidCallback? onFeedRefreshRequested,
   }) async {
-    final preferProxy =
-        draft.type == 'video' && draft.hasVideoProxy && kPreferVideoProxyUploads;
+    final preferProxy = draft.type == 'video' &&
+        draft.hasVideoProxy &&
+        kPreferVideoProxyUploads;
     var resolvedPath = draft.resolveUploadPath(preferProxy: preferProxy);
     var file = File(resolvedPath);
     if (!await file.exists() && preferProxy) {
-      debugPrint('[UploadService] Proxy not found at $resolvedPath; using original file');
+      debugPrint(
+          '[UploadService] Proxy not found at $resolvedPath; using original file');
       resolvedPath = draft.resolveUploadPath(preferProxy: false);
       file = File(resolvedPath);
     }
@@ -108,12 +111,12 @@ class UploadService {
 
     if (preferProxy && resolvedPath == draft.proxyFilePath) {
       final resolution = draft.proxyMetadata?.resolution;
-      debugPrint('[UploadService] Uploading proxy file (resolution=$resolution)');
+      debugPrint(
+          '[UploadService] Uploading proxy file (resolution=$resolution)');
     }
 
-    final assumedContentType = draft.type == 'image'
-        ? 'image/jpeg'
-        : 'video/mp4';
+    final assumedContentType =
+        draft.type == 'image' ? 'image/jpeg' : 'video/mp4';
 
     debugPrint(
       '[UploadService] starting createUpload() against $normalizedApiBaseUrl',
@@ -136,10 +139,12 @@ class UploadService {
         statusCode: error.statusCode,
       );
     } on FormatException catch (error, stackTrace) {
-      debugPrint('[UploadService] createUpload parse error: $error\n$stackTrace');
+      debugPrint(
+          '[UploadService] createUpload parse error: $error\n$stackTrace');
       return UploadOutcome(ok: false, message: error.toString());
     } catch (error, stackTrace) {
-      debugPrint('[UploadService] createUpload unexpected error: $error\n$stackTrace');
+      debugPrint(
+          '[UploadService] createUpload unexpected error: $error\n$stackTrace');
       return UploadOutcome(ok: false, message: error.toString());
     }
 
@@ -226,12 +231,15 @@ class UploadService {
     final dynamic tusInfoRaw = rawUploadJson['tusInfo'];
     final String? tusUrlFromInfo =
         tusInfoRaw is Map ? asNonEmptyString(tusInfoRaw['endpoint']) : null;
-    final String? tusUrl = tusUrlFromInfo ?? asNonEmptyString(rawUploadJson['tusUploadUrl']);
+    final String? tusUrl =
+        tusUrlFromInfo ?? asNonEmptyString(rawUploadJson['tusUploadUrl']);
 
     Uri? tusEndpoint;
     if (tusUrl != null) {
       final candidate = Uri.tryParse(tusUrl);
-      if (candidate != null && candidate.hasScheme && candidate.host.isNotEmpty) {
+      if (candidate != null &&
+          candidate.hasScheme &&
+          candidate.host.isNotEmpty) {
         tusEndpoint = candidate;
       } else {
         debugPrint('[UploadService] Ignoring invalid TUS URL: $tusUrl');
@@ -276,7 +284,8 @@ class UploadService {
       );
     }
 
-    debugPrint('[UploadService] Using legacy direct upload: ${create.uploadUrl}');
+    debugPrint(
+        '[UploadService] Using legacy direct upload: ${create.uploadUrl}');
     return _startDirectUpload(
       draft: draft,
       description: description,
@@ -639,10 +648,9 @@ class UploadService {
             continue;
           }
           final statusLabel = status ?? 'unknown';
-          final details =
-              (error.details != null && error.details!.isNotEmpty)
-                  ? error.details!
-                  : error.message;
+          final details = (error.details != null && error.details!.isNotEmpty)
+              ? error.details!
+              : error.message;
           debugPrint(
             '[UploadService] finalize error: createPost failed: $statusLabel $details',
           );
@@ -862,7 +870,8 @@ class UploadService {
     required VoidCallback? feedRefreshCallback,
   }) async {
     final deadline = DateTime.now().add(_postReadyPollTimeout);
-    final mediaType = _postMediaTypes[postId] ?? (isVideo ? 'video' : 'unknown');
+    final mediaType =
+        _postMediaTypes[postId] ?? (isVideo ? 'video' : 'unknown');
     var hasTriggeredRefresh = false;
     var streamDelay = _streamPollInitialDelay;
     var streamReady = streamUid == null;
@@ -965,9 +974,7 @@ class UploadService {
         return;
       }
 
-      final waitDuration = streamReady
-          ? _postReadyPollInterval
-          : streamDelay;
+      final waitDuration = streamReady ? _postReadyPollInterval : streamDelay;
       if (waitDuration > Duration.zero) {
         await Future<void>.delayed(waitDuration);
       }
@@ -991,8 +998,7 @@ class UploadService {
             postId: postId,
             mediaType: mediaType,
             phase: VideoProcessingPhase.failed,
-            streamState:
-                controller.lastStreamResult?.state ?? 'timeout',
+            streamState: controller.lastStreamResult?.state ?? 'timeout',
           );
         }
         _emitPostFailure(postId);
@@ -1013,7 +1019,8 @@ class UploadService {
         );
       }
     } catch (error, stackTrace) {
-      debugPrint('[UploadService] getPost($postId) unexpected error: $error\n$stackTrace');
+      debugPrint(
+          '[UploadService] getPost($postId) unexpected error: $error\n$stackTrace');
     }
 
     try {
@@ -1180,7 +1187,8 @@ class UploadService {
         details: body.isEmpty ? null : body,
       );
     }
-    debugPrint('[UploadService] direct upload completed for asset ${create.uid} (status $status)');
+    debugPrint(
+        '[UploadService] direct upload completed for asset ${create.uid} (status $status)');
     await streamed.stream.drain();
   }
 
@@ -1190,9 +1198,10 @@ class UploadService {
     required String fallbackContentType,
   }) async {
     final bytes = await file.readAsBytes();
-    final resolvedContentType = (create.contentType != null && create.contentType!.trim().isNotEmpty)
-        ? create.contentType!.trim()
-        : fallbackContentType;
+    final resolvedContentType =
+        (create.contentType != null && create.contentType!.trim().isNotEmpty)
+            ? create.contentType!.trim()
+            : fallbackContentType;
     final headers = <String, String>{};
     if (create.headers.isNotEmpty) {
       headers.addAll(create.headers);
@@ -1213,7 +1222,8 @@ class UploadService {
         details: response.body.isEmpty ? null : response.body,
       );
     }
-    debugPrint('[UploadService] direct upload completed for asset ${create.uid} (status $status)');
+    debugPrint(
+        '[UploadService] direct upload completed for asset ${create.uid} (status $status)');
   }
 
   MediaType _resolveMediaType(String? provided, String fallback) {

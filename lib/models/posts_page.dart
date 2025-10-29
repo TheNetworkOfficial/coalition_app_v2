@@ -73,6 +73,7 @@ class PostItem {
       }
       return 'UNKNOWN';
     }
+
     String? _sanitizeThumb(dynamic value) {
       if (value is! String) {
         return null;

@@ -96,18 +96,48 @@ class Post {
     }
 
     final id = _asString(json['id']) ?? fallbackId;
-    final userId = _asString(json['userId']) ??
-        _asString(json['user_id']) ??
-        _asString(json['ownerId']);
-    final displayName = _asString(json['userDisplayName']) ??
-        _asString(json['displayName']) ??
-        _asString(json['userName']) ??
-        _asString(json['user_display_name']) ??
-        'Unknown';
-    final avatar = _asString(json['userAvatarUrl']) ??
-        _asString(json['avatarUrl']) ??
+    final userMap = json['user'] is Map<String, dynamic>
+        ? Map<String, dynamic>.from(json['user'] as Map<String, dynamic>)
+        : null;
+    final rawUserId = (json['userId'] ??
+            json['user_id'] ??
+            json['ownerId'] ??
+            json['owner_id'] ??
+            userMap?['userId'] ??
+            userMap?['id'] ??
+            '')
+        .toString()
+        .trim();
+    final userId = rawUserId.isNotEmpty ? rawUserId : null;
+
+    final displayNameTop = _asString(json['displayName']) ??
+        _asString(json['userDisplayName']) ??
+        _asString(json['user_display_name']);
+    final usernameTop =
+        _asString(json['username']) ?? _asString(json['userName']);
+    final avatarTop = _asString(json['avatarUrl']) ??
+        _asString(json['userAvatarUrl']) ??
         _asString(json['profileImage']) ??
         _asString(json['userAvatar']);
+
+    final displayNameNested = _asString(userMap?['displayName']) ??
+        _asString(userMap?['name']) ??
+        _asString(userMap?['userDisplayName']) ??
+        _asString(userMap?['user_display_name']) ??
+        _asString(userMap?['username']) ??
+        _asString(userMap?['userName']);
+    final usernameNested =
+        _asString(userMap?['username']) ?? _asString(userMap?['userName']);
+    final avatarNested = _asString(userMap?['avatarUrl']) ??
+        _asString(userMap?['userAvatarUrl']) ??
+        _asString(userMap?['profileImage']);
+
+    final displayName = displayNameTop ??
+        displayNameNested ??
+        usernameTop ??
+        usernameNested ??
+        'Unknown';
+    final avatar = avatarTop ?? avatarNested;
     final description = _asString(json['description']) ??
         _asString(json['caption']) ??
         _asString(json['text']);
@@ -120,9 +150,8 @@ class Post {
         _asString(json['imageUrl']) ??
         '';
     final resolvedHlsUrl = resolveCloudflareHlsUrl(json);
-    final mediaUrl = isVideo
-        ? (resolvedHlsUrl ?? fallbackMediaUrl)
-        : fallbackMediaUrl;
+    final mediaUrl =
+        isVideo ? (resolvedHlsUrl ?? fallbackMediaUrl) : fallbackMediaUrl;
     final thumbUrl = _asString(json['thumbUrl']) ??
         _asString(json['thumbnailUrl']) ??
         _asString(json['previewImageUrl']);
