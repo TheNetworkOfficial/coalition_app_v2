@@ -2,6 +2,7 @@ import 'package:coalition_app_v2/features/auth/ui/auth_gate_page.dart';
 import 'package:coalition_app_v2/features/auth/ui/confirm_code_page.dart';
 import 'package:coalition_app_v2/features/feed/ui/feed_page.dart';
 import 'package:coalition_app_v2/pages/candidate_access_page.dart';
+import 'package:coalition_app_v2/pages/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -58,6 +59,31 @@ final GoRouter appRouter = GoRouter(
             state.extra is String ? state.extra as String : null;
         return NoTransitionPage(
           child: ProfilePage(targetUserId: targetUserId),
+        );
+      },
+    ),
+    GoRoute(
+      path: '/settings',
+      name: 'settings',
+      parentNavigatorKey: rootNavigatorKey,
+      pageBuilder: (context, state) {
+        final args = state.extra is SettingsArgs
+            ? state.extra as SettingsArgs
+            : null;
+
+        return MaterialPage<void>(
+          key: state.pageKey,
+          child: SettingsPage(
+            args: args ??
+                SettingsArgs(
+                  onEditProfile: () {},
+                  onSignOut: () {},
+                  onOpenAdminDashboard: null,
+                  showCandidateAccess: false,
+                  showAdminDashboard: false,
+                  adminDashboardEnabled: false,
+                ),
+          ),
         );
       },
     ),

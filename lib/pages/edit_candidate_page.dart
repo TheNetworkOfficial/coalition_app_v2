@@ -47,6 +47,9 @@ class _EditCandidatePageState extends ConsumerState<EditCandidatePage> {
 
   bool _isSaving = false;
   bool _didPopulate = false;
+  String? _listenedCandidateId;
+  ProviderSubscription<AsyncValue<Candidate?>>? _candidateSub;
+  ProviderSubscription<AuthState>? _authSub;
 
   Map<String, TextEditingController> get _socialControllers => <String, TextEditingController>{
         'phone': _phoneCtrl,
@@ -58,7 +61,27 @@ class _EditCandidatePageState extends ConsumerState<EditCandidatePage> {
       };
 
   @override
+  void initState() {
+    super.initState();
+    _configureCandidateListener(force: true);
+    _authSub = ref.listenManual<AuthState>(
+      authStateProvider,
+      (previous, next) => _configureCandidateListener(force: true),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant EditCandidatePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.candidateId != oldWidget.candidateId) {
+      _configureCandidateListener(force: true);
+    }
+  }
+
+  @override
   void dispose() {
+    _candidateSub?.close();
+    _authSub?.close();
     _nameCtrl.dispose();
     _levelCtrl.dispose();
     _districtCtrl.dispose();
@@ -95,6 +118,13 @@ class _EditCandidatePageState extends ConsumerState<EditCandidatePage> {
 
     final candidateAsync = ref.watch(candidateDetailProvider(candidateId));
     candidateAsync.whenData(_maybePopulate);
+    final locked = ref.watch(candidateIdentityLockedProvider);
+
+    if (locked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) FocusManager.instance.primaryFocus?.unfocus();
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -136,6 +166,7 @@ class _EditCandidatePageState extends ConsumerState<EditCandidatePage> {
                   levelController: _levelCtrl,
                   districtController: _districtCtrl,
                   avatarUrlController: _avatarCtrl,
+                  locked: locked,
                   nameValidator: (value) {
                     if (value == null || value.trim().isEmpty) {
                       return 'Display name is required';
@@ -146,6 +177,35 @@ class _EditCandidatePageState extends ConsumerState<EditCandidatePage> {
                   onPickAvatar: _pickAndUploadAvatar,
                   onAvatarUploadError: _showAvatarError,
                 ),
+                if (locked) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.lock,
+                        size: 18,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Some fields are locked after approval.',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 16),
                 CandidateBioEditable(bioController: _bioCtrl),
                 const SizedBox(height: 16),
@@ -206,10 +266,78 @@ class _EditCandidatePageState extends ConsumerState<EditCandidatePage> {
       final tags = candidate.tags.take(5).toList(growable: false);
       setState(() {
         _tags = List<String>.from(tags);
-        _loadedCandidate = candidate;
         _didPopulate = true;
       });
     });
+  }
+
+  void _configureCandidateListener({bool force = false}) {
+    final candidateId = _resolveCandidateId();
+    if (candidateId.isEmpty) {
+      _candidateSub?.close();
+      _candidateSub = null;
+      _listenedCandidateId = null;
+      return;
+    }
+    final hasChanged = _listenedCandidateId != candidateId;
+    if (!hasChanged && !force) {
+      return;
+    }
+    ProviderSubscription<AsyncValue<Candidate?>>? subscription = _candidateSub;
+    if (hasChanged) {
+      subscription?.close();
+      subscription = ref.listenManual<AsyncValue<Candidate?>>(
+        candidateDetailProvider(candidateId),
+        (previous, next) {
+          final candidate = next.asData?.value;
+          if (candidate != null) {
+            _syncCandidateControllers(candidate);
+          }
+        },
+      );
+      _candidateSub = subscription;
+      _listenedCandidateId = candidateId;
+    }
+
+    if (subscription == null) {
+      return;
+    }
+
+    final AsyncValue<Candidate?> snapshot = hasChanged
+        ? subscription.read()
+        : ref.read(candidateDetailProvider(candidateId));
+    final initialCandidate = snapshot.asData?.value;
+    if (initialCandidate != null) {
+      _syncCandidateControllers(initialCandidate);
+    }
+  }
+
+  String _resolveCandidateId() {
+    final authState = ref.read(authStateProvider);
+    return (widget.candidateId ?? authState.user?.userId ?? '').trim();
+  }
+
+  void _syncCandidateControllers(Candidate candidate) {
+    final nameText = candidate.name;
+    if (_nameCtrl.text != nameText) {
+      _nameCtrl.text = nameText;
+    }
+    final levelText = candidate.level ?? '';
+    if (_levelCtrl.text != levelText) {
+      _levelCtrl.text = levelText;
+    }
+    final districtText = candidate.district ?? '';
+    if (_districtCtrl.text != districtText) {
+      _districtCtrl.text = districtText;
+    }
+    if (!mounted) {
+      return;
+    }
+    if (_loadedCandidate != candidate) {
+      setState(() {
+        _loadedCandidate = candidate;
+      });
+    }
   }
 
   Future<void> _submit(String candidateId) async {

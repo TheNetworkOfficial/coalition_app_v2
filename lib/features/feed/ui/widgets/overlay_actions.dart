@@ -21,6 +21,7 @@ class OverlayActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -33,8 +34,9 @@ class OverlayActions extends StatelessWidget {
             child: UserAvatar(
               url: avatarUrl,
               size: 52,
-              backgroundColor: Colors.white24,
-              iconColor: Colors.white,
+              backgroundColor:
+                  colorScheme.onSurface.withValues(alpha: 0.24),
+              iconColor: colorScheme.onSurface,
             ),
           ),
         ),
@@ -49,7 +51,9 @@ class OverlayActions extends StatelessWidget {
           icon: isFavorite ? Icons.favorite : Icons.favorite_border,
           onTap: onFavoriteTap,
           semanticsLabel: isFavorite ? 'Unlike' : 'Like',
-          iconColor: isFavorite ? Colors.redAccent : Colors.white,
+          iconColor: isFavorite
+              ? colorScheme.error
+              : colorScheme.onSurface,
         ),
         const SizedBox(height: 14),
         _ActionIcon(
@@ -67,28 +71,30 @@ class _ActionIcon extends StatelessWidget {
     required this.icon,
     required this.onTap,
     required this.semanticsLabel,
-    this.iconColor = Colors.white,
+    this.iconColor,
   });
 
   final IconData icon;
   final VoidCallback onTap;
   final String semanticsLabel;
-  final Color iconColor;
+  final Color? iconColor;
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final effectiveIconColor = iconColor ?? colorScheme.onSurface;
     return Semantics(
       button: true,
       label: semanticsLabel,
       child: Material(
-        color: Colors.white24,
+        color: colorScheme.onSurface.withValues(alpha: 0.24),
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.all(14),
-            child: Icon(icon, color: iconColor, size: 26),
+            child: Icon(icon, color: effectiveIconColor, size: 26),
           ),
         ),
       ),

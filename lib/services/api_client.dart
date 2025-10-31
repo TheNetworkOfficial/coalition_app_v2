@@ -1127,6 +1127,8 @@ class ApiClient {
     String? level,
     String? district,
     String? tag,
+    String? tags,
+    String? query,
   }) async {
     final resolvedLimit = limit <= 0 ? 20 : limit;
     final queryParameters = <String, String>{
@@ -1136,6 +1138,8 @@ class ApiClient {
       if (district != null && district.trim().isNotEmpty)
         'district': district.trim(),
       if (tag != null && tag.trim().isNotEmpty) 'tag': tag.trim(),
+      if (tags != null && tags.trim().isNotEmpty) 'tags': tags.trim(),
+      if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
     };
 
     final baseUri = _resolve('/api/candidates');

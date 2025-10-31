@@ -30,6 +30,7 @@ class CandidateHeaderEditable extends StatefulWidget {
     this.extraChips = const <Widget>[],
     this.onAvatarUploadError,
     this.nameValidator,
+    this.locked = false,
   });
 
   final TextEditingController nameController;
@@ -42,6 +43,7 @@ class CandidateHeaderEditable extends StatefulWidget {
   final List<Widget> extraChips;
   final ValueChanged<Object>? onAvatarUploadError;
   final FormFieldValidator<String>? nameValidator;
+  final bool locked;
 
   @override
   State<CandidateHeaderEditable> createState() =>
@@ -99,6 +101,7 @@ class _CandidateHeaderEditableState extends State<CandidateHeaderEditable> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final locked = widget.locked;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -155,30 +158,37 @@ class _CandidateHeaderEditableState extends State<CandidateHeaderEditable> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              InlineEditable(
-                view: ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: widget.nameController,
-                  builder: (context, value, _) {
-                    final text = value.text.trim();
-                    return Text(
-                      text.isEmpty ? 'Unnamed candidate' : text,
-                      style: theme.textTheme.headlineSmall,
-                    );
-                  },
-                ),
-                edit: TextFormField(
-                  controller: widget.nameController,
-                  autofocus: true,
-                  style: theme.textTheme.headlineSmall,
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    isDense: true,
+              AbsorbPointer(
+                absorbing: locked,
+                child: InlineEditable(
+                  readOnly: locked,
+                  readOnlyHint: 'Locked after approval',
+                  view: ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: widget.nameController,
+                    builder: (context, value, _) {
+                      final text = value.text.trim();
+                      return Text(
+                        text.isEmpty ? 'Unnamed candidate' : text,
+                        style: theme.textTheme.headlineSmall,
+                      );
+                    },
                   ),
-                  validator: widget.nameValidator,
-                  textInputAction: TextInputAction.done,
-                  onEditingComplete: () {
-                    InlineEditable.completeEditing(context);
-                  },
+                  edit: TextFormField(
+                    controller: widget.nameController,
+                    autofocus: false,
+                    readOnly: locked,
+                    enabled: !locked,
+                    style: theme.textTheme.headlineSmall,
+                    decoration: const InputDecoration(
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                    validator: widget.nameValidator,
+                    textInputAction: TextInputAction.done,
+                    onEditingComplete: () {
+                      InlineEditable.completeEditing(context);
+                    },
+                  ),
                 ),
               ),
               const SizedBox(height: 8),
@@ -186,13 +196,23 @@ class _CandidateHeaderEditableState extends State<CandidateHeaderEditable> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _EditableChip(
-                    controller: widget.levelController,
-                    placeholder: 'Tap to add level',
+                  AbsorbPointer(
+                    absorbing: locked,
+                    child: _EditableChip(
+                      controller: widget.levelController,
+                      placeholder: 'Tap to add level',
+                      readOnly: locked,
+                      readOnlyHint: 'Locked after approval',
+                    ),
                   ),
-                  _EditableChip(
-                    controller: widget.districtController,
-                    placeholder: 'Tap to add district',
+                  AbsorbPointer(
+                    absorbing: locked,
+                    child: _EditableChip(
+                      controller: widget.districtController,
+                      placeholder: 'Tap to add district',
+                      readOnly: locked,
+                      readOnlyHint: 'Locked after approval',
+                    ),
                   ),
                   ...widget.extraChips,
                 ],
@@ -209,47 +229,70 @@ class _EditableChip extends StatelessWidget {
   const _EditableChip({
     required this.controller,
     required this.placeholder,
+    this.readOnly = false,
+    this.readOnlyHint,
   });
 
   final TextEditingController controller;
   final String placeholder;
+  final bool readOnly;
+  final String? readOnlyHint;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InlineEditable(
-      view: ValueListenableBuilder<TextEditingValue>(
-        valueListenable: controller,
-        builder: (context, value, _) {
-          final text = value.text.trim();
-          if (text.isEmpty) {
-            return Chip(
-              label: Text(
-                placeholder,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.hintColor,
-                ),
-              ),
-            );
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final text = value.text.trim();
+        final hasValue = text.isNotEmpty;
+        final labelText = hasValue ? text : placeholder;
+        Color? labelColor;
+        if (!hasValue) {
+          labelColor = theme.hintColor;
+        } else if (readOnly) {
+          labelColor = theme.colorScheme.onSurfaceVariant;
+        }
+        final labelStyle = labelColor == null
+            ? theme.textTheme.bodyMedium
+            : theme.textTheme.bodyMedium?.copyWith(color: labelColor);
+        final chip = Chip(
+          avatar: readOnly
+              ? Icon(
+                  Icons.lock,
+                  size: 16,
+                  color: theme.colorScheme.onSurfaceVariant,
+                )
+              : null,
+          label: Text(labelText, style: labelStyle),
+        );
+
+        if (readOnly) {
+          if (readOnlyHint != null && readOnlyHint!.isNotEmpty) {
+            return Tooltip(message: readOnlyHint!, child: chip);
           }
-          return Chip(label: Text(text));
-        },
-      ),
-      edit: SizedBox(
-        width: 180,
-        child: TextFormField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            isDense: true,
-            border: OutlineInputBorder(),
+          return chip;
+        }
+
+        return InlineEditable(
+          view: chip,
+          edit: SizedBox(
+            width: 180,
+            child: TextFormField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              textInputAction: TextInputAction.done,
+              onEditingComplete: () {
+                InlineEditable.completeEditing(context);
+              },
+            ),
           ),
-          textInputAction: TextInputAction.done,
-          onEditingComplete: () {
-            InlineEditable.completeEditing(context);
-          },
-        ),
-      ),
+        );
+      },
     );
   }
 }

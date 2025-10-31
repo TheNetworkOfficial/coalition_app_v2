@@ -18,6 +18,7 @@ import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/widgets/post_grid_tile.dart';
 
 import 'edit_profile_page.dart';
+import 'settings_page.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
   const ProfilePage({super.key, this.targetUserId});
@@ -391,11 +392,39 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         usernameValue.isNotEmpty ? '@$usernameValue' : 'Username pending';
     final showAdminDashboardMenu = _isViewingSelf && hasAdminAccess;
     final adminMenuEnabled = !rolesAsync.isLoading && !rolesAsync.hasError;
+    final candidateStatus =
+        (profile?.candidateAccessStatus ?? 'none').trim();
+    final openAdminDashboardCallback =
+        showAdminDashboardMenu ? _openAdminDashboard : null;
     debugPrint(
       '[ProfilePage][TEMP] overflow gating isViewingSelf=$_isViewingSelf showAdminDashboardMenu=$showAdminDashboardMenu adminMenuEnabled=$adminMenuEnabled',
     );
+    final profileTitle = profile?.displayName?.trim();
 
     return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          profileTitle?.isNotEmpty == true ? profileTitle! : 'Profile',
+        ),
+        actions: [
+          if (_isViewingSelf)
+            IconButton(
+              icon: const Icon(Icons.settings),
+              tooltip: 'Settings',
+              onPressed: () {
+                final args = SettingsArgs(
+                  onEditProfile: _handleEditProfile,
+                  onSignOut: _signOut,
+                  onOpenAdminDashboard: openAdminDashboardCallback,
+                  showCandidateAccess: candidateStatus != 'approved',
+                  showAdminDashboard: showAdminDashboardMenu,
+                  adminDashboardEnabled: adminMenuEnabled,
+                );
+                context.push('/settings', extra: args);
+              },
+            ),
+        ],
+      ),
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: _onRefresh,
@@ -415,10 +444,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     usernameLabel: usernameLabel,
                     showActions: _isViewingSelf,
                     onToggleFollow: onToggleFollow,
-                    showAdminDashboardMenu: showAdminDashboardMenu,
-                    adminMenuEnabled: adminMenuEnabled,
-                    onOpenAdminDashboard:
-                        showAdminDashboardMenu ? _openAdminDashboard : null,
                   ),
                 ),
               ),
@@ -547,9 +572,6 @@ class _ProfileDetailsSection extends StatelessWidget {
     required this.usernameLabel,
     this.showActions = true,
     this.onToggleFollow,
-    this.showAdminDashboardMenu = false,
-    this.adminMenuEnabled = true,
-    this.onOpenAdminDashboard,
   });
 
   final Profile? profile;
@@ -560,9 +582,6 @@ class _ProfileDetailsSection extends StatelessWidget {
   final String usernameLabel;
   final bool showActions;
   final Future<void> Function(String targetUserId, bool next)? onToggleFollow;
-  final bool showAdminDashboardMenu;
-  final bool adminMenuEnabled;
-  final VoidCallback? onOpenAdminDashboard;
 
   @override
   Widget build(BuildContext context) {
@@ -582,9 +601,6 @@ class _ProfileDetailsSection extends StatelessWidget {
       theme: theme,
       status: candidateStatus,
     );
-    final showAdminMenu = showAdminDashboardMenu && showActions;
-    final adminMenuHandler = onOpenAdminDashboard;
-    final bool adminEnabled = adminMenuEnabled;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -647,65 +663,6 @@ class _ProfileDetailsSection extends StatelessWidget {
                 ],
               ),
             ),
-            if (showActions)
-              PopupMenuButton<String>(
-                onSelected: (value) {
-                  switch (value) {
-                    case 'edit':
-                      onEditProfile();
-                      break;
-                    case 'candidate':
-                      context.push('/settings/candidate-access');
-                      break;
-                    case 'admin':
-                      adminMenuHandler?.call();
-                      break;
-                    case 'signout':
-                      onSignOut();
-                      break;
-                  }
-                },
-                itemBuilder: (context) {
-                  debugPrint(
-                    '[ProfilePage][TEMP] menu builder candidateStatus=$candidateStatus showAdminMenu=$showAdminMenu adminEnabled=$adminEnabled',
-                  );
-                  final entries = <PopupMenuEntry<String>>[
-                    const PopupMenuItem<String>(
-                      value: 'edit',
-                      child: Text('Edit profile'),
-                    ),
-                  ];
-                  var adminEntryAdded = false;
-                  if (candidateStatus != 'approved') {
-                    entries.add(
-                      const PopupMenuItem<String>(
-                        value: 'candidate',
-                        child: Text('Apply for candidate access'),
-                      ),
-                    );
-                  }
-                  if (showAdminMenu) {
-                    adminEntryAdded = true;
-                    entries.add(
-                      PopupMenuItem<String>(
-                        value: 'admin',
-                        enabled: adminEnabled,
-                        child: const Text('Admin dashboard'),
-                      ),
-                    );
-                  }
-                  debugPrint(
-                    '[ProfilePage][TEMP] menu entries adminAdded=$adminEntryAdded candidateStatus=$candidateStatus',
-                  );
-                  entries.add(
-                    const PopupMenuItem<String>(
-                      value: 'signout',
-                      child: Text('Sign out'),
-                    ),
-                  );
-                  return entries;
-                },
-              ),
           ],
         ),
         const SizedBox(height: 16),
@@ -881,11 +838,14 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
     final hasError = _loadError != null;
     final isInitialized = controller != null && controller.value.isInitialized;
     final safeThumb = validPostThumbUrl(widget.item.thumbUrl);
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final onSurface = colorScheme.onSurface;
 
     Widget child;
 
     if (hasError) {
-      child = _buildFallback(safeThumb);
+      child = _buildFallback(context, safeThumb);
     } else if (isInitialized) {
       final videoController = controller;
       var aspectRatio = videoController.value.aspectRatio;
@@ -905,10 +865,10 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
               child: VideoPlayer(videoController),
             ),
             if (!videoController.value.isPlaying)
-              const Center(
+              Center(
                 child: Icon(
                   Icons.play_arrow,
-                  color: Colors.white70,
+                  color: onSurface.withValues(alpha: 0.70),
                   size: 64,
                 ),
               ),
@@ -925,10 +885,10 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
               fit: BoxFit.contain,
               placeholder: (context, url) => const PostGridShimmer(),
               errorWidget: (context, url, error) =>
-                  _profileFullScreenPlaceholder(),
+                  _profileFullScreenPlaceholder(context),
             )
           else
-            _profileFullScreenPlaceholder(),
+            _profileFullScreenPlaceholder(context),
           const Center(
             child: SizedBox(
               height: 48,
@@ -941,12 +901,11 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: IconThemeData(color: onSurface),
       ),
       body: Center(
         child: Hero(
@@ -957,16 +916,17 @@ class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
     );
   }
 
-  Widget _buildFallback(String? safeThumb) {
+  Widget _buildFallback(BuildContext context, String? safeThumb) {
     if (safeThumb != null) {
       return CachedNetworkImage(
         imageUrl: safeThumb,
         fit: BoxFit.contain,
         placeholder: (context, url) => const PostGridShimmer(),
-        errorWidget: (context, url, error) => _profileFullScreenPlaceholder(),
+        errorWidget: (imageContext, url, error) =>
+            _profileFullScreenPlaceholder(context),
       );
     }
-    return _profileFullScreenPlaceholder();
+    return _profileFullScreenPlaceholder(context);
   }
 }
 
@@ -978,23 +938,24 @@ class _ProfilePostViewerPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final safeThumb = validPostThumbUrl(item.thumbUrl);
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final Widget heroChild = safeThumb != null
         ? CachedNetworkImage(
             imageUrl: safeThumb,
             fit: BoxFit.contain,
             placeholder: (context, url) => const PostGridShimmer(),
-            errorWidget: (context, url, error) =>
-                _profileFullScreenPlaceholder(),
+            errorWidget: (imageContext, url, error) =>
+                _profileFullScreenPlaceholder(context),
           )
-        : _profileFullScreenPlaceholder();
+        : _profileFullScreenPlaceholder(context);
 
     return Scaffold(
-      backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: IconThemeData(color: colorScheme.onSurface),
       ),
       body: Center(
         child: Hero(
@@ -1006,14 +967,16 @@ class _ProfilePostViewerPage extends StatelessWidget {
   }
 }
 
-Widget _profileFullScreenPlaceholder() {
-  return Container(
-    color: Colors.black,
-    alignment: Alignment.center,
-    child: const Icon(
-      Icons.broken_image_outlined,
-      color: Colors.white70,
-      size: 48,
+Widget _profileFullScreenPlaceholder(BuildContext context) {
+  final colorScheme = Theme.of(context).colorScheme;
+  return ColoredBox(
+    color: colorScheme.surface,
+    child: Center(
+      child: Icon(
+        Icons.broken_image_outlined,
+        color: colorScheme.onSurface.withValues(alpha: 0.70),
+        size: 48,
+      ),
     ),
   );
 }

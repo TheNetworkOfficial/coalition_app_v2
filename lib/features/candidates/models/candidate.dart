@@ -57,14 +57,37 @@ class Candidate extends Equatable {
       return 0;
     }
 
+    final resolvedName = () {
+      final primary = readString(json['name']).trim();
+      if (primary.isNotEmpty) {
+        return primary;
+      }
+      final fallback = readString(json['displayName']).trim();
+      if (fallback.isNotEmpty) {
+        return fallback;
+      }
+      return 'Unnamed candidate';
+    }();
+
+    String? readNullable(dynamic value) {
+      final text = readString(value).trim();
+      return text.isEmpty ? null : text;
+    }
+
+    final resolvedLevel =
+        readNullable(json['level'] ?? json['levelOfOffice']);
+    final resolvedDistrict = readNullable(json['district']);
+    final resolvedDescription =
+        readNullable(json['description'] ?? json['bio']);
+
     return Candidate(
       candidateId: readString(json['candidateId']).trim(),
-      name: readString(json['name']).trim(),
+      name: resolvedName,
       headshotUrl: (json['headshotUrl'] as String?)?.trim(),
       avatarUrl: (json['avatarUrl'] as String?)?.trim(),
-      level: (json['level'] as String?)?.trim(),
-      district: (json['district'] as String?)?.trim(),
-      description: (json['description'] as String?)?.trim(),
+      level: resolvedLevel,
+      district: resolvedDistrict,
+      description: resolvedDescription,
       tags: resolveTags(json['tags']),
       followersCount: readInt(json['followersCount']),
       isFollowing: json['isFollowing'] == true,
@@ -137,24 +160,35 @@ class Candidate extends Equatable {
       ];
 
   static Map<String, String?>? _readSocials(dynamic raw) {
-    if (raw is Map) {
-      final result = <String, String?>{};
-      raw.forEach((key, value) {
-        if (key is! String) {
-          return;
-        }
-        if (value is String) {
-          final trimmed = value.trim();
-          result[key] = trimmed.isEmpty ? null : trimmed;
-        } else if (value == null) {
-          result[key] = null;
-        }
-      });
-      if (result.isEmpty) {
-        return null;
-      }
-      return Map<String, String?>.unmodifiable(result);
+    if (raw is! Map) {
+      return null;
     }
-    return null;
+
+    final normalized = <String, String?>{};
+    raw.forEach((key, value) {
+      if (key is! String) {
+        return;
+      }
+      final normalizedKey = key.trim().toLowerCase();
+      if (normalizedKey.isEmpty) {
+        return;
+      }
+      final textValue = value is String ? value.trim() : null;
+      if (textValue == null || textValue.isEmpty) {
+        return;
+      }
+      normalized[normalizedKey] = textValue;
+    });
+
+    if (normalized.isEmpty) {
+      return null;
+    }
+    if (normalized.containsKey('twitter') &&
+        !normalized.containsKey('x') &&
+        (normalized['twitter']?.isNotEmpty ?? false)) {
+      normalized['x'] = normalized['twitter'];
+    }
+
+    return Map<String, String?>.unmodifiable(normalized);
   }
 }

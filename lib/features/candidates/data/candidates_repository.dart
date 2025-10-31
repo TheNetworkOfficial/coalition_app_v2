@@ -1,5 +1,6 @@
 import 'package:coalition_app_v2/features/candidates/models/candidate.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate_update.dart';
+import 'package:coalition_app_v2/features/candidates/models/candidates_filter.dart';
 import 'package:coalition_app_v2/models/posts_page.dart';
 import 'package:coalition_app_v2/services/api_client.dart';
 
@@ -11,16 +12,16 @@ class CandidatesRepository {
   Future<({List<Candidate> items, String? cursor})> list({
     int limit = 20,
     String? cursor,
-    String? level,
-    String? district,
-    String? tag,
+    CandidatesFilter? filter,
   }) {
+    final tags = filter?.tags ?? const <String>{};
     return apiClient.getCandidates(
       limit: limit,
       cursor: cursor,
-      level: level,
-      district: district,
-      tag: tag,
+      level: filter?.level,
+      district: filter?.district,
+      tags: tags.isEmpty ? null : tags.join(','),
+      query: filter?.query,
     );
   }
 
