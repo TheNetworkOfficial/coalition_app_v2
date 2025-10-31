@@ -10,6 +10,7 @@ import '../app_shell.dart';
 import '../pages/admin/admin_application_detail_page.dart';
 import '../pages/admin/admin_applications_page.dart';
 import '../pages/admin/admin_dashboard_page.dart';
+import '../pages/admin/admin_tags_page.dart';
 import '../pages/bootstrap_page.dart';
 import '../pages/candidate_viewer_page.dart';
 import '../pages/candidates_page.dart';
@@ -138,6 +139,13 @@ final GoRouter appRouter = GoRouter(
               },
             ),
           ],
+        ),
+        GoRoute(
+          path: '/admin/tags',
+          name: 'admin_tags',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: AdminTagsPage(),
+          ),
         ),
       ],
     ),

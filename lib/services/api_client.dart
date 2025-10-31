@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:coalition_app_v2/features/admin/models/admin_application.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate_update.dart';
+import 'package:coalition_app_v2/features/tags/models/tag_models.dart';
 
 import '../debug/logging.dart';
 import '../debug/logging_http_client.dart';
@@ -692,6 +693,286 @@ class ApiClient {
       body: payload,
     );
     return _parseApprovalResponse(response, fallbackId: trimmed);
+  }
+
+  Future<List<TagCategory>> getTagCatalog() async {
+    final uri = _resolve('/api/tagCatalog');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.get(uri, headers: headers);
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while loading tag catalog',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw HttpException('tagCatalog $statusCode');
+    }
+    if (response.body.isEmpty) {
+      return const <TagCategory>[];
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected tag catalog response');
+    }
+    final rawCategories = decoded['categories'];
+    final categories = <TagCategory>[];
+    if (rawCategories is List) {
+      for (final entry in rawCategories) {
+        if (entry is Map<String, dynamic>) {
+          categories.add(TagCategory.fromJson(entry));
+        }
+      }
+    }
+    return List<TagCategory>.unmodifiable(categories);
+  }
+
+  Future<TagCategory> createTagCategory({
+    required String name,
+    int order = 0,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw ArgumentError('name must not be empty');
+    }
+    final uri = _resolve('/api/tagCatalog');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      'name': trimmedName,
+      'order': order,
+    };
+    final response = await _httpClient.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackName: trimmedName,
+      operation: 'create tag category',
+    );
+  }
+
+  Future<TagCategory> updateTagCategory({
+    required String categoryId,
+    String? name,
+    int? order,
+  }) async {
+    final trimmedId = categoryId.trim();
+    if (trimmedId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    if ((name == null || name.trim().isEmpty) && order == null) {
+      throw ArgumentError('name or order must be provided');
+    }
+    final encodedId = Uri.encodeComponent(trimmedId);
+    final uri = _resolve('/api/tagCatalog/$encodedId');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+      if (order != null) 'order': order,
+    };
+    final response = await _httpClient.patch(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedId,
+      fallbackName: name?.trim(),
+      operation: 'update tag category',
+    );
+  }
+
+  Future<void> deleteTagCategory(String categoryId) async {
+    final trimmedId = categoryId.trim();
+    if (trimmedId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmedId);
+    final uri = _resolve('/api/tagCatalog/$encodedId');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.delete(uri, headers: headers);
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while deleting tag category',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Tag category not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to delete tag category: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+  }
+
+  Future<TagCategory> addTagToCategory({
+    required String categoryId,
+    required String label,
+    String? value,
+  }) async {
+    final trimmedId = categoryId.trim();
+    if (trimmedId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    final trimmedLabel = label.trim();
+    if (trimmedLabel.isEmpty) {
+      throw ArgumentError('label must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmedId);
+    final uri = _resolve('/api/tagCatalog/$encodedId/tags');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      'label': trimmedLabel,
+      if (value != null && value.trim().isNotEmpty) 'value': value.trim(),
+    };
+    final response = await _httpClient.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedId,
+      operation: 'add tag to category',
+    );
+  }
+
+  Future<TagCategory> updateTagInCategory({
+    required String categoryId,
+    required String tagId,
+    String? label,
+    String? value,
+  }) async {
+    final trimmedCategoryId = categoryId.trim();
+    final trimmedTagId = tagId.trim();
+    if (trimmedCategoryId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    if (trimmedTagId.isEmpty) {
+      throw ArgumentError('tagId must not be empty');
+    }
+    if ((label == null || label.trim().isEmpty) &&
+        (value == null || value.trim().isEmpty)) {
+      throw ArgumentError('label or value must be provided');
+    }
+    final encodedCategoryId = Uri.encodeComponent(trimmedCategoryId);
+    final encodedTagId = Uri.encodeComponent(trimmedTagId);
+    final uri =
+        _resolve('/api/tagCatalog/$encodedCategoryId/tags/$encodedTagId');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      if (label != null && label.trim().isNotEmpty) 'label': label.trim(),
+      if (value != null && value.trim().isNotEmpty) 'value': value.trim(),
+    };
+    final response = await _httpClient.patch(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedCategoryId,
+      operation: 'update tag in category',
+    );
+  }
+
+  Future<TagCategory> deleteTagInCategory({
+    required String categoryId,
+    required String tagId,
+  }) async {
+    final trimmedCategoryId = categoryId.trim();
+    final trimmedTagId = tagId.trim();
+    if (trimmedCategoryId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    if (trimmedTagId.isEmpty) {
+      throw ArgumentError('tagId must not be empty');
+    }
+    final encodedCategoryId = Uri.encodeComponent(trimmedCategoryId);
+    final encodedTagId = Uri.encodeComponent(trimmedTagId);
+    final uri =
+        _resolve('/api/tagCatalog/$encodedCategoryId/tags/$encodedTagId');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.delete(uri, headers: headers);
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedCategoryId,
+      operation: 'delete tag in category',
+    );
+  }
+
+  TagCategory _parseTagCategoryResponse(
+    http.Response response, {
+    String? fallbackId,
+    String? fallbackName,
+    required String operation,
+  }) {
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while attempting to $operation',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Tag category not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to $operation: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (response.body.isEmpty) {
+      throw ApiException('Empty response while attempting to $operation');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected response while attempting to $operation');
+    }
+    final rawCategory = decoded['category'];
+    if (rawCategory is Map<String, dynamic>) {
+      return TagCategory.fromJson(rawCategory);
+    }
+    if (decoded['ok'] == true && fallbackId != null) {
+      return TagCategory(
+        categoryId: fallbackId,
+        name: fallbackName ?? fallbackId,
+        order: 0,
+        tags: const <TagDefinition>[],
+      );
+    }
+    throw ApiException('Missing category in response while attempting to $operation');
   }
 
   ApprovalResult _parseApprovalResponse(

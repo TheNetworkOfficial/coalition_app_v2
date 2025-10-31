@@ -4,8 +4,12 @@
 // - No dedicated image compression helper located; current flows use source files directly.
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../widgets/user_avatar.dart';
+import '../../tags/models/tag_models.dart';
+import '../../tags/providers/tag_catalog_providers.dart';
+import '../../tags/ui/tag_picker_sheet.dart';
 import 'candidate_views.dart';
 import 'inline_editable.dart';
 
@@ -347,10 +351,7 @@ class CandidateTagsEditable extends StatefulWidget {
 }
 
 class _CandidateTagsEditableState extends State<CandidateTagsEditable> {
-  final TextEditingController _inputController = TextEditingController();
-  final FocusNode _inputFocusNode = FocusNode();
   late List<String> _tags;
-  bool _adding = false;
 
   @override
   void initState() {
@@ -364,13 +365,6 @@ class _CandidateTagsEditableState extends State<CandidateTagsEditable> {
     if (!listEquals(oldWidget.initialTags, widget.initialTags)) {
       _tags = _sanitize(widget.initialTags);
     }
-  }
-
-  @override
-  void dispose() {
-    _inputController.dispose();
-    _inputFocusNode.dispose();
-    super.dispose();
   }
 
   List<String> _sanitize(List<String> tags) {
@@ -393,117 +387,79 @@ class _CandidateTagsEditableState extends State<CandidateTagsEditable> {
     _notifyChange();
   }
 
-  void _showAdder() {
-    if (_tags.length >= widget.maxTags) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text('You can add up to ${widget.maxTags} tags.'),
-          ),
-        );
+  Future<void> _openPicker(BuildContext context) async {
+    final picked = await showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => TagPickerSheet(
+        initiallySelected: List<String>.from(_tags),
+        maxSelection: widget.maxTags,
+      ),
+    );
+    if (picked == null) {
       return;
     }
+    final next = _sanitize(picked);
     setState(() {
-      _adding = true;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        FocusScope.of(context).requestFocus(_inputFocusNode);
-      }
-    });
-  }
-
-  void _addTag() {
-    final value = _inputController.text.trim();
-    if (value.isEmpty) {
-      return;
-    }
-    if (_tags.contains(value)) {
-      _inputController.clear();
-      setState(() {
-        _adding = false;
-      });
-      return;
-    }
-    if (_tags.length >= widget.maxTags) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text('You can add up to ${widget.maxTags} tags.'),
-          ),
-        );
-      return;
-    }
-    setState(() {
-      _tags.add(value);
-      _inputController.clear();
-      _adding = false;
+      _tags = next;
     });
     _notifyChange();
   }
 
   @override
   Widget build(BuildContext context) {
-    final chips = <Widget>[
-      for (final tag in _tags)
-        InputChip(
-          label: Text(tag),
-          onDeleted: () => _removeTag(tag),
-        ),
-      if (!_adding)
-        ActionChip(
-          label: const Text('Add tag'),
-          avatar: const Icon(Icons.add),
-          onPressed: _showAdder,
-        ),
-    ];
+    return Consumer(
+      builder: (context, ref, _) {
+        final asyncCatalog = ref.watch(tagCatalogProvider);
+        final categories =
+            asyncCatalog.asData?.value ?? const <TagCategory>[];
+        final labelLookup = <String, String>{};
+        for (final category in categories) {
+          for (final tag in category.tags) {
+            labelLookup[tag.value] = tag.label;
+          }
+        }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: chips,
-        ),
-        if (_adding) ...[
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _inputController,
-                  focusNode: _inputFocusNode,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    labelText: 'Add priority tag',
-                    helperText:
-                        '${_tags.length}/${widget.maxTags} tags used',
-                  ),
-                  onSubmitted: (_) => _addTag(),
-                ),
+        final chips = <Widget>[
+          for (final tag in _tags)
+            InputChip(
+              label: Text(labelLookup[tag] ?? tag),
+              onDeleted: () => _removeTag(tag),
+            ),
+        ];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (chips.isEmpty)
+              Text(
+                'No tags selected yet.',
+                style: Theme.of(context).textTheme.bodyMedium,
               ),
-              const SizedBox(width: 12),
-              TextButton(
-                onPressed: _addTag,
-                child: const Text('Add'),
+            if (chips.isNotEmpty)
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: chips,
               ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                tooltip: 'Cancel',
-                onPressed: () {
-                  setState(() {
-                    _adding = false;
-                    _inputController.clear();
-                  });
-                },
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.label),
+              label: Text(
+                _tags.isEmpty ? 'Choose tags' : 'Edit tags',
               ),
-            ],
-          ),
-        ],
-      ],
+              onPressed: () => _openPicker(context),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '${_tags.length}/${widget.maxTags} tags selected',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

@@ -7,6 +7,8 @@ import '../data/focus_tags.dart';
 import '../models/candidates_filter.dart';
 import '../providers/candidates_filter_provider.dart';
 import '../providers/candidates_providers.dart';
+import '../../tags/models/tag_models.dart';
+import '../../tags/providers/tag_catalog_providers.dart';
 
 /// Opens the reusable Candidates filter/search sheet.
 Future<void> showCandidatesFilterSheet(BuildContext context, WidgetRef ref) async {
@@ -51,6 +53,70 @@ class _FilterSheetState extends ConsumerState<_FilterSheet> {
   Widget build(BuildContext context) {
     final pad = MediaQuery.of(context).viewInsets.bottom + 24.0;
     final isIOS = Theme.of(context).platform == TargetPlatform.iOS;
+    final asyncCatalog = ref.watch(tagCatalogProvider);
+    final categories =
+        asyncCatalog.asData?.value ?? const <TagCategory>[];
+    final loadingCatalog = asyncCatalog.isLoading && categories.isEmpty;
+    final catalogError = asyncCatalog.hasError;
+
+    final tagSections = <Widget>[];
+    if (loadingCatalog) {
+      tagSections.add(
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    } else if (categories.isEmpty) {
+      final message = catalogError
+          ? 'Failed to load tags. Try again later.'
+          : 'No tags available yet.';
+      tagSections.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+      );
+    } else {
+      for (var index = 0; index < categories.length; index += 1) {
+        final category = categories[index];
+        tagSections.add(
+          ExpansionTile(
+            initiallyExpanded: index == 0,
+            title: Text(category.name),
+            children: [
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: category.tags.map((tag) {
+                    final selected = _tags.contains(tag.value);
+                    return FilterChip(
+                      label: Text(tag.label),
+                      selected: selected,
+                      onSelected: (_) {
+                        setState(() {
+                          selected
+                              ? _tags.remove(tag.value)
+                              : _tags.add(tag.value);
+                        });
+                      },
+                    );
+                  }).toList(growable: false),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      }
+    }
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 12, 16, pad),
@@ -99,35 +165,7 @@ class _FilterSheetState extends ConsumerState<_FilterSheet> {
               },
             ),
             const SizedBox(height: 12),
-            ...kFocusAreaTags.entries.toList().asMap().entries.map((entry) {
-              final index = entry.key;
-              final data = entry.value;
-              return ExpansionTile(
-                initiallyExpanded: index == 0,
-                title: Text(data.key),
-                children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: data.value.map((labelToTag) {
-                      final label = labelToTag.keys.first;
-                      final tag = labelToTag.values.first;
-                      final selected = _tags.contains(tag);
-                      return FilterChip(
-                        label: Text(label),
-                        selected: selected,
-                        onSelected: (_) {
-                          setState(() {
-                            selected ? _tags.remove(tag) : _tags.add(tag);
-                          });
-                        },
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-              );
-            }),
+            ...tagSections,
             Row(
               children: [
                 TextButton(

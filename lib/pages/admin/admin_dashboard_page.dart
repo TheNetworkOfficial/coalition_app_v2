@@ -10,6 +10,8 @@ class AdminDashboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
+        final location = GoRouterState.of(context).uri.toString();
+        final currentIndex = location.startsWith('/admin/tags') ? 1 : 0;
         final useRail = constraints.maxWidth >= 720;
         if (useRail) {
           return Scaffold(
@@ -20,7 +22,7 @@ class AdminDashboardPage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 NavigationRail(
-                  selectedIndex: 0,
+                  selectedIndex: currentIndex,
                   labelType: NavigationRailLabelType.all,
                   destinations: const [
                     NavigationRailDestination(
@@ -28,10 +30,17 @@ class AdminDashboardPage extends StatelessWidget {
                       selectedIcon: Icon(Icons.inbox),
                       label: Text('Applications'),
                     ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.label_outline),
+                      selectedIcon: Icon(Icons.label),
+                      label: Text('Candidate Tags'),
+                    ),
                   ],
                   onDestinationSelected: (index) {
                     if (index == 0) {
                       context.go('/admin/applications');
+                    } else if (index == 1) {
+                      context.go('/admin/tags');
                     }
                   },
                 ),
@@ -43,20 +52,33 @@ class AdminDashboardPage extends StatelessWidget {
         }
 
         return DefaultTabController(
-          length: 1,
+          length: 2,
+          initialIndex: currentIndex,
           child: Scaffold(
             appBar: AppBar(
               title: const Text('Admin dashboard'),
-              bottom: const TabBar(
-                tabs: [
+              bottom: TabBar(
+                onTap: (index) {
+                  if (index == currentIndex) {
+                    return;
+                  }
+                  if (index == 0) {
+                    context.go('/admin/applications');
+                  } else {
+                    context.go('/admin/tags');
+                  }
+                },
+                tabs: const [
                   Tab(text: 'Applications'),
+                  Tab(text: 'Candidate Tags'),
                 ],
               ),
             ),
             body: TabBarView(
               physics: const NeverScrollableScrollPhysics(),
               children: [
-                child,
+                currentIndex == 0 ? child : const SizedBox.shrink(),
+                currentIndex == 1 ? child : const SizedBox.shrink(),
               ],
             ),
           ),
