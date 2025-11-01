@@ -42,6 +42,9 @@ class PostGridTile extends StatelessWidget {
         final showSpinner = !hasThumbnail;
         final showDuration = item.durationMs > 0 && hasThumbnail;
 
+        final colorScheme = Theme.of(context).colorScheme;
+        final onSurface = colorScheme.onSurface;
+
         return GestureDetector(
           onTap: (!isFailed && hasThumbnail) ? onTap : null,
           child: ClipRRect(
@@ -51,7 +54,11 @@ class PostGridTile extends StatelessWidget {
               children: [
                 Hero(
                   tag: 'profile_post_${item.id}',
-                  child: _buildThumbnail(memCacheWidth, memCacheHeight),
+                  child: _buildThumbnail(
+                    context,
+                    memCacheWidth,
+                    memCacheHeight,
+                  ),
                 ),
                 if (showDuration)
                   Positioned(
@@ -63,19 +70,21 @@ class PostGridTile extends StatelessWidget {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.black87,
+                        color: colorScheme.scrim.withValues(alpha: 0.87),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
                         _formatDuration(item.duration),
-                        style:
-                            const TextStyle(color: Colors.white, fontSize: 12),
+                        style: TextStyle(
+                          color: onSurface,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                   ),
                 if (showSpinner && !isFailed)
                   Container(
-                    color: Colors.black26,
+                    color: colorScheme.scrim.withValues(alpha: 0.26),
                     child: const Center(
                       child: SizedBox(
                         width: 28,
@@ -86,20 +95,23 @@ class PostGridTile extends StatelessWidget {
                   ),
                 if (isFailed)
                   Container(
-                    color: Colors.black54,
+                    color: colorScheme.scrim.withValues(alpha: 0.54),
                     alignment: Alignment.center,
                     padding: const EdgeInsets.all(12),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.error_outline,
-                            color: Colors.white, size: 28),
-                        SizedBox(height: 8),
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          color: onSurface,
+                          size: 28,
+                        ),
+                        const SizedBox(height: 8),
                         Text(
                           'Video processing failed.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Colors.white,
+                            color: onSurface,
                             fontSize: 12,
                           ),
                         ),
@@ -114,10 +126,14 @@ class PostGridTile extends StatelessWidget {
     );
   }
 
-  Widget _buildThumbnail(int memCacheWidth, int memCacheHeight) {
+  Widget _buildThumbnail(
+    BuildContext context,
+    int memCacheWidth,
+    int memCacheHeight,
+  ) {
     final safeThumb = validPostThumbUrl(item.thumbUrl);
     if (safeThumb == null) {
-      return _placeholderTile();
+      return _placeholderTile(context);
     }
     return CachedNetworkImage(
       imageUrl: safeThumb,
@@ -125,15 +141,20 @@ class PostGridTile extends StatelessWidget {
       memCacheWidth: memCacheWidth,
       memCacheHeight: memCacheHeight,
       placeholder: (context, url) => const PostGridShimmer(),
-      errorWidget: (context, url, error) => _placeholderTile(),
+      errorWidget: (context, url, error) => _placeholderTile(context),
     );
   }
 
-  Widget _placeholderTile() {
-    return Container(
-      color: Colors.grey.shade300,
-      alignment: Alignment.center,
-      child: const Icon(Icons.videocam_outlined, color: Colors.black38),
+  Widget _placeholderTile(BuildContext context) {
+    final theme = Theme.of(context);
+    return ColoredBox(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Align(
+        child: Icon(
+          Icons.videocam_outlined,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
     );
   }
 
@@ -152,8 +173,10 @@ class PostGridShimmer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color =
-        Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5);
+    final color = Theme.of(context)
+        .colorScheme
+        .surfaceContainerHighest
+        .withValues(alpha: 0.5);
     return AspectRatio(
       aspectRatio: 1,
       child: Container(

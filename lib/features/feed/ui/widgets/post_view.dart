@@ -290,8 +290,10 @@ class PostViewState extends State<PostView>
   }
 
   Widget _buildImage(String? url) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final surfaceColor = colorScheme.surface;
     if (url == null || url.isEmpty) {
-      return Container(color: Colors.black);
+      return ColoredBox(color: surfaceColor);
     }
     return Image.network(
       url,
@@ -300,20 +302,25 @@ class PostViewState extends State<PostView>
         if (loadingProgress == null) {
           return child;
         }
-        return Container(
-          color: Colors.black,
-          alignment: Alignment.center,
-          child: const SizedBox(
-            width: 36,
-            height: 36,
-            child: CircularProgressIndicator(strokeWidth: 2.5),
+        return ColoredBox(
+          color: surfaceColor,
+          child: const Center(
+            child: SizedBox(
+              width: 36,
+              height: 36,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
           ),
         );
       },
-      errorBuilder: (context, error, stackTrace) => Container(
-        color: Colors.black,
-        alignment: Alignment.center,
-        child: const Icon(Icons.broken_image_outlined, color: Colors.white54),
+      errorBuilder: (context, error, stackTrace) => ColoredBox(
+        color: surfaceColor,
+        child: Center(
+          child: Icon(
+            Icons.broken_image_outlined,
+            color: colorScheme.onSurface.withValues(alpha: 0.54),
+          ),
+        ),
       ),
     );
   }
@@ -321,6 +328,7 @@ class PostViewState extends State<PostView>
   Widget _buildGradientOverlay() {
     // Visual-only overlay; ignore pointer events so taps fall through to
     // the video surface beneath.
+    final colorScheme = Theme.of(context).colorScheme;
     return IgnorePointer(
       ignoring: true,
       child: DecoratedBox(
@@ -329,10 +337,10 @@ class PostViewState extends State<PostView>
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.black.withValues(alpha: 0.2),
-              Colors.black.withValues(alpha: 0.05),
-              Colors.black.withValues(alpha: 0.4),
-              Colors.black.withValues(alpha: 0.8),
+              colorScheme.scrim.withValues(alpha: 0.20),
+              colorScheme.scrim.withValues(alpha: 0.05),
+              colorScheme.scrim.withValues(alpha: 0.40),
+              colorScheme.scrim.withValues(alpha: 0.80),
             ],
             stops: const [0, 0.4, 0.7, 1],
           ),

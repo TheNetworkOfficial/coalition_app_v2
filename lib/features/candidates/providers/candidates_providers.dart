@@ -1,11 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
-
-import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart'
-    show AsyncValue, FutureProvider, Provider, Ref;
-import 'package:flutter_riverpod/legacy.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/app_providers.dart';
 import '../../../services/api_client.dart';
@@ -13,10 +8,57 @@ import '../data/candidates_repository.dart';
 import '../models/candidate.dart';
 import '../models/candidate_update.dart';
 import '../../../models/posts_page.dart';
+import '../../../models/profile.dart';
+import 'candidates_pager_provider.dart';
+
+export 'candidates_pager_provider.dart';
 
 final candidatesRepositoryProvider = Provider<CandidatesRepository>((ref) {
   final apiClient = ref.watch(apiClientProvider);
   return CandidatesRepository(apiClient: apiClient);
+});
+
+final myCandidateApplicationProvider =
+    FutureProvider<Map<String, dynamic>?>((ref) async {
+  final api = ref.read(apiClientProvider);
+  try {
+    return await api.getMyCandidateApplication();
+  } catch (_) {
+    return null;
+  }
+});
+
+final myProfileProvider = FutureProvider<Profile?>((ref) async {
+  final api = ref.read(apiClientProvider);
+  try {
+    final Profile? profile = await api.getMyProfile();
+    return profile;
+  } catch (_) {
+    return null;
+  }
+});
+
+final candidateIdentityLockedProvider = Provider<bool>((ref) {
+  final appAsync = ref.watch(myCandidateApplicationProvider);
+  final appIsLoading = appAsync.isLoading;
+  final app = appAsync.asData?.value ?? appAsync.value;
+  final appStatus = ((app?['status'] as String?) ?? '').trim().toLowerCase();
+  final approvedByApp = appStatus == 'approved';
+
+  final profAsync = ref.watch(myProfileProvider);
+  final profIsLoading = profAsync.isLoading;
+  final Profile? prof = profAsync.asData?.value ?? profAsync.value;
+  final profStatus = ((prof?.candidateAccessStatus) ?? '').trim().toLowerCase();
+  final approvedByProfile = profStatus == 'approved';
+
+  // If either is loading, lock to prevent first-frame taps.
+  if (appIsLoading || profIsLoading) return true;
+
+  // If either source says approved, lock.
+  if (approvedByApp || approvedByProfile) return true;
+
+  // Otherwise unlock (not approved on either source).
+  return false;
 });
 
 final candidateDetailProvider =
@@ -38,9 +80,15 @@ final candidateDetailProvider =
 });
 
 final candidatePostsProvider =
-    FutureProvider.family<PostsPage, String>((ref, id) {
+    FutureProvider.family<PostsPage, String>((ref, id) async {
   final repository = ref.watch(candidatesRepositoryProvider);
-  return repository.getCandidatePosts(id);
+  final page = await repository.getCandidatePosts(id);
+  final filteredItems = page.items
+      .where(
+        (item) => item.playbackUrl != null && item.playbackUrl!.isNotEmpty,
+      )
+      .toList(growable: false);
+  return PostsPage(items: filteredItems, nextCursor: page.nextCursor);
 });
 
 final candidateUpdateControllerProvider =
@@ -54,92 +102,3 @@ final candidateUpdateControllerProvider =
     return updated;
   };
 });
-
-class CandidatesPager extends StateNotifier<AsyncValue<List<Candidate>>> {
-  CandidatesPager(this._ref) : super(const AsyncValue.loading()) {
-    unawaited(_load(reset: true));
-  }
-
-  final Ref _ref;
-  final List<Candidate> _items = <Candidate>[];
-  String? _cursor;
-  bool _hasMore = true;
-  bool _isLoading = false;
-
-  bool get hasMore => _hasMore;
-  bool get isLoading => _isLoading;
-
-  Future<void> refresh() => _load(reset: true);
-
-  Future<void> loadMore() => _load(reset: false);
-
-  Future<void> _load({required bool reset}) async {
-    if (_isLoading) {
-      return;
-    }
-    _isLoading = true;
-
-    if (reset) {
-      _cursor = null;
-      _hasMore = true;
-      _items.clear();
-      state = const AsyncValue.loading();
-    }
-
-    final repository = _ref.read(candidatesRepositoryProvider);
-    try {
-      final page = await repository.list(limit: 20, cursor: _cursor);
-      if (reset) {
-        _items
-          ..clear()
-          ..addAll(page.items);
-      } else {
-        _items.addAll(page.items);
-      }
-      _cursor = page.cursor;
-      _hasMore = _cursor != null && _cursor!.isNotEmpty;
-      state = AsyncValue.data(List<Candidate>.unmodifiable(_items));
-    } catch (error, stackTrace) {
-      if (reset && _items.isEmpty) {
-        state = AsyncValue.error(error, stackTrace);
-      } else {
-        if (kDebugMode) {
-          debugPrint('Failed to load candidates: $error');
-        }
-        state = AsyncValue.data(List<Candidate>.unmodifiable(_items));
-      }
-      return;
-    } finally {
-      _isLoading = false;
-    }
-  }
-
-  Future<void> optimisticToggle(String id, bool next) async {
-    final index = _items.indexWhere((candidate) => candidate.candidateId == id);
-    if (index < 0) {
-      return;
-    }
-    final previous = _items[index];
-    final delta = next ? 1 : -1;
-    final updatedCount = max(0, previous.followersCount + delta);
-    _items[index] = previous.copyWith(
-      isFollowing: next,
-      followersCount: updatedCount,
-    );
-    state = AsyncValue.data(List<Candidate>.unmodifiable(_items));
-
-    final repository = _ref.read(candidatesRepositoryProvider);
-    try {
-      await repository.toggleFollow(id);
-    } catch (error, stackTrace) {
-      _items[index] = previous;
-      state = AsyncValue.data(List<Candidate>.unmodifiable(_items));
-      Error.throwWithStackTrace(error, stackTrace);
-    }
-  }
-}
-
-final candidatesPagerProvider =
-    StateNotifierProvider<CandidatesPager, AsyncValue<List<Candidate>>>(
-  (ref) => CandidatesPager(ref),
-);

@@ -4,8 +4,13 @@
 // - No dedicated image compression helper located; current flows use source files directly.
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../widgets/user_avatar.dart';
+import '../../tags/models/tag_models.dart';
+import '../../tags/providers/tag_catalog_providers.dart';
+import '../../tags/ui/tag_picker_sheet.dart';
 import 'candidate_views.dart';
 import 'inline_editable.dart';
 
@@ -30,6 +35,7 @@ class CandidateHeaderEditable extends StatefulWidget {
     this.extraChips = const <Widget>[],
     this.onAvatarUploadError,
     this.nameValidator,
+    this.locked = false,
   });
 
   final TextEditingController nameController;
@@ -42,6 +48,7 @@ class CandidateHeaderEditable extends StatefulWidget {
   final List<Widget> extraChips;
   final ValueChanged<Object>? onAvatarUploadError;
   final FormFieldValidator<String>? nameValidator;
+  final bool locked;
 
   @override
   State<CandidateHeaderEditable> createState() =>
@@ -99,6 +106,7 @@ class _CandidateHeaderEditableState extends State<CandidateHeaderEditable> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final locked = widget.locked;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -155,30 +163,37 @@ class _CandidateHeaderEditableState extends State<CandidateHeaderEditable> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              InlineEditable(
-                view: ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: widget.nameController,
-                  builder: (context, value, _) {
-                    final text = value.text.trim();
-                    return Text(
-                      text.isEmpty ? 'Unnamed candidate' : text,
-                      style: theme.textTheme.headlineSmall,
-                    );
-                  },
-                ),
-                edit: TextFormField(
-                  controller: widget.nameController,
-                  autofocus: true,
-                  style: theme.textTheme.headlineSmall,
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    isDense: true,
+              AbsorbPointer(
+                absorbing: locked,
+                child: InlineEditable(
+                  readOnly: locked,
+                  readOnlyHint: 'Locked after approval',
+                  view: ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: widget.nameController,
+                    builder: (context, value, _) {
+                      final text = value.text.trim();
+                      return Text(
+                        text.isEmpty ? 'Unnamed candidate' : text,
+                        style: theme.textTheme.headlineSmall,
+                      );
+                    },
                   ),
-                  validator: widget.nameValidator,
-                  textInputAction: TextInputAction.done,
-                  onEditingComplete: () {
-                    InlineEditable.completeEditing(context);
-                  },
+                  edit: TextFormField(
+                    controller: widget.nameController,
+                    autofocus: false,
+                    readOnly: locked,
+                    enabled: !locked,
+                    style: theme.textTheme.headlineSmall,
+                    decoration: const InputDecoration(
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                    validator: widget.nameValidator,
+                    textInputAction: TextInputAction.done,
+                    onEditingComplete: () {
+                      InlineEditable.completeEditing(context);
+                    },
+                  ),
                 ),
               ),
               const SizedBox(height: 8),
@@ -186,13 +201,23 @@ class _CandidateHeaderEditableState extends State<CandidateHeaderEditable> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _EditableChip(
-                    controller: widget.levelController,
-                    placeholder: 'Tap to add level',
+                  AbsorbPointer(
+                    absorbing: locked,
+                    child: _EditableChip(
+                      controller: widget.levelController,
+                      placeholder: 'Tap to add level',
+                      readOnly: locked,
+                      readOnlyHint: 'Locked after approval',
+                    ),
                   ),
-                  _EditableChip(
-                    controller: widget.districtController,
-                    placeholder: 'Tap to add district',
+                  AbsorbPointer(
+                    absorbing: locked,
+                    child: _EditableChip(
+                      controller: widget.districtController,
+                      placeholder: 'Tap to add district',
+                      readOnly: locked,
+                      readOnlyHint: 'Locked after approval',
+                    ),
                   ),
                   ...widget.extraChips,
                 ],
@@ -209,47 +234,70 @@ class _EditableChip extends StatelessWidget {
   const _EditableChip({
     required this.controller,
     required this.placeholder,
+    this.readOnly = false,
+    this.readOnlyHint,
   });
 
   final TextEditingController controller;
   final String placeholder;
+  final bool readOnly;
+  final String? readOnlyHint;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InlineEditable(
-      view: ValueListenableBuilder<TextEditingValue>(
-        valueListenable: controller,
-        builder: (context, value, _) {
-          final text = value.text.trim();
-          if (text.isEmpty) {
-            return Chip(
-              label: Text(
-                placeholder,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.hintColor,
-                ),
-              ),
-            );
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final text = value.text.trim();
+        final hasValue = text.isNotEmpty;
+        final labelText = hasValue ? text : placeholder;
+        Color? labelColor;
+        if (!hasValue) {
+          labelColor = theme.hintColor;
+        } else if (readOnly) {
+          labelColor = theme.colorScheme.onSurfaceVariant;
+        }
+        final labelStyle = labelColor == null
+            ? theme.textTheme.bodyMedium
+            : theme.textTheme.bodyMedium?.copyWith(color: labelColor);
+        final chip = Chip(
+          avatar: readOnly
+              ? Icon(
+                  Icons.lock,
+                  size: 16,
+                  color: theme.colorScheme.onSurfaceVariant,
+                )
+              : null,
+          label: Text(labelText, style: labelStyle),
+        );
+
+        if (readOnly) {
+          if (readOnlyHint != null && readOnlyHint!.isNotEmpty) {
+            return Tooltip(message: readOnlyHint!, child: chip);
           }
-          return Chip(label: Text(text));
-        },
-      ),
-      edit: SizedBox(
-        width: 180,
-        child: TextFormField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            isDense: true,
-            border: OutlineInputBorder(),
+          return chip;
+        }
+
+        return InlineEditable(
+          view: chip,
+          edit: SizedBox(
+            width: 180,
+            child: TextFormField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              textInputAction: TextInputAction.done,
+              onEditingComplete: () {
+                InlineEditable.completeEditing(context);
+              },
+            ),
           ),
-          textInputAction: TextInputAction.done,
-          onEditingComplete: () {
-            InlineEditable.completeEditing(context);
-          },
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -265,10 +313,42 @@ class CandidateBioEditable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InlineEditable(
+      // Bio stays editable; no readOnly passed here.
       view: ValueListenableBuilder<TextEditingValue>(
         valueListenable: bioController,
-        builder: (context, value, _) =>
-            CandidateBioView(bio: value.text.trim()),
+        builder: (context, value, _) {
+          final text = value.text.trim();
+          if (text.isEmpty) {
+            // Visible CTA so users can tap to add a bio.
+            final theme = Theme.of(context);
+            final hintStyle = theme.textTheme.bodyMedium?.copyWith(
+              color: theme.hintColor,
+            );
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.dividerColor),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.edit, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tap to add a short bio (max 400 characters)',
+                      style: hintStyle,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          // Non-empty: render the normal view.
+          return CandidateBioView(bio: text);
+        },
       ),
       edit: TextFormField(
         controller: bioController,
@@ -276,8 +356,13 @@ class CandidateBioEditable extends StatelessWidget {
         maxLines: null,
         minLines: 3,
         keyboardType: TextInputType.multiline,
+        maxLength: 400,
+        maxLengthEnforcement: MaxLengthEnforcement.enforced,
+        inputFormatters: [LengthLimitingTextInputFormatter(400)],
         decoration: const InputDecoration(
           border: OutlineInputBorder(),
+          hintText: 'Write a short bio (max 400 characters)',
+          helperText: 'Max 400 characters',
         ),
         onEditingComplete: () {
           InlineEditable.completeEditing(context);
@@ -304,10 +389,7 @@ class CandidateTagsEditable extends StatefulWidget {
 }
 
 class _CandidateTagsEditableState extends State<CandidateTagsEditable> {
-  final TextEditingController _inputController = TextEditingController();
-  final FocusNode _inputFocusNode = FocusNode();
   late List<String> _tags;
-  bool _adding = false;
 
   @override
   void initState() {
@@ -321,13 +403,6 @@ class _CandidateTagsEditableState extends State<CandidateTagsEditable> {
     if (!listEquals(oldWidget.initialTags, widget.initialTags)) {
       _tags = _sanitize(widget.initialTags);
     }
-  }
-
-  @override
-  void dispose() {
-    _inputController.dispose();
-    _inputFocusNode.dispose();
-    super.dispose();
   }
 
   List<String> _sanitize(List<String> tags) {
@@ -350,117 +425,79 @@ class _CandidateTagsEditableState extends State<CandidateTagsEditable> {
     _notifyChange();
   }
 
-  void _showAdder() {
-    if (_tags.length >= widget.maxTags) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text('You can add up to ${widget.maxTags} tags.'),
-          ),
-        );
+  Future<void> _openPicker(BuildContext context) async {
+    final picked = await showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => TagPickerSheet(
+        initiallySelected: List<String>.from(_tags),
+        maxSelection: widget.maxTags,
+      ),
+    );
+    if (picked == null) {
       return;
     }
+    final next = _sanitize(picked);
     setState(() {
-      _adding = true;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        FocusScope.of(context).requestFocus(_inputFocusNode);
-      }
-    });
-  }
-
-  void _addTag() {
-    final value = _inputController.text.trim();
-    if (value.isEmpty) {
-      return;
-    }
-    if (_tags.contains(value)) {
-      _inputController.clear();
-      setState(() {
-        _adding = false;
-      });
-      return;
-    }
-    if (_tags.length >= widget.maxTags) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text('You can add up to ${widget.maxTags} tags.'),
-          ),
-        );
-      return;
-    }
-    setState(() {
-      _tags.add(value);
-      _inputController.clear();
-      _adding = false;
+      _tags = next;
     });
     _notifyChange();
   }
 
   @override
   Widget build(BuildContext context) {
-    final chips = <Widget>[
-      for (final tag in _tags)
-        InputChip(
-          label: Text(tag),
-          onDeleted: () => _removeTag(tag),
-        ),
-      if (!_adding)
-        ActionChip(
-          label: const Text('Add tag'),
-          avatar: const Icon(Icons.add),
-          onPressed: _showAdder,
-        ),
-    ];
+    return Consumer(
+      builder: (context, ref, _) {
+        final asyncCatalog = ref.watch(tagCatalogProvider);
+        final categories =
+            asyncCatalog.asData?.value ?? const <TagCategory>[];
+        final labelLookup = <String, String>{};
+        for (final category in categories) {
+          for (final tag in category.tags) {
+            labelLookup[tag.value] = tag.label;
+          }
+        }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: chips,
-        ),
-        if (_adding) ...[
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _inputController,
-                  focusNode: _inputFocusNode,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    labelText: 'Add priority tag',
-                    helperText:
-                        '${_tags.length}/${widget.maxTags} tags used',
-                  ),
-                  onSubmitted: (_) => _addTag(),
-                ),
+        final chips = <Widget>[
+          for (final tag in _tags)
+            InputChip(
+              label: Text(labelLookup[tag] ?? tag),
+              onDeleted: () => _removeTag(tag),
+            ),
+        ];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (chips.isEmpty)
+              Text(
+                'No tags selected yet.',
+                style: Theme.of(context).textTheme.bodyMedium,
               ),
-              const SizedBox(width: 12),
-              TextButton(
-                onPressed: _addTag,
-                child: const Text('Add'),
+            if (chips.isNotEmpty)
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: chips,
               ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                tooltip: 'Cancel',
-                onPressed: () {
-                  setState(() {
-                    _adding = false;
-                    _inputController.clear();
-                  });
-                },
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.label),
+              label: Text(
+                _tags.isEmpty ? 'Choose tags' : 'Edit tags',
               ),
-            ],
-          ),
-        ],
-      ],
+              onPressed: () => _openPicker(context),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '${_tags.length}/${widget.maxTags} tags selected',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

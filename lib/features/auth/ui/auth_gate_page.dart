@@ -214,7 +214,10 @@ class _AuthGatePageState extends ConsumerState<AuthGatePage>
             ),
             if (isLoading)
               Container(
-                color: Colors.black45,
+                color: Theme.of(context)
+                    .colorScheme
+                    .scrim
+                    .withValues(alpha: 0.45),
                 child: const Center(
                   child: CircularProgressIndicator(),
                 ),

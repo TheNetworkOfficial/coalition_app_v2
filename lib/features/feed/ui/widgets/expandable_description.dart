@@ -59,6 +59,7 @@ class _ExpandableDescriptionState extends State<ExpandableDescription> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final onSurface = theme.colorScheme.onSurface;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -69,7 +70,7 @@ class _ExpandableDescriptionState extends State<ExpandableDescription> {
           child: Text(
             widget.displayName,
             style: theme.textTheme.titleMedium?.copyWith(
-              color: Colors.white,
+              color: onSurface,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -91,14 +92,14 @@ class _ExpandableDescriptionState extends State<ExpandableDescription> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: Colors.white,
+                      color: onSurface,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     'More',
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: Colors.white70,
+                      color: onSurface.withValues(alpha: 0.70),
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.2,
                     ),
@@ -126,12 +127,14 @@ class _DescriptionOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Positioned.fill(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onClose,
         child: Material(
-          color: Colors.black.withValues(alpha: 0.7),
+          color: colorScheme.scrim.withValues(alpha: 0.70),
           child: SafeArea(
             minimum: const EdgeInsets.all(16),
             child: Align(
@@ -141,7 +144,7 @@ class _DescriptionOverlay extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.85),
+                    color: colorScheme.surface,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
@@ -154,18 +157,18 @@ class _DescriptionOverlay extends StatelessWidget {
                           Expanded(
                             child: Text(
                               displayName,
-                              style: Theme.of(context)
-                                  .textTheme
+                              style: theme.textTheme
                                   .titleMedium
                                   ?.copyWith(
-                                    color: Colors.white,
+                                    color: colorScheme.onSurface,
                                     fontWeight: FontWeight.bold,
                                   ),
                             ),
                           ),
                           IconButton(
                             onPressed: onClose,
-                            color: Colors.white70,
+                            color: colorScheme.onSurface
+                                .withValues(alpha: 0.70),
                             tooltip: 'Close description',
                             icon: const Icon(Icons.close),
                           ),
@@ -174,10 +177,9 @@ class _DescriptionOverlay extends StatelessWidget {
                       const SizedBox(height: 12),
                       Text(
                         description,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(color: Colors.white),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: colorScheme.onSurface,
+                        ),
                       ),
                     ],
                   ),

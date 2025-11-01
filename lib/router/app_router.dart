@@ -2,6 +2,7 @@ import 'package:coalition_app_v2/features/auth/ui/auth_gate_page.dart';
 import 'package:coalition_app_v2/features/auth/ui/confirm_code_page.dart';
 import 'package:coalition_app_v2/features/feed/ui/feed_page.dart';
 import 'package:coalition_app_v2/pages/candidate_access_page.dart';
+import 'package:coalition_app_v2/pages/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,6 +10,7 @@ import '../app_shell.dart';
 import '../pages/admin/admin_application_detail_page.dart';
 import '../pages/admin/admin_applications_page.dart';
 import '../pages/admin/admin_dashboard_page.dart';
+import '../pages/admin/admin_tags_page.dart';
 import '../pages/bootstrap_page.dart';
 import '../pages/candidate_viewer_page.dart';
 import '../pages/candidates_page.dart';
@@ -58,6 +60,31 @@ final GoRouter appRouter = GoRouter(
             state.extra is String ? state.extra as String : null;
         return NoTransitionPage(
           child: ProfilePage(targetUserId: targetUserId),
+        );
+      },
+    ),
+    GoRoute(
+      path: '/settings',
+      name: 'settings',
+      parentNavigatorKey: rootNavigatorKey,
+      pageBuilder: (context, state) {
+        final args = state.extra is SettingsArgs
+            ? state.extra as SettingsArgs
+            : null;
+
+        return MaterialPage<void>(
+          key: state.pageKey,
+          child: SettingsPage(
+            args: args ??
+                SettingsArgs(
+                  onEditProfile: () {},
+                  onSignOut: () {},
+                  onOpenAdminDashboard: null,
+                  showCandidateAccess: false,
+                  showAdminDashboard: false,
+                  adminDashboardEnabled: false,
+                ),
+          ),
         );
       },
     ),
@@ -113,12 +140,30 @@ final GoRouter appRouter = GoRouter(
             ),
           ],
         ),
+        GoRoute(
+          path: '/admin/tags',
+          name: 'admin_tags',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: AdminTagsPage(),
+          ),
+        ),
       ],
     ),
     StatefulShellRoute(
-      builder: (context, state, navigationShell) =>
-          AppShell(navigationShell: navigationShell),
-      navigatorContainerBuilder: lazyNavigationContainerBuilder,
+      builder: (context, state, navigationShell) => navigationShell,
+      // go_router 16.x base constructor requires this *three-parameter* builder:
+      // (BuildContext context, StatefulNavigationShell navigationShell, List<Widget> children)
+      navigatorContainerBuilder: (
+        BuildContext context,
+        StatefulNavigationShell navigationShell,
+        List<Widget> children,
+      ) {
+        // Wrap the shell in AppShell AND hand it the branch navigators (children).
+        return AppShell(
+          navigationShell: navigationShell,
+          branches: children,
+        );
+      },
       branches: [
         StatefulShellBranch(
           routes: [
@@ -139,19 +184,19 @@ final GoRouter appRouter = GoRouter(
               pageBuilder: (context, state) => const NoTransitionPage(
                 child: CandidatesPage(),
               ),
-            ),
-            GoRoute(
-              path: '/candidates/:id',
-              name: 'candidate_view',
-              pageBuilder: (context, state) {
-                final candidateId = state.pathParameters['id'];
-                if (candidateId == null || candidateId.isEmpty) {
-                  return const NoTransitionPage(child: CandidatesPage());
-                }
-                return MaterialPage<void>(
-                  child: CandidateViewerPage(candidateId: candidateId),
-                );
-              },
+              routes: [
+                GoRoute(
+                  path: ':id',
+                  name: 'candidate_view',
+                  pageBuilder: (context, state) {
+                    final id = state.pathParameters['id']!;
+                    return MaterialPage<void>(
+                      key: state.pageKey,
+                      child: CandidateViewerPage(candidateId: id),
+                    );
+                  },
+                ),
+              ],
             ),
           ],
         ),

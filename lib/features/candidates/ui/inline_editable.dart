@@ -10,11 +10,15 @@ class InlineEditable extends StatefulWidget {
     required this.view,
     required this.edit,
     this.startInEdit = false,
+    this.readOnly = false,
+    this.readOnlyHint,
   });
 
   final Widget view;
   final Widget edit;
   final bool startInEdit;
+  final bool readOnly;
+  final String? readOnlyHint;
 
   static _InlineEditableScope? maybeOf(BuildContext context) {
     return context.dependOnInheritedWidgetOfExactType<_InlineEditableScope>();
@@ -31,12 +35,12 @@ class InlineEditable extends StatefulWidget {
 
 class _InlineEditableState extends State<InlineEditable> {
   late final FocusNode _focusNode;
-  bool _isEditing = false;
+  late bool _isEditing;
 
   @override
   void initState() {
     super.initState();
-    _isEditing = widget.startInEdit;
+    _isEditing = widget.readOnly ? false : widget.startInEdit;
     _focusNode = FocusNode();
     _focusNode.addListener(_handleFocusChange);
     if (_isEditing) {
@@ -51,7 +55,16 @@ class _InlineEditableState extends State<InlineEditable> {
   @override
   void didUpdateWidget(covariant InlineEditable oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.readOnly && _isEditing) {
+      setState(() {
+        _isEditing = false;
+      });
+      _focusNode.unfocus();
+    }
     if (!_isEditing && widget.startInEdit && !oldWidget.startInEdit) {
+      if (widget.readOnly) {
+        return;
+      }
       setState(() {
         _isEditing = true;
       });
@@ -84,6 +97,9 @@ class _InlineEditableState extends State<InlineEditable> {
   }
 
   void _startEditing() {
+    if (widget.readOnly) {
+      return;
+    }
     if (_isEditing) {
       return;
     }
@@ -104,10 +120,19 @@ class _InlineEditableState extends State<InlineEditable> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.readOnly) {
+      final child = widget.view;
+      final hint = widget.readOnlyHint;
+      if (hint != null && hint.isNotEmpty) {
+        return Tooltip(message: hint, child: child);
+      }
+      return child;
+    }
+
     if (!_isEditing) {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: _startEditing,
+        onTap: widget.readOnly ? null : _startEditing,
         child: widget.view,
       );
     }

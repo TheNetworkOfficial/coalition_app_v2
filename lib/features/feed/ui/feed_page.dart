@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../playback/feed_activity_provider.dart';
 import '../models/post.dart';
 import '../providers/feed_providers.dart';
 import 'widgets/post_view.dart';
@@ -23,6 +24,7 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   List<Post> _currentPosts = const [];
   bool _activationScheduled = false;
   ProviderSubscription<AsyncValue<List<Post>>>? _feedSubscription;
+  ProviderSubscription<bool>? _feedActivitySub;
 
   @override
   void initState() {
@@ -32,11 +34,24 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       _handleFeedUpdate,
       fireImmediately: true,
     );
+    _feedActivitySub = ref.listenManual<bool>(
+      feedActiveProvider,
+      (previous, next) {
+        if (next == false) {
+          _deactivateAllVisiblePosts();
+          return;
+        }
+        _scheduleActivationSync();
+      },
+    );
+    _feedActivitySub?.read();
   }
 
   @override
   void dispose() {
     _feedSubscription?.close();
+    _feedActivitySub?.close();
+    _feedActivitySub = null;
     _pageController.dispose();
     super.dispose();
   }
@@ -46,7 +61,6 @@ class _FeedPageState extends ConsumerState<FeedPage> {
     final postsAsync = ref.watch(feedItemsProvider);
 
     return Scaffold(
-      backgroundColor: Colors.black,
       body: postsAsync.when(
         data: (posts) => _buildFeed(posts),
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -102,10 +116,16 @@ class _FeedPageState extends ConsumerState<FeedPage> {
             child: Padding(
               padding: const EdgeInsets.only(top: 16, right: 16),
               child: Material(
-                color: Colors.black45,
+                color: Theme.of(context)
+                    .colorScheme
+                    .scrim
+                    .withValues(alpha: 0.45),
                 shape: const CircleBorder(),
                 child: IconButton(
-                  icon: const Icon(Icons.refresh, color: Colors.white),
+                  icon: Icon(
+                    Icons.refresh,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
                   tooltip: 'Refresh feed',
                   onPressed: _refreshFeed,
                 ),
@@ -148,7 +168,7 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       isScrollControlled: true,
       backgroundColor: Theme.of(context).colorScheme.surface,
       // Opaque backdrop: no transparency
-      barrierColor: Colors.black,
+      barrierColor: Theme.of(context).colorScheme.scrim,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -183,6 +203,12 @@ class _FeedPageState extends ConsumerState<FeedPage> {
         _postKeys.keys.where((id) => !validIds.contains(id)).toList();
     for (final id in staleIds) {
       _postKeys.remove(id);
+    }
+  }
+
+  void _deactivateAllVisiblePosts() {
+    for (final key in _postKeys.values) {
+      key.currentState?.onActiveChanged(false);
     }
   }
 
@@ -251,11 +277,17 @@ class _FeedErrorView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+          Icon(
+            Icons.error_outline,
+            color: theme.colorScheme.error,
+            size: 48,
+          ),
           const SizedBox(height: 12),
           Text(
             'Something went wrong',
-            style: theme.textTheme.titleMedium?.copyWith(color: Colors.white),
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.onSurface,
+            ),
           ),
           if (error != null) ...[
             const SizedBox(height: 8),
@@ -264,8 +296,10 @@ class _FeedErrorView extends StatelessWidget {
               child: Text(
                 '$error',
                 textAlign: TextAlign.center,
-                style:
-                    theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface
+                      .withValues(alpha: 0.70),
+                ),
               ),
             ),
           ],
@@ -287,13 +321,17 @@ class _FeedEmptyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final onSurface = theme.colorScheme.onSurface;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
+          Text(
             'No posts yet',
-            style: TextStyle(color: Colors.white70),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: onSurface.withValues(alpha: 0.70),
+            ),
           ),
           const SizedBox(height: 16),
           ElevatedButton(
