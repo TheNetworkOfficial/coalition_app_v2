@@ -1,25 +1,57 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-class AppShell extends StatelessWidget {
-  const AppShell({super.key, required this.navigationShell});
+import 'features/feed/playback/feed_activity_provider.dart';
+
+class AppShell extends ConsumerWidget {
+  const AppShell({
+    super.key,
+    required this.navigationShell,
+    required this.branches,
+  });
 
   final StatefulNavigationShell navigationShell;
+  final List<Widget> branches; // Branch navigators supplied by the router.
 
-  void _onDestinationSelected(int index) {
-    navigationShell.goBranch(
-      index,
-      initialLocation: index == navigationShell.currentIndex,
-    );
+  void _setFeedActive(BuildContext context, WidgetRef ref, int index) {
+    final isFeedActive = index == kFeedBranchIndex;
+    final notifier = ref.read(feedActiveProvider.notifier);
+    if (notifier.state == isFeedActive) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) {
+        return;
+      }
+      final controller = ref.read(feedActiveProvider.notifier);
+      if (controller.state != isFeedActive) {
+        controller.state = isFeedActive;
+      }
+    });
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeIndex = navigationShell.currentIndex;
+    _setFeedActive(context, ref, activeIndex);
+
     return Scaffold(
-      body: navigationShell,
+      // Base StatefulShellRoute asks the shell to render the branch navigators.
+      // IndexedStack keeps each branch's navigation stack alive.
+      body: IndexedStack(
+        index: activeIndex,
+        children: branches,
+      ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: navigationShell.currentIndex,
-        onDestinationSelected: _onDestinationSelected,
+        selectedIndex: activeIndex,
+        onDestinationSelected: (index) {
+          navigationShell.goBranch(
+            index,
+            initialLocation: index == navigationShell.currentIndex,
+          );
+          _setFeedActive(context, ref, index);
+        },
         destinations: const [
           NavigationDestination(
             key: Key('tab_feed'),
@@ -55,87 +87,4 @@ class AppShell extends StatelessWidget {
       ),
     );
   }
-}
-
-Widget lazyNavigationContainerBuilder(
-  BuildContext context,
-  StatefulNavigationShell navigationShell,
-  List<Widget> children,
-) {
-  return _LazyNavigationContainer(
-    navigationShell: navigationShell,
-    children: children,
-  );
-}
-
-class _LazyNavigationContainer extends StatelessWidget {
-  const _LazyNavigationContainer({
-    required this.navigationShell,
-    required this.children,
-  });
-
-  final StatefulNavigationShell navigationShell;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final int activeIndex = navigationShell.currentIndex;
-    return IndexedStack(
-      index: activeIndex,
-      children: [
-        for (int i = 0; i < children.length; i++)
-          _Lazy(
-            active: i == activeIndex,
-            builder: () => children[i],
-          ),
-      ],
-    );
-  }
-}
-
-class _Lazy extends StatefulWidget {
-  const _Lazy({required this.active, required this.builder});
-
-  final bool active;
-  final Widget Function() builder;
-
-  @override
-  State<_Lazy> createState() => _LazyState();
-}
-
-class _LazyState extends State<_Lazy> with AutomaticKeepAliveClientMixin {
-  Widget? _child;
-
-  @override
-  void didUpdateWidget(covariant _Lazy oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!oldWidget.active && widget.active && _child == null) {
-      _child = widget.builder();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    final shouldInstantiate = widget.active && _child == null;
-    if (shouldInstantiate) {
-      _child = widget.builder();
-    }
-
-    final child = _child;
-    if (child == null) {
-      return const SizedBox.shrink();
-    }
-
-    return Offstage(
-      offstage: !widget.active,
-      child: TickerMode(
-        enabled: widget.active,
-        child: child,
-      ),
-    );
-  }
-
-  @override
-  bool get wantKeepAlive => true;
 }

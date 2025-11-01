@@ -57,6 +57,10 @@ class Candidate extends Equatable {
       return 0;
     }
 
+    final rawId =
+        (json['candidateId'] ?? json['id'] ?? json['candidate_id'] ?? '')
+            .toString();
+
     final resolvedName = () {
       final primary = readString(json['name']).trim();
       if (primary.isNotEmpty) {
@@ -81,7 +85,7 @@ class Candidate extends Equatable {
         readNullable(json['description'] ?? json['bio']);
 
     return Candidate(
-      candidateId: readString(json['candidateId']).trim(),
+      candidateId: rawId.trim(),
       name: resolvedName,
       headshotUrl: (json['headshotUrl'] as String?)?.trim(),
       avatarUrl: (json['avatarUrl'] as String?)?.trim(),

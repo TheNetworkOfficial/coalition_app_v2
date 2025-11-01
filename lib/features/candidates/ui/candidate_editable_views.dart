@@ -4,6 +4,7 @@
 // - No dedicated image compression helper located; current flows use source files directly.
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../widgets/user_avatar.dart';
@@ -312,10 +313,42 @@ class CandidateBioEditable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InlineEditable(
+      // Bio stays editable; no readOnly passed here.
       view: ValueListenableBuilder<TextEditingValue>(
         valueListenable: bioController,
-        builder: (context, value, _) =>
-            CandidateBioView(bio: value.text.trim()),
+        builder: (context, value, _) {
+          final text = value.text.trim();
+          if (text.isEmpty) {
+            // Visible CTA so users can tap to add a bio.
+            final theme = Theme.of(context);
+            final hintStyle = theme.textTheme.bodyMedium?.copyWith(
+              color: theme.hintColor,
+            );
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.dividerColor),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.edit, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tap to add a short bio (max 400 characters)',
+                      style: hintStyle,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          // Non-empty: render the normal view.
+          return CandidateBioView(bio: text);
+        },
       ),
       edit: TextFormField(
         controller: bioController,
@@ -323,8 +356,13 @@ class CandidateBioEditable extends StatelessWidget {
         maxLines: null,
         minLines: 3,
         keyboardType: TextInputType.multiline,
+        maxLength: 400,
+        maxLengthEnforcement: MaxLengthEnforcement.enforced,
+        inputFormatters: [LengthLimitingTextInputFormatter(400)],
         decoration: const InputDecoration(
           border: OutlineInputBorder(),
+          hintText: 'Write a short bio (max 400 characters)',
+          helperText: 'Max 400 characters',
         ),
         onEditingComplete: () {
           InlineEditable.completeEditing(context);

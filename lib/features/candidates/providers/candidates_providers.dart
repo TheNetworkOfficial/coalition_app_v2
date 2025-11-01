@@ -80,9 +80,15 @@ final candidateDetailProvider =
 });
 
 final candidatePostsProvider =
-    FutureProvider.family<PostsPage, String>((ref, id) {
+    FutureProvider.family<PostsPage, String>((ref, id) async {
   final repository = ref.watch(candidatesRepositoryProvider);
-  return repository.getCandidatePosts(id);
+  final page = await repository.getCandidatePosts(id);
+  final filteredItems = page.items
+      .where(
+        (item) => item.playbackUrl != null && item.playbackUrl!.isNotEmpty,
+      )
+      .toList(growable: false);
+  return PostsPage(items: filteredItems, nextCursor: page.nextCursor);
 });
 
 final candidateUpdateControllerProvider =

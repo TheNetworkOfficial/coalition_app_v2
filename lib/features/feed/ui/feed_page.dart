@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../playback/feed_activity_provider.dart';
 import '../models/post.dart';
 import '../providers/feed_providers.dart';
 import 'widgets/post_view.dart';
@@ -23,6 +24,7 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   List<Post> _currentPosts = const [];
   bool _activationScheduled = false;
   ProviderSubscription<AsyncValue<List<Post>>>? _feedSubscription;
+  ProviderSubscription<bool>? _feedActivitySub;
 
   @override
   void initState() {
@@ -32,11 +34,24 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       _handleFeedUpdate,
       fireImmediately: true,
     );
+    _feedActivitySub = ref.listenManual<bool>(
+      feedActiveProvider,
+      (previous, next) {
+        if (next == false) {
+          _deactivateAllVisiblePosts();
+          return;
+        }
+        _scheduleActivationSync();
+      },
+    );
+    _feedActivitySub?.read();
   }
 
   @override
   void dispose() {
     _feedSubscription?.close();
+    _feedActivitySub?.close();
+    _feedActivitySub = null;
     _pageController.dispose();
     super.dispose();
   }
@@ -188,6 +203,12 @@ class _FeedPageState extends ConsumerState<FeedPage> {
         _postKeys.keys.where((id) => !validIds.contains(id)).toList();
     for (final id in staleIds) {
       _postKeys.remove(id);
+    }
+  }
+
+  void _deactivateAllVisiblePosts() {
+    for (final key in _postKeys.values) {
+      key.currentState?.onActiveChanged(false);
     }
   }
 

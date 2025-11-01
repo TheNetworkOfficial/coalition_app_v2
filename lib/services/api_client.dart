@@ -1307,35 +1307,14 @@ class ApiClient {
     };
     final uri = baseUri.replace(queryParameters: queryParameters);
 
-    http.Response? response;
-    for (var attempt = 0; attempt < 2; attempt++) {
-      final forceRefresh = attempt == 1;
-      final headers = await _composeHeaders(
-        null,
-        forceRefreshAuth: forceRefresh,
-      );
-      response = await _httpClient.get(
-        uri,
-        headers: headers.isEmpty ? null : headers,
-      );
-
-      final statusCode = response.statusCode;
-      final isAuthError = statusCode == HttpStatus.unauthorized ||
-          statusCode == HttpStatus.forbidden;
-      if (isAuthError && !forceRefresh) {
-        await _authService?.fetchAuthToken(forceRefresh: true);
-        continue;
-      }
-      debugPrint(
-        '[ApiClient] getCandidatePosts attempt=$attempt status=$statusCode',
-      );
-      break;
-    }
-
-    if (response == null) {
-      throw ApiException('Failed to load candidate posts: no response');
-    }
-
+    final headers = await _composeHeaders(
+      null,
+      omitAuth: true,
+    );
+    final response = await _httpClient.get(
+      uri,
+      headers: headers.isEmpty ? null : headers,
+    );
     final statusCode = response.statusCode;
     if (statusCode == HttpStatus.unauthorized) {
       throw ApiException('Unauthorized', statusCode: statusCode);
@@ -1490,19 +1469,30 @@ class ApiClient {
     }
 
     final rawItems = decoded['items'];
-    final candidates = <Candidate>[];
-    if (rawItems is List) {
-      for (final entry in rawItems) {
-        if (entry is Map<String, dynamic>) {
-          try {
-            candidates.add(Candidate.fromJson(entry));
-          } catch (error, stackTrace) {
-            debugPrint(
-                '[ApiClient] Skipping malformed candidate item: $error\n$stackTrace');
-          }
-        }
-      }
-    }
+    final items = rawItems is List
+        ? rawItems
+            .whereType<Map>()
+            .map((raw) {
+              try {
+                final m = Map<String, dynamic>.from(raw);
+                final fallbackId = (m['candidateId'] ??
+                        m['id'] ??
+                        m['candidate_id'] ??
+                        '')
+                    .toString()
+                    .trim();
+                m['candidateId'] = fallbackId;
+                return Candidate.fromJson(m);
+              } catch (error, stackTrace) {
+                debugPrint(
+                  '[ApiClient] Skipping malformed candidate item: $error\n$stackTrace',
+                );
+                return null;
+              }
+            })
+            .whereType<Candidate>()
+            .toList()
+        : <Candidate>[];
 
     final rawCursor = decoded['cursor'] ?? decoded['nextCursor'];
     String? nextCursor;
@@ -1514,7 +1504,7 @@ class ApiClient {
     }
 
     return (
-      items: List<Candidate>.unmodifiable(candidates),
+      items: List<Candidate>.unmodifiable(items),
       cursor: nextCursor,
     );
   }
@@ -1859,16 +1849,25 @@ class ApiClient {
   Future<Map<String, String>> _composeHeaders(
     Map<String, String>? headers, {
     bool forceRefreshAuth = false,
+    bool omitAuth = false,
   }) async {
     final resolved = <String, String>{};
     if (headers != null) {
       resolved.addAll(headers);
     }
-    final authorization =
-        await _authorizationHeader(forceRefreshAuth: forceRefreshAuth);
-    if (authorization != null) {
-      resolved.putIfAbsent(
-          HttpHeaders.authorizationHeader, () => authorization);
+    resolved.putIfAbsent(
+      HttpHeaders.acceptHeader,
+      () => 'application/json',
+    );
+    if (!omitAuth) {
+      final authorization =
+          await _authorizationHeader(forceRefreshAuth: forceRefreshAuth);
+      if (authorization != null) {
+        resolved.putIfAbsent(
+          HttpHeaders.authorizationHeader,
+          () => authorization,
+        );
+      }
     }
     return resolved;
   }

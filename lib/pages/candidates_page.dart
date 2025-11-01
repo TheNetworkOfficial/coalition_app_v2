@@ -144,13 +144,6 @@ class CandidateListCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    void handleOpenProfile() {
-      context.pushNamed(
-        'candidate_view',
-        pathParameters: {'id': candidate.candidateId},
-      );
-    }
-
     void handleToggleFollow() {
       final notifier = ref.read(candidatesPagerProvider.notifier);
       final next = !candidate.isFollowing;
@@ -174,7 +167,27 @@ class CandidateListCard extends ConsumerWidget {
 
     return _CandidateListCard(
       candidate: candidate,
-      onOpen: handleOpenProfile,
+      onOpen: () {
+        final id = candidate.candidateId.trim();
+        if (id.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Profile unavailable: missing candidate id',
+              ),
+            ),
+          );
+          return;
+        }
+        assert(() {
+          debugPrint('Open profile → $id');
+          return true;
+        }());
+        context.pushNamed(
+          'candidate_view',
+          pathParameters: {'id': id},
+        );
+      },
       onToggleFollow: handleToggleFollow,
       fullHeight: fillHeight,
     );

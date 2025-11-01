@@ -150,9 +150,20 @@ final GoRouter appRouter = GoRouter(
       ],
     ),
     StatefulShellRoute(
-      builder: (context, state, navigationShell) =>
-          AppShell(navigationShell: navigationShell),
-      navigatorContainerBuilder: lazyNavigationContainerBuilder,
+      builder: (context, state, navigationShell) => navigationShell,
+      // go_router 16.x base constructor requires this *three-parameter* builder:
+      // (BuildContext context, StatefulNavigationShell navigationShell, List<Widget> children)
+      navigatorContainerBuilder: (
+        BuildContext context,
+        StatefulNavigationShell navigationShell,
+        List<Widget> children,
+      ) {
+        // Wrap the shell in AppShell AND hand it the branch navigators (children).
+        return AppShell(
+          navigationShell: navigationShell,
+          branches: children,
+        );
+      },
       branches: [
         StatefulShellBranch(
           routes: [
@@ -173,19 +184,19 @@ final GoRouter appRouter = GoRouter(
               pageBuilder: (context, state) => const NoTransitionPage(
                 child: CandidatesPage(),
               ),
-            ),
-            GoRoute(
-              path: '/candidates/:id',
-              name: 'candidate_view',
-              pageBuilder: (context, state) {
-                final candidateId = state.pathParameters['id'];
-                if (candidateId == null || candidateId.isEmpty) {
-                  return const NoTransitionPage(child: CandidatesPage());
-                }
-                return MaterialPage<void>(
-                  child: CandidateViewerPage(candidateId: candidateId),
-                );
-              },
+              routes: [
+                GoRoute(
+                  path: ':id',
+                  name: 'candidate_view',
+                  pageBuilder: (context, state) {
+                    final id = state.pathParameters['id']!;
+                    return MaterialPage<void>(
+                      key: state.pageKey,
+                      child: CandidateViewerPage(candidateId: id),
+                    );
+                  },
+                ),
+              ],
             ),
           ],
         ),

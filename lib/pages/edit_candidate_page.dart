@@ -251,7 +251,8 @@ class _EditCandidatePageState extends ConsumerState<EditCandidatePage> {
       _nameCtrl.text = candidate.name;
       _levelCtrl.text = candidate.level ?? '';
       _districtCtrl.text = candidate.district ?? '';
-      _bioCtrl.text = candidate.description ?? '';
+      final bio = (candidate.description ?? '').trim();
+      _bioCtrl.text = bio.length > 400 ? bio.substring(0, 400) : bio;
       _avatarCtrl.text =
           candidate.avatarUrl ?? candidate.headshotUrl ?? _avatarCtrl.text;
 
