@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import 'package:coalition_app_v2/features/admin/models/admin_application.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate.dart';
@@ -41,6 +42,28 @@ class CreateUploadResult {
 
   final CreateUploadResponse response;
   final Map<String, dynamic> rawJson;
+}
+
+class ImageUploadSession {
+  ImageUploadSession({
+    required this.uploadUrl,
+    required this.method,
+    required this.headers,
+    required this.fields,
+    required this.fileFieldName,
+    required this.requiresMultipart,
+    required this.contentType,
+    this.deliveryUrl,
+  });
+
+  final String uploadUrl;
+  final String method;
+  final Map<String, String> headers;
+  final Map<String, String> fields;
+  final String fileFieldName;
+  final bool requiresMultipart;
+  final String? contentType;
+  final String? deliveryUrl;
 }
 
 class StreamCheckResult {
@@ -194,6 +217,140 @@ class ApiClient {
       response: uploadResponse,
       rawJson: jsonMap,
     );
+  }
+
+  Future<ImageUploadSession> createImageUploadSession({
+    required String fileName,
+    required int fileSize,
+    required String contentType,
+  }) async {
+    final result = await createUpload(
+      type: 'image',
+      fileName: fileName,
+      fileSize: fileSize,
+      contentType: contentType,
+    );
+    final response = result.response;
+    final method = (response.method).toUpperCase();
+    final fileFieldName =
+        (response.fileFieldName == null || response.fileFieldName!.isEmpty)
+            ? 'file'
+            : response.fileFieldName!;
+    return ImageUploadSession(
+      uploadUrl: response.uploadUrl.toString(),
+      method: method,
+      headers: Map<String, String>.from(response.headers),
+      fields: Map<String, String>.from(response.fields),
+      fileFieldName: fileFieldName,
+      requiresMultipart: response.requiresMultipart,
+      contentType: response.contentType ?? contentType,
+      deliveryUrl: response.deliveryUrl,
+    );
+  }
+
+  Future<void> uploadFileToUrl(
+    String uploadUrl,
+    File file, {
+    Map<String, String>? headers,
+    Map<String, String>? fields,
+    String? method,
+    String? fileFieldName,
+    String? contentType,
+  }) async {
+    final uri = Uri.parse(uploadUrl);
+    final host = uri.host.toLowerCase();
+    final isCloudflareDirectUpload = host.contains('upload.imagedelivery.net');
+
+    final normalizedMethod = (method?.toUpperCase() ?? 'POST');
+    final effectiveFileFieldName =
+        (fileFieldName != null && fileFieldName.trim().isNotEmpty)
+            ? fileFieldName.trim()
+            : 'file';
+
+    final requestHeaders = Map<String, String>.from(headers ?? {});
+    final requestFields = Map<String, String>.from(fields ?? {});
+
+    if (isCloudflareDirectUpload) {
+      final multipart = http.MultipartRequest('POST', uri);
+      requestHeaders
+          .removeWhere((k, _) => k.toLowerCase() == 'content-type');
+      if (requestHeaders.isNotEmpty) {
+        multipart.headers.addAll(requestHeaders);
+      }
+      if (requestFields.isNotEmpty) {
+        multipart.fields.addAll(requestFields);
+      }
+      final mediaType =
+          contentType != null ? MediaType.parse(contentType) : null;
+      multipart.files.add(
+        await http.MultipartFile.fromPath(
+          effectiveFileFieldName,
+          file.path,
+          contentType: mediaType,
+        ),
+      );
+      final streamed = await multipart.send();
+      final responseBody = await streamed.stream.bytesToString();
+      if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+        throw ApiException(
+          'Upload failed with status ${streamed.statusCode}'
+          '${responseBody.isEmpty ? '' : ': $responseBody'}',
+          statusCode: streamed.statusCode,
+          details: responseBody.isEmpty ? null : responseBody,
+        );
+      }
+      return;
+    }
+
+    if (normalizedMethod == 'POST' && requestFields.isNotEmpty) {
+      requestHeaders
+          .removeWhere((k, _) => k.toLowerCase() == 'content-type');
+      final multipart = http.MultipartRequest(normalizedMethod, uri);
+      if (requestHeaders.isNotEmpty) {
+        multipart.headers.addAll(requestHeaders);
+      }
+      multipart.fields.addAll(requestFields);
+      final mediaType =
+          contentType != null ? MediaType.parse(contentType) : null;
+      multipart.files.add(
+        await http.MultipartFile.fromPath(
+          effectiveFileFieldName,
+          file.path,
+          contentType: mediaType,
+        ),
+      );
+      final streamed = await multipart.send();
+      final responseBody = await streamed.stream.bytesToString();
+      if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+        throw ApiException(
+          'Upload failed with status ${streamed.statusCode}'
+          '${responseBody.isEmpty ? '' : ': $responseBody'}',
+          statusCode: streamed.statusCode,
+          details: responseBody.isEmpty ? null : responseBody,
+        );
+      }
+      return;
+    }
+
+    final bytes = await file.readAsBytes();
+    final request = http.Request(normalizedMethod, uri);
+    if (requestHeaders.isNotEmpty) {
+      request.headers.addAll(requestHeaders);
+    }
+    if (!request.headers.containsKey('Content-Type') && contentType != null) {
+      request.headers['Content-Type'] = contentType;
+    }
+    request.bodyBytes = bytes;
+    final streamed = await request.send();
+    final responseBody = await streamed.stream.bytesToString();
+    if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      throw ApiException(
+        'Upload failed with status ${streamed.statusCode}'
+        '${responseBody.isEmpty ? '' : ': $responseBody'}',
+        statusCode: streamed.statusCode,
+        details: responseBody.isEmpty ? null : responseBody,
+      );
+    }
   }
 
   Future<void> postMetadata({
