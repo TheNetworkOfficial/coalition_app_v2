@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 import '../features/candidates/models/candidate.dart';
@@ -47,8 +46,8 @@ class CandidatesPage extends ConsumerWidget {
             if (metrics.maxScrollExtent == double.infinity) {
               return false;
             }
-            final threshold =
-                (metrics.viewportDimension * 1.2).clamp(300.0, 800.0) as double;
+            final double threshold =
+                (metrics.viewportDimension * 1.2).clamp(300.0, 800.0).toDouble();
             final remaining = metrics.extentAfter;
             final bool atVirtualEnd =
                 metrics.maxScrollExtent == 0 &&

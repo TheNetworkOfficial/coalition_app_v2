@@ -11,6 +11,7 @@ class Profile {
     this.followersCount = 0,
     this.followingCount = 0,
     this.candidateAccessStatus = 'none',
+    this.totalLikes = 0,
     List<String>? roles,
     this.isAdmin = false,
   }) : roles = _normalizeProfileRoles(roles);
@@ -54,6 +55,7 @@ class Profile {
       followingCount: (json['followingCount'] as num?)?.toInt() ?? 0,
       candidateAccessStatus:
           stringValue(json['candidateAccessStatus'])?.toLowerCase() ?? 'none',
+      totalLikes: (json['totalLikes'] as num?)?.toInt() ?? 0,
       roles: parsedRoles,
       isAdmin: (rawIsAdmin as bool?) ?? false,
     );
@@ -75,6 +77,7 @@ class Profile {
   final int followingCount;
   /// 'approved' | 'pending' | 'none' (default)
   final String candidateAccessStatus;
+  final int totalLikes;
   /// Normalized roles returned by the server.
   final List<String> roles;
   /// Explicit admin flag from the API response.
@@ -93,6 +96,7 @@ class Profile {
     int? followersCount,
     int? followingCount,
     String? candidateAccessStatus,
+    int? totalLikes,
     List<String>? roles,
     bool? isAdmin,
   }) {
@@ -107,6 +111,7 @@ class Profile {
       followingCount: followingCount ?? this.followingCount,
       candidateAccessStatus:
           candidateAccessStatus ?? this.candidateAccessStatus,
+      totalLikes: totalLikes ?? this.totalLikes,
       roles: roles ?? this.roles,
       isAdmin: isAdmin ?? this.isAdmin,
     );

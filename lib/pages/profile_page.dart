@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 
 import 'package:coalition_app_v2/features/auth/providers/auth_state.dart';
 import 'package:coalition_app_v2/features/auth/providers/current_user_roles_provider.dart';
+import 'package:coalition_app_v2/features/candidates/ui/inline_editable.dart';
 import 'package:coalition_app_v2/models/posts_page.dart';
 import 'package:coalition_app_v2/models/profile.dart';
 import 'package:coalition_app_v2/providers/app_providers.dart';
@@ -16,8 +17,9 @@ import 'package:coalition_app_v2/providers/upload_manager.dart';
 import 'package:coalition_app_v2/router/app_router.dart' show rootNavigatorKey;
 import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/widgets/post_grid_tile.dart';
+import 'package:coalition_app_v2/widgets/user_avatar.dart';
+import 'package:coalition_app_v2/shared/media/image_uploader.dart';
 
-import 'edit_profile_page.dart';
 import 'settings_page.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
@@ -438,12 +440,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                   child: _ProfileDetailsSection(
                     profile: profile,
                     isLoading: profileIsLoading,
-                    onEditProfile: _handleEditProfile,
-                    onEditCandidatePage: _handleEditCandidatePage,
-                    onSignOut: _signOut,
                     usernameLabel: usernameLabel,
-                    showActions: _isViewingSelf,
+                    onSaveProfile: _saveProfile,
+                    onEditCandidatePage: _handleEditCandidatePage,
                     onToggleFollow: onToggleFollow,
+                    showActions: _isViewingSelf,
                   ),
                 ),
               ),
@@ -513,15 +514,19 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   }
 
   Future<void> _handleEditProfile() async {
-    final currentProfile = _profile;
-    final result = await Navigator.of(context).push<Profile>(
-      MaterialPageRoute(
-        builder: (context) => EditProfilePage(initialProfile: currentProfile),
-      ),
-    );
-    if (result != null) {
-      setState(() => _profile = result);
+    final navigator = rootNavigatorKey.currentState;
+    if (navigator?.canPop() ?? false) {
+      navigator?.pop();
     }
+  }
+
+  Future<void> _saveProfile(ProfileUpdate update) async {
+    final apiClient = ref.read(apiClientProvider);
+    final updated = await apiClient.upsertMyProfile(update);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _profile = updated);
   }
 
   void _handleEditCandidatePage() {
@@ -562,45 +567,147 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   }
 }
 
-class _ProfileDetailsSection extends StatelessWidget {
+class _ProfileDetailsSection extends ConsumerStatefulWidget {
   const _ProfileDetailsSection({
     required this.profile,
     required this.isLoading,
-    required this.onEditProfile,
-    this.onEditCandidatePage,
-    required this.onSignOut,
     required this.usernameLabel,
-    this.showActions = true,
+    required this.onSaveProfile,
+    this.onEditCandidatePage,
     this.onToggleFollow,
+    this.showActions = true,
   });
 
   final Profile? profile;
   final bool isLoading;
-  final VoidCallback onEditProfile;
-  final VoidCallback? onEditCandidatePage;
-  final VoidCallback onSignOut;
   final String usernameLabel;
+  final Future<void> Function(ProfileUpdate update) onSaveProfile;
+  final VoidCallback? onEditCandidatePage;
   final bool showActions;
   final Future<void> Function(String targetUserId, bool next)? onToggleFollow;
 
   @override
+  ConsumerState<_ProfileDetailsSection> createState() =>
+      _ProfileDetailsSectionState();
+}
+
+class _ProfileDetailsSectionState
+    extends ConsumerState<_ProfileDetailsSection> {
+  late final TextEditingController _displayNameController;
+  late final TextEditingController _bioController;
+  ImageProvider? _avatarPreview;
+  bool _avatarUploading = false;
+  bool _savingProfile = false;
+  bool _isEditingProfile = false; // page-level edit gate
+
+  @override
+  void initState() {
+    super.initState();
+    _displayNameController =
+        TextEditingController(text: widget.profile?.displayName ?? '');
+    _bioController = TextEditingController(text: widget.profile?.bio ?? '');
+  }
+
+  @override
+  void didUpdateWidget(covariant _ProfileDetailsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newDisplayName = widget.profile?.displayName ?? '';
+    if (newDisplayName != oldWidget.profile?.displayName &&
+        newDisplayName != _displayNameController.text) {
+      _displayNameController.value = TextEditingValue(
+        text: newDisplayName,
+        selection: TextSelection.collapsed(offset: newDisplayName.length),
+      );
+    }
+
+    final newBio = widget.profile?.bio ?? '';
+    if (newBio != oldWidget.profile?.bio &&
+        newBio != _bioController.text) {
+      _bioController.value = TextEditingValue(
+        text: newBio,
+        selection: TextSelection.collapsed(offset: newBio.length),
+      );
+    }
+
+    if (widget.profile?.avatarUrl != oldWidget.profile?.avatarUrl) {
+      _avatarPreview = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _displayNameController.dispose();
+    _bioController.dispose();
+    super.dispose();
+  }
+
+  void _enterEditMode() {
+    if (!_isEditingProfile) {
+      setState(() => _isEditingProfile = true);
+    }
+  }
+
+  Future<void> _saveAllEdits() async {
+    if (_savingProfile) return;
+
+    final original = widget.profile;
+    final name = _displayNameController.text.trim();
+    final bio = _bioController.text.trim();
+
+    // Require non-empty name (match prior UX)
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Display name is required')),
+      );
+      return;
+    }
+
+    // Only send changed fields
+    final update = ProfileUpdate(
+      displayName: name != (original?.displayName ?? '') ? name : null,
+      bio: bio != (original?.bio ?? '') ? bio : null,
+    );
+
+    // If nothing changed, just exit edit mode
+    if (update.displayName == null && update.bio == null) {
+      setState(() => _isEditingProfile = false);
+      FocusScope.of(context).unfocus();
+      return;
+    }
+
+    setState(() => _savingProfile = true);
+    try {
+      await widget.onSaveProfile(update);
+      if (!mounted) return;
+      setState(() => _isEditingProfile = false);
+      FocusScope.of(context).unfocus();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Failed to save')),
+      );
+    } finally {
+      if (mounted) setState(() => _savingProfile = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final displayName = profile?.displayName?.trim();
-    final avatarUrl = profile?.avatarUrl;
+    final profile = widget.profile;
+    final displayName = (profile?.displayName ?? '').trim();
+    final hasDisplayName = displayName.isNotEmpty;
+    final displayText = hasDisplayName ? displayName : 'Set your display name';
     final bio = profile?.bio;
-    final profileData = profile;
-    final toggleFollow = onToggleFollow;
+    final avatarUrl = profile?.avatarUrl;
+    final toggleFollow = widget.onToggleFollow;
     final candidateStatus = (profile?.candidateAccessStatus ?? 'none').trim();
-    final candidateEditHandler = onEditCandidatePage;
-    final bool showCandidateEditButton = showActions &&
+    final candidateEditHandler = widget.onEditCandidatePage;
+    final bool showCandidateEditButton = widget.showActions &&
         candidateStatus == 'approved' &&
         candidateEditHandler != null;
-    final statusBanner = _candidateStatusBanner(
-      context: context,
-      theme: theme,
-      status: candidateStatus,
-    );
+    final bool canEdit =
+        widget.showActions && !widget.isLoading && profile != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -608,55 +715,85 @@ class _ProfileDetailsSection extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              radius: 36,
-              backgroundImage:
-                  avatarUrl != null ? NetworkImage(avatarUrl) : null,
-              child:
-                  avatarUrl == null ? const Icon(Icons.person, size: 36) : null,
+            _AvatarEditor(
+              avatarUrl: avatarUrl,
+              preview: _avatarPreview,
+              isEnabled: canEdit && !_avatarUploading,
+              isUploading: _avatarUploading,
+              onTap: _handleAvatarTap,
             ),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    displayName != null && displayName.isNotEmpty
-                        ? displayName
-                        : 'Set your display name',
-                    style: theme.textTheme.titleLarge,
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(
+                        child: InlineEditable(
+                          key: ValueKey(_isEditingProfile), // force mode refresh
+                          readOnly:
+                              !(widget.showActions && _isEditingProfile),
+                          startInEdit:
+                              widget.showActions && _isEditingProfile,
+                          readOnlyHint: 'Tap Edit to make changes',
+                          view: _DisplayNameView(
+                            text: displayText,
+                            isPlaceholder: !hasDisplayName,
+                            // Hide decorative icon; we render a real button at the row end
+                            showEditIcon: false,
+                          ),
+                          edit: TextField(
+                            controller: _displayNameController,
+                            autofocus: true, // focus when edit mode turns on
+                            enabled: widget.showActions && !_savingProfile,
+                            maxLength: 120,
+                            style: theme.textTheme.titleLarge,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                              counterText: '',
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (widget.showActions)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: _EditSaveButton(
+                            isEditing: _isEditingProfile,
+                            isSaving: _savingProfile,
+                            onEdit: _enterEditMode,
+                            onSave: _saveAllEdits,
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    usernameLabel,
+                    widget.usernameLabel,
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  if (showActions) ...[
+                  const SizedBox(height: 12),
+                  _ProfileStatsRow(profile: profile),
+                  if (showCandidateEditButton) ...[
                     const SizedBox(height: 12),
-                    TextButton.icon(
-                      onPressed: isLoading ? null : onEditProfile,
-                      icon: const Icon(Icons.edit_outlined),
-                      label: const Text('Edit profile'),
+                    OutlinedButton.icon(
+                      onPressed: widget.isLoading ? null : candidateEditHandler,
+                      icon: const Icon(Icons.campaign_outlined),
+                      label: const Text('Edit candidate page'),
                     ),
-                    if (showCandidateEditButton)
-                      ...[
-                        const SizedBox(height: 8),
-                        OutlinedButton.icon(
-                          onPressed: isLoading ? null : candidateEditHandler,
-                          icon: const Icon(Icons.campaign_outlined),
-                          label: const Text('Edit candidate page'),
-                        ),
-                      ],
                   ],
-                  if (!showActions &&
-                      profileData != null &&
+                  if (!widget.showActions &&
+                      profile != null &&
                       toggleFollow != null) ...[
                     const SizedBox(height: 12),
                     _FollowButton(
-                      targetUserId: profileData.userId,
-                      isFollowing: profileData.isFollowing,
+                      targetUserId: profile.userId,
+                      isFollowing: profile.isFollowing,
                       onToggle: toggleFollow,
                     ),
                   ],
@@ -666,57 +803,299 @@ class _ProfileDetailsSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 16),
-        if (statusBanner != null) ...[
-          statusBanner,
-          const SizedBox(height: 12),
-        ],
-        Text(
-          bio?.isNotEmpty == true ? bio! : 'Tell the community more about you.',
-          style: theme.textTheme.bodyMedium,
+        InlineEditable(
+          key: ValueKey('bio_${_isEditingProfile ? 'edit' : 'view'}'),
+          readOnly: !(widget.showActions && _isEditingProfile),
+          startInEdit: widget.showActions && _isEditingProfile,
+          readOnlyHint: 'Tap Edit to make changes',
+          view: Text(
+            bio?.isNotEmpty == true
+                ? bio!
+                : 'Tell the community more about you.',
+            style: theme.textTheme.bodyMedium,
+          ),
+          edit: TextField(
+            controller: _bioController,
+            autofocus: false, // display name grabs focus
+            enabled: widget.showActions && !_savingProfile,
+            maxLines: 4,
+            maxLength: 150,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              isDense: true,
+              counterText: '',
+            ),
+          ),
         ),
+        if (_savingProfile)
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
       ],
     );
   }
 
-  Widget? _candidateStatusBanner({
-    required BuildContext context,
-    required ThemeData theme,
-    required String status,
-  }) {
-    if (status != 'approved' && status != 'pending') {
-      return null;
+  Future<void> _handleAvatarTap() async {
+    if (!widget.showActions || widget.isLoading || _avatarUploading) {
+      return;
     }
-    final bool isApproved = status == 'approved';
-    final Color background = isApproved
-        ? theme.colorScheme.secondaryContainer
-        : theme.colorScheme.surfaceContainerHighest;
-    final Color foreground = isApproved
-        ? theme.colorScheme.onSecondaryContainer
-        : theme.colorScheme.onSurfaceVariant;
-    final IconData icon = isApproved
-        ? Icons.campaign_outlined
-        : Icons.hourglass_top_outlined;
-    final String message = isApproved
-        ? 'Candidate access approved.'
-        : 'Candidate access application pending review.';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: foreground),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              message,
-              style: theme.textTheme.bodyMedium?.copyWith(color: foreground),
+    setState(() => _avatarUploading = true);
+    try {
+      final result = await pickAndUploadProfileImage(
+        context: context,
+        ref: ref,
+      );
+      if (result == null) {
+        setState(() => _avatarUploading = false);
+        return;
+      }
+      if (result.preview != null) {
+        setState(() {
+          _avatarPreview = result.preview;
+        });
+      }
+      await widget.onSaveProfile(
+        ProfileUpdate(avatarUrl: result.remoteUrl),
+      );
+      if (mounted) {
+        setState(() {
+          _avatarPreview = null;
+        });
+      }
+    } on ApiException catch (error) {
+      _showMessage(error.message);
+    } catch (error) {
+      _showMessage('Failed to update avatar. Please try again.');
+    } finally {
+      if (mounted) {
+        setState(() => _avatarUploading = false);
+      }
+    }
+  }
+
+  void _showMessage(String message) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _EditSaveButton extends StatelessWidget {
+  const _EditSaveButton({
+    required this.isEditing,
+    required this.isSaving,
+    required this.onEdit,
+    required this.onSave,
+  });
+
+  final bool isEditing;
+  final bool isSaving;
+  final VoidCallback onEdit;
+  final VoidCallback onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isEditing) {
+      if (isSaving) {
+        return const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+      }
+      return IconButton(
+        tooltip: 'Save',
+        icon: const Icon(Icons.check),
+        onPressed: onSave,
+      );
+    }
+    return IconButton(
+      tooltip: 'Edit profile',
+      icon: const Icon(Icons.edit_outlined),
+      onPressed: onEdit,
+    );
+  }
+}
+
+class _AvatarEditor extends StatelessWidget {
+  const _AvatarEditor({
+    required this.avatarUrl,
+    required this.preview,
+    required this.isEnabled,
+    required this.isUploading,
+    required this.onTap,
+  });
+
+  final String? avatarUrl;
+  final ImageProvider? preview;
+  final bool isEnabled;
+  final bool isUploading;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none,
+      children: [
+        GestureDetector(
+          onTap: isEnabled ? onTap : null,
+          child: SizedBox(
+            width: 72,
+            height: 72,
+            child: ClipOval(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  UserAvatar(
+                    url: avatarUrl,
+                    size: 72,
+                  ),
+                  if (preview != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        ignoring: true,
+                        child: Image(
+                          image: preview!,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  if (!isEnabled)
+                    Container(
+                      color: theme.colorScheme.surface.withValues(alpha: 0.12),
+                    ),
+                ],
+              ),
             ),
           ),
-        ],
-      ),
+        ),
+        if (isEnabled && !isUploading)
+          Positioned(
+            bottom: -2,
+            right: -2,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary,
+                shape: BoxShape.circle,
+              ),
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(
+                  Icons.edit_outlined,
+                  size: 16,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        if (isUploading)
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black38,
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: SizedBox.square(
+                  dimension: 28,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DisplayNameView extends StatelessWidget {
+  const _DisplayNameView({
+    required this.text,
+    required this.isPlaceholder,
+    required this.showEditIcon,
+  });
+
+  final String text;
+  final bool isPlaceholder;
+  final bool showEditIcon;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final textStyle = theme.textTheme.titleLarge?.copyWith(
+      color: isPlaceholder
+          ? theme.colorScheme.onSurfaceVariant
+          : theme.textTheme.titleLarge?.color,
+    );
+    final iconColor = theme.colorScheme.onSurfaceVariant;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Text(
+            text,
+            style: textStyle,
+          ),
+        ),
+        if (showEditIcon)
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: Icon(
+              Icons.edit_outlined,
+              size: 18,
+              color: iconColor,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ProfileStatsRow extends StatelessWidget {
+  const _ProfileStatsRow({required this.profile});
+
+  final Profile? profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final followers = profile?.followersCount ?? 0;
+    final following = profile?.followingCount ?? 0;
+    final likes = profile?.totalLikes ?? 0;
+
+    Widget stat(String label, int value) {
+      return Expanded(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              value.toString(),
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        stat('Followers', followers),
+        stat('Following', following),
+        stat('Likes', likes),
+      ],
     );
   }
 }
