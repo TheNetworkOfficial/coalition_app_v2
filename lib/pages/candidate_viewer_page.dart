@@ -1,3 +1,4 @@
+import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../features/candidates/models/candidate.dart';
 import '../features/candidates/providers/candidates_providers.dart';
 import '../features/candidates/ui/candidate_views.dart';
+import '../features/feed/models/post.dart';
 import '../models/posts_page.dart';
 import '../widgets/post_grid_tile.dart';
 
@@ -100,21 +102,49 @@ class _CandidateViewerPageState extends ConsumerState<CandidateViewerPage> {
                   ),
                 ],
                 const SizedBox(height: 24),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FilledButton.icon(
-                    onPressed: _isTogglingFollow
-                        ? null
-                        : () => _toggleFollow(candidate),
-                    icon: Icon(candidate.isFollowing
-                        ? Icons.check
-                        : Icons.person_add_alt),
-                    label: Text(
-                      candidate.isFollowing
-                          ? 'Following • ${candidate.followersCount}'
-                          : 'Follow • ${candidate.followersCount}',
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _isTogglingFollow
+                            ? null
+                            : () => _toggleFollow(candidate),
+                        icon: Icon(
+                          candidate.isFollowing
+                              ? Icons.check
+                              : Icons.person_add_alt,
+                        ),
+                        label: Text(
+                          candidate.isFollowing ? 'Following' : 'Follow',
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.volunteer_activism_outlined),
+                        label: const Text('Donate'),
+                        onPressed: () {
+                          showDialog<void>(
+                            context: context,
+                            builder: (dialogContext) => AlertDialog(
+                              title: const Text('Coming soon'),
+                              content: const Text(
+                                'Donations will be available soon.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.of(dialogContext).pop(),
+                                  child: const Text('OK'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
                 CandidateSocialsView(
                   socials: candidate.socials ?? const {},
@@ -122,7 +152,7 @@ class _CandidateViewerPageState extends ConsumerState<CandidateViewerPage> {
                 ),
                 const SizedBox(height: 12),
                 const CandidateSectionTitle(text: 'Posts'),
-                _buildPostsSection(postsAsync),
+                _buildPostsSection(postsAsync, candidate),
               ],
             ),
           ),
@@ -176,7 +206,10 @@ class _CandidateViewerPageState extends ConsumerState<CandidateViewerPage> {
     }
   }
 
-  Widget _buildPostsSection(AsyncValue<PostsPage> postsAsync) {
+  Widget _buildPostsSection(
+    AsyncValue<PostsPage> postsAsync,
+    Candidate owner,
+  ) {
     return postsAsync.when(
       loading: () => GridView.builder(
         shrinkWrap: true,
@@ -215,11 +248,77 @@ class _CandidateViewerPageState extends ConsumerState<CandidateViewerPage> {
             final item = page.items[index];
             return PostGridTile(
               item: item,
-              onTap: () {},
+              onTap: () {
+                final postId = normalizePostId(item.id);
+                if (postId.isEmpty) {
+                  ScaffoldMessenger.maybeOf(context)
+                    ?..hideCurrentSnackBar()
+                    ..showSnackBar(
+                      const SnackBar(
+                        content: Text('Post unavailable.'),
+                      ),
+                    );
+                  return;
+                }
+                final post = _mapPostItemToPost(
+                  item,
+                  owner,
+                  postId: postId,
+                );
+                if (post == null) {
+                  ScaffoldMessenger.maybeOf(context)
+                    ?..hideCurrentSnackBar()
+                    ..showSnackBar(
+                      const SnackBar(
+                        content: Text('Post unavailable.'),
+                      ),
+                    );
+                  return;
+                }
+                context.pushNamed('post_view', extra: post);
+              },
             );
           },
         );
       },
+    );
+  }
+
+  Post? _mapPostItemToPost(
+    PostItem item,
+    Candidate owner, {
+    required String postId,
+  }) {
+    final playback = (item.playbackUrl ?? '').trim();
+    if (playback.isEmpty) {
+      return null;
+    }
+
+    final normalizedStatus = item.status.toUpperCase();
+    final postStatus = normalizedStatus == 'FAILED'
+        ? PostStatus.failed
+        : item.isReady
+            ? PostStatus.ready
+            : PostStatus.processing;
+
+    final ownerId = normalizeUserId(owner.candidateId);
+    final candidateIdentifier = owner.candidateId.trim();
+
+    return Post(
+      id: postId,
+      mediaUrl: playback,
+      isVideo: true,
+      userId: ownerId.isEmpty ? null : ownerId,
+      candidateId: candidateIdentifier.isEmpty ? null : candidateIdentifier,
+      userDisplayName: owner.name,
+      userAvatarUrl: owner.avatarUrl ?? owner.headshotUrl,
+      description: item.caption ?? item.description,
+      thumbUrl: item.thumbUrl,
+      status: postStatus,
+      type: 'video',
+      duration: item.duration,
+      likeCount: item.likesCount,
+      isLiked: item.likedByMe,
     );
   }
 }

@@ -1,8 +1,8 @@
-import 'package:coalition_app_v2/router/app_router.dart' show rootNavigatorKey;
+import 'package:coalition_app_v2/core/navigation/account_link.dart';
+import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../playback/feed_activity_provider.dart';
 import '../models/post.dart';
@@ -77,12 +77,13 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   Widget _buildFeed(List<Post> posts) {
-    if (posts.isEmpty) {
+    final canonicalPosts = _canonicalizePosts(posts);
+    if (canonicalPosts.isEmpty) {
       return _FeedEmptyView(onRetry: _refreshFeed);
     }
 
-    _currentPosts = posts;
-    _cleanupKeys(posts);
+    _currentPosts = canonicalPosts;
+    _cleanupKeys(canonicalPosts);
     _scheduleActivationSync();
 
     return Stack(
@@ -93,12 +94,16 @@ class _FeedPageState extends ConsumerState<FeedPage> {
           allowImplicitScrolling: false,
           padEnds: false,
           pageSnapping: true,
-          itemCount: posts.length,
+          itemCount: canonicalPosts.length,
           onPageChanged: _handlePageChanged,
           itemBuilder: (context, index) {
-            final post = posts[index];
+            final post = canonicalPosts[index];
+            final postId = normalizePostId(post.id);
+            if (postId.isEmpty) {
+              return const SizedBox.shrink();
+            }
             final key = _postKeys.putIfAbsent(
-              post.id,
+              postId,
               () => GlobalKey<PostViewState>(),
             );
             return PostView(
@@ -146,12 +151,8 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   void _handleProfileTap(Post post) {
-    final rawUserId = post.userId;
-    final targetUserId = (rawUserId ?? '').trim();
-    debugPrint(
-      '[NAV] profile tap received | postId=${post.id} userId=${rawUserId ?? '<null>'} resolved=$targetUserId',
-    );
-    if (targetUserId.isEmpty) {
+    final userId = (post.userId ?? '').trim();
+    if (userId.isEmpty) {
       if (kDebugMode) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           const SnackBar(content: Text('Missing user id for profile')),
@@ -159,10 +160,25 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       }
       return;
     }
-    _pushProfile(targetUserId);
+    AccountNavigator.navigateToAccount(
+      context,
+      AccountRef.fromPost(
+        userId: userId,
+        candidateId: post.candidateId,
+      ),
+    );
   }
 
   void _handleCommentsTap(Post post) {
+    final postId = normalizePostId(post.id);
+    if (postId.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Comments unavailable for this post.')),
+        );
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -173,32 +189,16 @@ class _FeedPageState extends ConsumerState<FeedPage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) => CommentsSheet(
-        postId: post.id,
-        onProfileTap: (userId) {
-          final resolvedUserId = userId.trim();
-          if (resolvedUserId.isEmpty) {
-            return;
-          }
-          _pushProfile(resolvedUserId);
-        },
+        postId: postId,
       ),
     );
   }
 
-  void _pushProfile(String userId) {
-    final rootContext = rootNavigatorKey.currentContext;
-    if (rootContext == null) {
-      debugPrint(
-          '[NAV][ERROR] rootNavigatorKey.currentContext is null; aborting profile navigation');
-      return;
-    }
-    debugPrint(
-        '[NAV] pushing profile route | userId=$userId via root navigator');
-    GoRouter.of(rootContext).pushNamed('profile', extra: userId);
-  }
-
   void _cleanupKeys(List<Post> posts) {
-    final validIds = posts.map((post) => post.id).toSet();
+    final validIds = posts
+        .map((post) => normalizePostId(post.id))
+        .where((id) => id.isNotEmpty)
+        .toSet();
     final staleIds =
         _postKeys.keys.where((id) => !validIds.contains(id)).toList();
     for (final id in staleIds) {
@@ -227,7 +227,11 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       }
       for (var i = 0; i < _currentPosts.length; i++) {
         final post = _currentPosts[i];
-        final key = _postKeys[post.id];
+        final postId = normalizePostId(post.id);
+        if (postId.isEmpty) {
+          continue;
+        }
+        final key = _postKeys[postId];
         key?.currentState?.onActiveChanged(i == _activeIndex);
       }
     });
@@ -242,14 +246,15 @@ class _FeedPageState extends ConsumerState<FeedPage> {
         return;
       }
 
-      _currentPosts = posts;
-      _cleanupKeys(posts);
+      final canonicalPosts = _canonicalizePosts(posts);
+      _currentPosts = canonicalPosts;
+      _cleanupKeys(canonicalPosts);
 
       int targetIndex = _activeIndex;
-      if (posts.isEmpty) {
+      if (canonicalPosts.isEmpty) {
         targetIndex = 0;
-      } else if (_activeIndex >= posts.length) {
-        targetIndex = posts.length - 1;
+      } else if (_activeIndex >= canonicalPosts.length) {
+        targetIndex = canonicalPosts.length - 1;
       }
 
       if (targetIndex != _activeIndex) {
@@ -261,6 +266,12 @@ class _FeedPageState extends ConsumerState<FeedPage> {
 
       _scheduleActivationSync();
     });
+  }
+
+  List<Post> _canonicalizePosts(List<Post> posts) {
+    return posts
+        .where((post) => normalizePostId(post.id).isNotEmpty)
+        .toList(growable: false);
   }
 }
 

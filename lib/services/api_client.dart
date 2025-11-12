@@ -10,9 +10,11 @@ import 'package:coalition_app_v2/features/candidates/models/candidate.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate_update.dart';
 import 'package:coalition_app_v2/features/tags/models/tag_models.dart';
 
+import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 import '../debug/logging.dart';
 import '../debug/logging_http_client.dart';
 import '../env.dart';
+import '../features/engagement/models/liker.dart';
 import '../models/create_upload_response.dart';
 import '../models/post_draft.dart';
 import '../models/posts_page.dart';
@@ -149,6 +151,33 @@ class ApiClient {
       uri,
       headers: resolvedHeaders,
       body: payload,
+    );
+  }
+
+  Future<http.Response> putJson(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, String>? headers,
+  }) async {
+    final uri = _resolve(path);
+    final resolvedHeaders = await _jsonHeaders(headers: headers);
+    final payload = jsonEncode(body ?? const <String, dynamic>{});
+    return _httpClient.put(
+      uri,
+      headers: resolvedHeaders,
+      body: payload,
+    );
+  }
+
+  Future<http.Response> deleteJson(
+    String path, {
+    Map<String, String>? headers,
+  }) async {
+    final uri = _resolve(path);
+    final resolvedHeaders = await _jsonHeaders(headers: headers);
+    return _httpClient.delete(
+      uri,
+      headers: resolvedHeaders.isEmpty ? null : resolvedHeaders,
     );
   }
 
@@ -1464,9 +1493,19 @@ class ApiClient {
     };
     final uri = baseUri.replace(queryParameters: queryParameters);
 
+    var omitAuth = true;
+    final authService = _authService;
+    if (authService != null) {
+      try {
+        final signedIn = await authService.isSignedIn();
+        omitAuth = !signedIn;
+      } catch (_) {
+        omitAuth = true;
+      }
+    }
     final headers = await _composeHeaders(
       null,
-      omitAuth: true,
+      omitAuth: omitAuth,
     );
     final response = await _httpClient.get(
       uri,
@@ -1536,6 +1575,52 @@ class ApiClient {
       '[ApiClient] getCandidatePosts items=${items.length} nextCursor=${nextCursor ?? 'null'}',
     );
     return PostsPage(items: items, nextCursor: nextCursor);
+  }
+
+  Future<LikersPage> getPostLikers(
+    String postId, {
+    int limit = 50,
+    String? cursor,
+  }) async {
+    final normalized = normalizePostId(postId);
+    if (normalized.isEmpty) {
+      return const LikersPage(items: <Liker>[], nextCursor: null);
+    }
+    final encoded = Uri.encodeComponent(normalized);
+    final baseUri = _resolve('/api/posts/$encoded/likes');
+    final queryParameters = <String, String>{
+      'limit': limit <= 0 ? '50' : '$limit',
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+    };
+    final uri = baseUri.replace(queryParameters: queryParameters);
+
+    final headers = await _composeHeaders(null);
+    final response = await _httpClient.get(
+      uri,
+      headers: headers.isEmpty ? null : headers,
+    );
+
+    if (response.statusCode == HttpStatus.notFound) {
+      return const LikersPage(items: <Liker>[], nextCursor: null);
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        'Failed to load post likers: ${response.statusCode}',
+        statusCode: response.statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return const LikersPage(items: <Liker>[], nextCursor: null);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected likers response');
+    }
+
+    return LikersPage.fromJson(decoded);
   }
 
   Future<({List<Candidate> items, String? cursor})> getCandidates({

@@ -1,3 +1,4 @@
+import 'package:coalition_app_v2/core/ids.dart' show normalizePostId;
 import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
 
 enum PostStatus { processing, ready, failed }
@@ -9,6 +10,7 @@ class Post {
     required this.isVideo,
     this.userId,
     this.userDisplayName = 'Unknown',
+    this.candidateId,
     this.userAvatarUrl,
     this.description,
     this.thumbUrl,
@@ -16,12 +18,12 @@ class Post {
     this.status = PostStatus.ready,
     this.playbackId,
     this.duration,
+    this.likeCount,
+    this.isLiked,
+    this.commentCount,
   });
 
-  factory Post.fromJson(
-    Map<String, dynamic> json, {
-    required String fallbackId,
-  }) {
+  factory Post.fromJson(Map<String, dynamic> json) {
     String? _asString(dynamic value) {
       if (value is String) {
         final trimmed = value.trim();
@@ -95,7 +97,7 @@ class Post {
       return null;
     }
 
-    final id = _asString(json['id']) ?? fallbackId;
+    final id = normalizePostId(_asString(json['postId']) ?? '');
     final userMap = json['user'] is Map<String, dynamic>
         ? Map<String, dynamic>.from(json['user'] as Map<String, dynamic>)
         : null;
@@ -132,6 +134,11 @@ class Post {
         _asString(userMap?['userAvatarUrl']) ??
         _asString(userMap?['profileImage']);
 
+    final candidateId = _asString(json['candidateId']) ??
+        _asString(json['candidate_id']) ??
+        _asString(userMap?['candidateId']) ??
+        _asString(userMap?['candidate_id']);
+
     final displayName = displayNameTop ??
         displayNameNested ??
         usernameTop ??
@@ -163,11 +170,18 @@ class Post {
           json['videoDurationSeconds'] ??
           json['videoDuration'],
     );
+    final likeCount = (json['likesCount'] as num?)?.toInt() ??
+        (json['likeCount'] as num?)?.toInt();
+    final isLiked = (json['likedByMe'] as bool?) ??
+        (json['liked'] as bool?) ??
+        (json['isLiked'] as bool?);
+    final commentCount = (json['commentsCount'] as num?)?.toInt();
 
     return Post(
       id: id,
       userId: userId,
       userDisplayName: displayName,
+      candidateId: candidateId,
       userAvatarUrl: avatar,
       description: description,
       mediaUrl: mediaUrl,
@@ -177,11 +191,15 @@ class Post {
       status: status,
       playbackId: playbackId,
       duration: duration,
+      likeCount: likeCount,
+      isLiked: isLiked,
+      commentCount: commentCount,
     );
   }
 
   final String id;
   final String? userId;
+  final String? candidateId;
   final String userDisplayName;
   final String? userAvatarUrl;
   final String? description;
@@ -192,4 +210,7 @@ class Post {
   final PostStatus status;
   final String? playbackId;
   final Duration? duration;
+  final int? likeCount;
+  final bool? isLiked;
+  final int? commentCount;
 }
