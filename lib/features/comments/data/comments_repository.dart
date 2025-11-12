@@ -7,6 +7,16 @@ import '../../../debug/logging.dart';
 import '../../../services/api_client.dart';
 import '../models/comment.dart';
 
+class CommentLikeActionResult {
+  const CommentLikeActionResult({
+    required this.liked,
+    required this.likeCount,
+  });
+
+  final bool liked;
+  final int likeCount;
+}
+
 class CommentsRepository {
   CommentsRepository({required ApiClient apiClient}) : _apiClient = apiClient;
 
@@ -119,28 +129,81 @@ class CommentsRepository {
     return comment;
   }
 
-  Future<bool> toggleLike(String commentId) async {
+  Future<CommentLikeActionResult> like(String commentId) async {
     final trimmedId = commentId.trim();
     if (trimmedId.isEmpty) {
       throw Exception('commentId is required');
     }
 
-    final response = await _apiClient.postJson(
+    final response = await _apiClient.putJson(
       '/api/comments/${Uri.encodeComponent(trimmedId)}/like',
       body: const <String, dynamic>{},
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Failed to toggle like: ${response.statusCode}');
+      throw Exception('Failed to like: ${response.statusCode}');
     }
 
     final body = response.body.isEmpty ? null : jsonDecode(response.body);
-    if (body is! Map<String, dynamic>) {
-      return false;
+    final liked = body is Map<String, dynamic> && body['liked'] == true;
+    final likeCountRaw = body is Map<String, dynamic>
+        ? (body['likeCount'] as num?)?.toInt()
+        : null;
+    final safeCount =
+        (likeCountRaw ?? 0).clamp(0, 1 << 31).toInt();
+    return CommentLikeActionResult(
+      liked: liked,
+      likeCount: safeCount,
+    );
+  }
+
+  Future<CommentLikeActionResult> unlike(String commentId) async {
+    final trimmedId = commentId.trim();
+    if (trimmedId.isEmpty) {
+      throw Exception('commentId is required');
     }
 
-    final liked = body['liked'];
-    return liked is bool ? liked : false;
+    final response = await _apiClient.deleteJson(
+      '/api/comments/${Uri.encodeComponent(trimmedId)}/like',
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Failed to unlike: ${response.statusCode}');
+    }
+
+    final body = response.body.isEmpty ? null : jsonDecode(response.body);
+    final liked = body is Map<String, dynamic> && body['liked'] == true;
+    final likeCountRaw = body is Map<String, dynamic>
+        ? (body['likeCount'] as num?)?.toInt()
+        : null;
+    final safeCount =
+        (likeCountRaw ?? 0).clamp(0, 1 << 31).toInt();
+    return CommentLikeActionResult(
+      liked: liked,
+      likeCount: safeCount,
+    );
+  }
+
+  Future<CommentLikeActionResult> setLike(
+    String commentId,
+    bool target,
+  ) {
+    return target ? like(commentId) : unlike(commentId);
+  }
+
+  Future<Map<String, dynamic>?> fetchEngagement(String commentId) async {
+    final trimmed = commentId.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final response = await _apiClient.get(
+      '/api/comments/${Uri.encodeComponent(trimmed)}/engagement',
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return null;
+    }
+    final body = response.body.isEmpty ? null : jsonDecode(response.body);
+    return body is Map<String, dynamic> ? body : null;
   }
 
   String _commentIdempotencyKey(String postId) {

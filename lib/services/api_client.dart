@@ -154,6 +154,21 @@ class ApiClient {
     );
   }
 
+  Future<http.Response> putJson(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, String>? headers,
+  }) async {
+    final uri = _resolve(path);
+    final resolvedHeaders = await _jsonHeaders(headers: headers);
+    final payload = jsonEncode(body ?? const <String, dynamic>{});
+    return _httpClient.put(
+      uri,
+      headers: resolvedHeaders,
+      body: payload,
+    );
+  }
+
   Future<http.Response> deleteJson(
     String path, {
     Map<String, String>? headers,

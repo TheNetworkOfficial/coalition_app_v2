@@ -279,6 +279,10 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
           final comment = state.items[index];
           final parent =
               comment.replyTo == null ? null : commentById[comment.replyTo!];
+          unawaited(
+            controller.ensureEngagementLoaded(comment.commentId),
+          );
+          final isPending = controller.isPending(comment.commentId);
           return _CommentTile(
             comment: comment,
             parent: parent,
@@ -287,6 +291,7 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
               controller.setReplyingTo(comment.commentId);
               _focusNode.requestFocus();
             },
+            isPending: isPending,
             nameStyle: nameStyle,
             textStyle: textStyle,
             metaStyle: metaStyle,
@@ -303,6 +308,7 @@ class _CommentTile extends StatelessWidget {
     required this.parent,
     required this.onLike,
     required this.onReply,
+    required this.isPending,
     this.nameStyle,
     this.textStyle,
     this.metaStyle,
@@ -312,6 +318,7 @@ class _CommentTile extends StatelessWidget {
   final Comment? parent;
   final VoidCallback onLike;
   final VoidCallback onReply;
+  final bool isPending;
   final TextStyle? nameStyle;
   final TextStyle? textStyle;
   final TextStyle? metaStyle;
@@ -402,7 +409,7 @@ class _CommentTile extends StatelessWidget {
               comment.likedByMe ? Icons.favorite : Icons.favorite_border,
               color: comment.likedByMe ? cs.primary : cs.onSurface,
             ),
-            onPressed: onLike,
+            onPressed: isPending ? null : onLike,
             tooltip: 'Like',
           ),
           Text('${comment.likeCount}', style: metaStyle),

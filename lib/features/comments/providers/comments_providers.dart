@@ -81,6 +81,18 @@ class CommentsController extends StateNotifier<CommentsState> {
 
   final CommentsRepository _repo;
   final String postId;
+  final Map<String, int> _opSeq = <String, int>{};
+  final Set<String> _pending = <String>{};
+  final Set<String> _hydratedEngagement = <String>{};
+  final Set<String> _hydratingEngagement = <String>{};
+
+  bool isPending(String commentId) {
+    final trimmed = commentId.trim();
+    if (trimmed.isEmpty) {
+      return false;
+    }
+    return _pending.contains(trimmed);
+  }
 
   Future<void> loadInitial() async {
     if (state.loading) return;
@@ -179,52 +191,68 @@ class CommentsController extends StateNotifier<CommentsState> {
   }
 
   Future<void> toggleLike(String commentId) async {
-    final idx = state.items.indexWhere((c) => c.commentId == commentId);
-    if (idx < 0) return;
+    final trimmedId = commentId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    final idx = state.items.indexWhere((c) => c.commentId == trimmedId);
+    if (idx < 0) {
+      return;
+    }
+
+    if (_pending.contains(trimmedId)) {
+      return;
+    }
+    _pending.add(trimmedId);
 
     final base = state.items[idx];
+    final target = !base.likedByMe;
+    final seq = (_opSeq[trimmedId] ?? 0) + 1;
+    _opSeq[trimmedId] = seq;
 
     final optimistic = base.copyWith(
-      likedByMe: !base.likedByMe,
-      likeCount: base.likeCount + (base.likedByMe ? -1 : 1),
+      likedByMe: target,
+      likeCount:
+          (base.likeCount + (target ? 1 : -1)).clamp(0, 1 << 31).toInt(),
     );
-    final optimisticItems = [...state.items];
-    optimisticItems[idx] = optimistic;
+    final optimisticItems = [...state.items]..[idx] = optimistic;
     state = state.copyWith(items: optimisticItems);
 
     try {
-      final liked = await _repo.toggleLike(commentId);
+      final result = await _repo.setLike(trimmedId, target);
       if (!mounted) {
         return;
       }
+      if (_opSeq[trimmedId] != seq) {
+        return;
+      }
       final curIdx =
-          state.items.indexWhere((item) => item.commentId == commentId);
+          state.items.indexWhere((item) => item.commentId == trimmedId);
       if (curIdx >= 0) {
-        final reconciledCount = base.likeCount +
-            (liked
-                ? (base.likedByMe ? 0 : 1)
-                : (base.likedByMe ? -1 : 0));
-        final safeCount =
-            reconciledCount.clamp(0, 1 << 31).toInt();
-        final reconciled = state.items[curIdx].copyWith(
-          likedByMe: liked,
-          likeCount: safeCount,
+        final next = state.items[curIdx].copyWith(
+          likedByMe: result.liked,
+          likeCount: result.likeCount,
         );
-        final items = [...state.items];
-        items[curIdx] = reconciled;
-        state = state.copyWith(items: items);
+        final nextItems = [...state.items]..[curIdx] = next;
+        state = state.copyWith(items: nextItems);
+        _hydratedEngagement.add(trimmedId);
       }
     } catch (error, stackTrace) {
-      debugPrint('Failed to toggle like: $error\n$stackTrace');
+      debugPrint('Failed to set like: $error\n$stackTrace');
       if (!mounted) {
         return;
       }
-      final curIdx =
-          state.items.indexWhere((item) => item.commentId == commentId);
-      if (curIdx >= 0) {
-        final items = [...state.items];
-        items[curIdx] = base;
-        state = state.copyWith(items: items);
+      if (_opSeq[trimmedId] == seq) {
+        final curIdx =
+            state.items.indexWhere((item) => item.commentId == trimmedId);
+        if (curIdx >= 0) {
+          final rollbackItems = [...state.items]..[curIdx] = base;
+          state = state.copyWith(items: rollbackItems);
+        }
+      }
+    } finally {
+      if (_opSeq[trimmedId] == seq) {
+        _pending.remove(trimmedId);
       }
     }
   }
@@ -268,14 +296,77 @@ class CommentsController extends StateNotifier<CommentsState> {
   }
 
   void applyServerLikeCount(String commentId, int likeCount) {
-    final idx = state.items.indexWhere((c) => c.commentId == commentId);
+    final trimmed = commentId.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final idx = state.items.indexWhere((c) => c.commentId == trimmed);
     if (idx < 0) {
       return;
     }
-    final current = [...state.items];
-    current[idx] = current[idx].copyWith(
-      likeCount: likeCount < 0 ? 0 : likeCount,
-    );
-    state = state.copyWith(items: current);
+    final cur = state.items[idx];
+    final safeCount =
+        likeCount.clamp(0, 1 << 31).toInt();
+    final next = cur.copyWith(likeCount: safeCount);
+    final items = [...state.items]..[idx] = next;
+    state = state.copyWith(items: items);
+  }
+
+  void applyUserLikedStatus(String commentId, bool likedByMe) {
+    final trimmed = commentId.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final idx = state.items.indexWhere((c) => c.commentId == trimmed);
+    if (idx < 0) {
+      return;
+    }
+    final cur = state.items[idx];
+    final next = cur.copyWith(likedByMe: likedByMe);
+    final items = [...state.items]..[idx] = next;
+    state = state.copyWith(items: items);
+    _hydratedEngagement.add(trimmed);
+  }
+
+  Future<void> ensureEngagementLoaded(String commentId) async {
+    final trimmedId = commentId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_hydratedEngagement.contains(trimmedId) ||
+        _hydratingEngagement.contains(trimmedId)) {
+      return;
+    }
+    final idx = state.items.indexWhere((c) => c.commentId == trimmedId);
+    if (idx < 0) {
+      return;
+    }
+    final item = state.items[idx];
+    if (item.likedByMe) {
+      _hydratedEngagement.add(trimmedId);
+      return;
+    }
+
+    _hydratingEngagement.add(trimmedId);
+    try {
+      final body = await _repo.fetchEngagement(trimmedId);
+      if (!mounted) {
+        return;
+      }
+      if (body == null) {
+        return;
+      }
+      final likedByMe = body['likedByMe'] == true;
+      final likesCount = (body['likesCount'] as num?)?.toInt();
+      applyUserLikedStatus(trimmedId, likedByMe);
+      if (likesCount != null) {
+        applyServerLikeCount(trimmedId, likesCount);
+      }
+      _hydratedEngagement.add(trimmedId);
+    } catch (error, stackTrace) {
+      debugPrint('Failed to load comment engagement: $error\n$stackTrace');
+    } finally {
+      _hydratingEngagement.remove(trimmedId);
+    }
   }
 }

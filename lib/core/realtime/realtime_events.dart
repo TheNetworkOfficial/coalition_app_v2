@@ -35,8 +35,23 @@ class CommentCreated {
 class CommentLikesUpdated {
   CommentLikesUpdated.fromJson(Map<String, dynamic> json)
       : commentId = (json['commentId'] ?? '').toString().trim(),
-        likeCount = (json['likeCount'] as num?)?.toInt() ?? 0;
+        likeCount = (json['likeCount'] as num?)?.toInt() ?? 0,
+        userId = (json['userId'] ?? '').toString().trim(),
+        likedByMe = json['likedByMe'] == true;
 
   final String commentId;
   final int likeCount;
+  final String userId;
+  final bool likedByMe;
+}
+
+class CommentEngagementUser {
+  CommentEngagementUser.fromJson(Map<String, dynamic> json)
+      : commentId = (json['commentId'] ?? '').toString().trim(),
+        userId = (json['userId'] ?? '').toString().trim(),
+        likedByMe = json['likedByMe'] == true;
+
+  final String commentId;
+  final String userId;
+  final bool likedByMe;
 }

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../ids.dart';
+import '../../features/auth/providers/auth_state.dart';
 import '../../features/comments/providers/comments_providers.dart';
 import '../../features/engagement/providers/engagement_providers.dart';
 import 'realtime_events.dart';
@@ -114,6 +115,9 @@ class RealtimeReducer {
       case 'comment.likes.updated':
         _onCommentLikesUpdated(event.payload);
         break;
+      case 'comment.engagement.user':
+        _onCommentEngagementUser(event.payload);
+        break;
       default:
         break;
     }
@@ -153,10 +157,46 @@ class RealtimeReducer {
       return;
     }
     final active = ref.read(activeCommentsRegistryProvider);
+    if (active.isEmpty) {
+      return;
+    }
     for (final postId in active) {
       ref
           .read(commentsControllerProvider(postId).notifier)
           .applyServerLikeCount(update.commentId, update.likeCount);
+    }
+    final authState = ref.read(authStateProvider);
+    final myUserId = authState.user?.userId.trim() ?? '';
+    if (myUserId.isEmpty ||
+        update.userId.isEmpty ||
+        update.userId != myUserId) {
+      return;
+    }
+    for (final postId in active) {
+      ref
+          .read(commentsControllerProvider(postId).notifier)
+          .applyUserLikedStatus(update.commentId, update.likedByMe);
+    }
+  }
+
+  void _onCommentEngagementUser(Map<String, dynamic> payload) {
+    final evt = CommentEngagementUser.fromJson(payload);
+    if (evt.commentId.isEmpty) {
+      return;
+    }
+    final authState = ref.read(authStateProvider);
+    final myUserId = authState.user?.userId.trim() ?? '';
+    if (myUserId.isEmpty || evt.userId.isEmpty || evt.userId != myUserId) {
+      return;
+    }
+    final active = ref.read(activeCommentsRegistryProvider);
+    if (active.isEmpty) {
+      return;
+    }
+    for (final postId in active) {
+      ref
+          .read(commentsControllerProvider(postId).notifier)
+          .applyUserLikedStatus(evt.commentId, evt.likedByMe);
     }
   }
 
