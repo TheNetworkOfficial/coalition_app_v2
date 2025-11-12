@@ -22,6 +22,9 @@ class PostEngagementController extends StateNotifier<PostEngagementState> {
 
   final EngagementRepository _repo;
   bool _loadingNetwork = false;
+  int _opSeq = 0;
+  bool _pending = false;
+  bool? _queuedTarget;
 
   /// Idempotent: seeds from UI if provided, then (optionally) fetches server truth.
   Future<void> ensureLoaded({
@@ -56,6 +59,7 @@ class PostEngagementController extends StateNotifier<PostEngagementState> {
     }
     _loadingNetwork = true;
     final capturedPostId = state.postId;
+    final int seqAtStart = _opSeq;
     try {
       final summary = await _repo.fetchSummary(capturedPostId);
       if (!mounted || state.postId != capturedPostId) {
@@ -71,6 +75,7 @@ class PostEngagementController extends StateNotifier<PostEngagementState> {
           likeCount: serverCount,
           likedByMe: serverLiked,
           commentCount: serverComments,
+          overrideLikedStatus: seqAtStart == _opSeq,
         );
       }
     } catch (_) {
@@ -84,35 +89,57 @@ class PostEngagementController extends StateNotifier<PostEngagementState> {
     if (!isValidPostId(state.postId)) {
       return;
     }
-    final capturedPostId = state.postId;
-    final previous = state;
-    final target = !state.isLiked;
-    final optimisticCount = _nextCount(previous.likeCount, previous.isLiked, target);
-    state = state.copyWith(
-      isLiked: target,
-      likeCount: optimisticCount,
-      loadedOnce: true,
-    );
+    final desired = !state.isLiked;
+    _queuedTarget = desired;
 
-    try {
-      final result = target
-          ? await _repo.like(capturedPostId)
-          : await _repo.unlike(capturedPostId);
-      if (!mounted || state.postId != capturedPostId) {
-        return;
-      }
-      applyServerSummary(
-        likeCount: result.likesCount,
-        likedByMe: result.liked,
+    // If a request is already in flight, just record the desire and exit.
+    if (_pending) {
+      return;
+    }
+
+    while (_queuedTarget != null) {
+      final target = _queuedTarget!;
+      _queuedTarget = null;
+
+      final capturedPostId = state.postId;
+      final previous = state;
+      final optimisticCount =
+          _nextCount(previous.likeCount, previous.isLiked, target);
+
+      _pending = true;
+      final int op = ++_opSeq;
+
+      state = state.copyWith(
+        isLiked: target,
+        likeCount: optimisticCount,
+        loadedOnce: true,
       );
-    } catch (error, stackTrace) {
-      debugPrint(
-        '[PostEngagementController] toggleLike failed: $error\n$stackTrace',
-      );
-      if (!mounted || state.postId != capturedPostId) {
-        return;
+
+      try {
+        final result = target
+            ? await _repo.like(capturedPostId)
+            : await _repo.unlike(capturedPostId);
+
+        final bool stale =
+            !mounted || state.postId != capturedPostId || op != _opSeq;
+        if (!stale) {
+          applyServerSummary(
+            likeCount: result.likesCount,
+            likedByMe: result.liked,
+          );
+        }
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[PostEngagementController] toggleLike failed: $error\n$stackTrace',
+        );
+        final bool canRevert =
+            mounted && state.postId == capturedPostId && op == _opSeq;
+        if (canRevert) {
+          state = previous;
+        }
+      } finally {
+        _pending = false;
       }
-      state = previous;
     }
   }
 

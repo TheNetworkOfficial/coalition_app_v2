@@ -10,6 +10,7 @@ class Post {
     required this.isVideo,
     this.userId,
     this.userDisplayName = 'Unknown',
+    this.candidateId,
     this.userAvatarUrl,
     this.description,
     this.thumbUrl,
@@ -133,6 +134,11 @@ class Post {
         _asString(userMap?['userAvatarUrl']) ??
         _asString(userMap?['profileImage']);
 
+    final candidateId = _asString(json['candidateId']) ??
+        _asString(json['candidate_id']) ??
+        _asString(userMap?['candidateId']) ??
+        _asString(userMap?['candidate_id']);
+
     final displayName = displayNameTop ??
         displayNameNested ??
         usernameTop ??
@@ -175,6 +181,7 @@ class Post {
       id: id,
       userId: userId,
       userDisplayName: displayName,
+      candidateId: candidateId,
       userAvatarUrl: avatar,
       description: description,
       mediaUrl: mediaUrl,
@@ -192,6 +199,7 @@ class Post {
 
   final String id;
   final String? userId;
+  final String? candidateId;
   final String userDisplayName;
   final String? userAvatarUrl;
   final String? description;

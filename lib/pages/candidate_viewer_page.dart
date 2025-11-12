@@ -302,12 +302,14 @@ class _CandidateViewerPageState extends ConsumerState<CandidateViewerPage> {
             : PostStatus.processing;
 
     final ownerId = normalizeUserId(owner.candidateId);
+    final candidateIdentifier = owner.candidateId.trim();
 
     return Post(
       id: postId,
       mediaUrl: playback,
       isVideo: true,
       userId: ownerId.isEmpty ? null : ownerId,
+      candidateId: candidateIdentifier.isEmpty ? null : candidateIdentifier,
       userDisplayName: owner.name,
       userAvatarUrl: owner.avatarUrl ?? owner.headshotUrl,
       description: item.caption ?? item.description,

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:coalition_app_v2/core/navigation/account_link.dart';
 import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 import 'package:coalition_app_v2/core/realtime/realtime_providers.dart';
 import 'package:coalition_app_v2/core/realtime/realtime_service.dart';
@@ -17,11 +18,9 @@ class CommentsSheet extends ConsumerStatefulWidget {
   const CommentsSheet({
     super.key,
     required this.postId,
-    this.onProfileTap,
   });
 
   final String postId;
-  final void Function(String userId)? onProfileTap;
 
   @override
   ConsumerState<CommentsSheet> createState() => _CommentsSheetState();
@@ -288,7 +287,6 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
               controller.setReplyingTo(comment.commentId);
               _focusNode.requestFocus();
             },
-            onProfileTap: widget.onProfileTap,
             nameStyle: nameStyle,
             textStyle: textStyle,
             metaStyle: metaStyle,
@@ -305,7 +303,6 @@ class _CommentTile extends StatelessWidget {
     required this.parent,
     required this.onLike,
     required this.onReply,
-    required this.onProfileTap,
     this.nameStyle,
     this.textStyle,
     this.metaStyle,
@@ -315,7 +312,6 @@ class _CommentTile extends StatelessWidget {
   final Comment? parent;
   final VoidCallback onLike;
   final VoidCallback onReply;
-  final void Function(String userId)? onProfileTap;
   final TextStyle? nameStyle;
   final TextStyle? textStyle;
   final TextStyle? metaStyle;
@@ -328,6 +324,13 @@ class _CommentTile extends StatelessWidget {
     final timeLabel = _formatTimestamp(comment.createdAt);
     final cs = theme.colorScheme;
     final isReply = comment.replyTo != null && comment.replyTo!.isNotEmpty;
+    final trimmedUserId = comment.userId.trim();
+    final VoidCallback? profileTap = trimmedUserId.isNotEmpty
+        ? () => AccountNavigator.navigateToAccount(
+              context,
+              AccountRef.fromComment(userId: trimmedUserId),
+            )
+        : null;
 
     return ListTile(
       contentPadding: EdgeInsets.only(
@@ -347,9 +350,7 @@ class _CommentTile extends StatelessWidget {
               color: cs.onSurface.withValues(alpha: 0.12),
             ),
           GestureDetector(
-            onTap: comment.userId.isNotEmpty
-                ? () => onProfileTap?.call(comment.userId)
-                : null,
+            onTap: profileTap,
             child: UserAvatar(
               url: comment.avatarUrl,
               size: 36,
@@ -360,9 +361,8 @@ class _CommentTile extends StatelessWidget {
         ],
       ),
       title: GestureDetector(
-        onTap: comment.userId.isNotEmpty
-            ? () => onProfileTap?.call(comment.userId)
-            : null,
+        behavior: HitTestBehavior.translucent,
+        onTap: profileTap,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [

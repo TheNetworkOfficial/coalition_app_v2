@@ -61,6 +61,7 @@ final GoRouter appRouter = GoRouter(
         final targetUserId =
             state.extra is String ? state.extra as String : null;
         return NoTransitionPage(
+          key: state.pageKey,
           child: ProfilePage(targetUserId: targetUserId),
         );
       },

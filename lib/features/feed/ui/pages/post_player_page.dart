@@ -1,7 +1,7 @@
+import 'package:coalition_app_v2/core/navigation/account_link.dart';
 import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../models/post.dart';
 import '../widgets/comments_sheet.dart';
@@ -14,16 +14,14 @@ class PostPlayerPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    void pushCandidateProfile(String? rawUserId) {
-      final trimmed = (rawUserId ?? '').trim();
-      if (trimmed.isEmpty) {
-        return;
-      }
-      context.pushNamed('candidate_view', pathParameters: {'id': trimmed});
-    }
-
     void handleProfileTap() {
-      pushCandidateProfile(post.userId);
+      AccountNavigator.navigateToAccount(
+        context,
+        AccountRef.fromPost(
+          userId: post.userId ?? '',
+          candidateId: post.candidateId,
+        ),
+      );
     }
 
     void handleCommentsTap() {
@@ -46,9 +44,6 @@ class PostPlayerPage extends ConsumerWidget {
         ),
         builder: (sheetContext) => CommentsSheet(
           postId: postId,
-          onProfileTap: (userId) {
-            pushCandidateProfile(userId);
-          },
         ),
       );
     }

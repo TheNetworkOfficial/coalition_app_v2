@@ -2,8 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+
+import 'package:coalition_app_v2/core/navigation/account_link.dart';
 
 import '../features/candidates/models/candidate.dart';
 import '../features/candidates/providers/candidates_providers.dart';
@@ -182,9 +183,13 @@ class CandidateListCard extends ConsumerWidget {
           debugPrint('Open profile → $id');
           return true;
         }());
-        context.pushNamed(
-          'candidate_view',
-          pathParameters: {'id': id},
+        AccountNavigator.navigateToAccount(
+          context,
+          AccountRef(
+            userId: id,
+            candidateId: id,
+            isCandidateHint: true,
+          ),
         );
       },
       onToggleFollow: handleToggleFollow,
