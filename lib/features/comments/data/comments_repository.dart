@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:math';
+
+import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 
 import '../../../debug/logging.dart';
 import '../../../services/api_client.dart';
@@ -8,13 +11,14 @@ class CommentsRepository {
   CommentsRepository({required ApiClient apiClient}) : _apiClient = apiClient;
 
   final ApiClient _apiClient;
+  static final Random _random = Random();
 
   Future<({List<Comment> items, String? cursor})> listComments(
     String postId, {
     String? cursor,
     int limit = 50,
   }) async {
-    final trimmedId = postId.trim();
+    final trimmedId = normalizePostId(postId);
     if (trimmedId.isEmpty) {
       return (items: const <Comment>[], cursor: null);
     }
@@ -58,7 +62,7 @@ class CommentsRepository {
     required String text,
     String? replyTo,
   }) async {
-    final trimmedId = postId.trim();
+    final trimmedId = normalizePostId(postId);
     if (trimmedId.isEmpty) {
       throw Exception('postId is required');
     }
@@ -81,6 +85,7 @@ class CommentsRepository {
     final response = await _apiClient.postJson(
       '/api/posts/${Uri.encodeComponent(trimmedId)}/comments',
       body: payload,
+      headers: {'Idempotency-Key': _commentIdempotencyKey(trimmedId)},
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -136,5 +141,11 @@ class CommentsRepository {
 
     final liked = body['liked'];
     return liked is bool ? liked : false;
+  }
+
+  String _commentIdempotencyKey(String postId) {
+    final timestamp = DateTime.now().microsecondsSinceEpoch;
+    final randomBits = _random.nextInt(1 << 32);
+    return 'comment-$postId-$timestamp-$randomBits';
   }
 }

@@ -1,15 +1,14 @@
 import 'dart:io';
 import 'dart:math';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:video_player/video_player.dart';
 
 import 'package:coalition_app_v2/features/auth/providers/auth_state.dart';
 import 'package:coalition_app_v2/features/auth/providers/current_user_roles_provider.dart';
 import 'package:coalition_app_v2/features/candidates/ui/inline_editable.dart';
+import 'package:coalition_app_v2/features/feed/models/post.dart';
 import 'package:coalition_app_v2/models/posts_page.dart';
 import 'package:coalition_app_v2/models/profile.dart';
 import 'package:coalition_app_v2/providers/app_providers.dart';
@@ -19,6 +18,7 @@ import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/widgets/post_grid_tile.dart';
 import 'package:coalition_app_v2/widgets/user_avatar.dart';
 import 'package:coalition_app_v2/shared/media/image_uploader.dart';
+import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 
 import 'settings_page.dart';
 
@@ -550,19 +550,71 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   }
 
   void _openPost(PostItem item) {
-    final playbackUrl = item.playbackUrl?.trim();
-    if (playbackUrl != null && playbackUrl.isNotEmpty) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => _ProfilePostPlaybackPage(item: item),
-        ),
-      );
+    final postId = normalizePostId(item.id);
+    if (postId.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Post unavailable.')),
+        );
       return;
     }
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => _ProfilePostViewerPage(item: item),
-      ),
+    final post = _mapPostItemToPost(item, postId: postId);
+    if (post == null) {
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Post unavailable.')),
+        );
+      return;
+    }
+    context.pushNamed('post_view', extra: post);
+  }
+
+  Post? _mapPostItemToPost(PostItem item, {required String postId}) {
+    final playbackUrl = (item.playbackUrl ?? '').trim();
+    if (playbackUrl.isEmpty) {
+      return null;
+    }
+
+    String? ownerId = _profile?.userId;
+    if (ownerId != null) {
+      ownerId = normalizeUserId(ownerId);
+      if (ownerId.isEmpty) {
+        ownerId = null;
+      }
+    }
+
+    final ownerDisplayName = _profile?.displayName ??
+        _profile?.username ??
+        (_isViewingSelf ? 'You' : 'Unknown');
+
+    PostStatus _resolveStatus() {
+      final normalizedStatus = item.status.toUpperCase();
+      if (normalizedStatus == 'FAILED') {
+        return PostStatus.failed;
+      }
+      if (item.isReady) {
+        return PostStatus.ready;
+      }
+      return PostStatus.processing;
+    }
+
+    return Post(
+      id: postId,
+      mediaUrl: playbackUrl,
+      isVideo: true,
+      userId: ownerId,
+      userDisplayName: ownerDisplayName,
+      userAvatarUrl: _profile?.avatarUrl,
+      description: item.caption ?? item.description,
+      thumbUrl: item.thumbUrl,
+      status: _resolveStatus(),
+      type: 'video',
+      duration: item.duration,
+      likeCount: item.likesCount,
+      isLiked: item.likedByMe,
+      commentCount: null,
     );
   }
 }
@@ -684,7 +736,7 @@ class _ProfileDetailsSectionState
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Failed to save')),
+        SnackBar(content: Text(e.message)),
       );
     } finally {
       if (mounted) setState(() => _savingProfile = false);
@@ -1135,227 +1187,4 @@ class _NoPostsView extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ProfilePostPlaybackPage extends StatefulWidget {
-  const _ProfilePostPlaybackPage({required this.item});
-
-  final PostItem item;
-
-  @override
-  State<_ProfilePostPlaybackPage> createState() =>
-      _ProfilePostPlaybackPageState();
-}
-
-class _ProfilePostPlaybackPageState extends State<_ProfilePostPlaybackPage> {
-  VideoPlayerController? _controller;
-  Object? _loadError;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializePlayback();
-  }
-
-  void _initializePlayback() {
-    final playbackUrl = widget.item.playbackUrl?.trim();
-    if (playbackUrl == null || playbackUrl.isEmpty) {
-      setState(() {
-        _loadError = ArgumentError('Missing playback URL');
-      });
-      return;
-    }
-    final uri = Uri.tryParse(playbackUrl);
-    if (uri == null) {
-      setState(() {
-        _loadError = ArgumentError('Invalid playback URL');
-      });
-      return;
-    }
-
-    final controller = VideoPlayerController.networkUrl(uri);
-    _controller = controller;
-    controller.setLooping(true);
-    controller.initialize().then((_) {
-      if (!mounted || _controller != controller) {
-        return;
-      }
-      setState(() {});
-      controller.play();
-    }).catchError((Object error) {
-      if (!mounted || _controller != controller) {
-        return;
-      }
-      setState(() {
-        _loadError = error;
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  void _togglePlayback() {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) {
-      return;
-    }
-    if (controller.value.isPlaying) {
-      controller.pause();
-    } else {
-      controller.play();
-    }
-    setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = _controller;
-    final hasError = _loadError != null;
-    final isInitialized = controller != null && controller.value.isInitialized;
-    final safeThumb = validPostThumbUrl(widget.item.thumbUrl);
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final onSurface = colorScheme.onSurface;
-
-    Widget child;
-
-    if (hasError) {
-      child = _buildFallback(context, safeThumb);
-    } else if (isInitialized) {
-      final videoController = controller;
-      var aspectRatio = videoController.value.aspectRatio;
-      if (!aspectRatio.isFinite || aspectRatio <= 0) {
-        aspectRatio = widget.item.aspectRatio;
-      }
-      if (!aspectRatio.isFinite || aspectRatio <= 0) {
-        aspectRatio = 1;
-      }
-      child = GestureDetector(
-        onTap: _togglePlayback,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            AspectRatio(
-              aspectRatio: aspectRatio,
-              child: VideoPlayer(videoController),
-            ),
-            if (!videoController.value.isPlaying)
-              Center(
-                child: Icon(
-                  Icons.play_arrow,
-                  color: onSurface.withValues(alpha: 0.70),
-                  size: 64,
-                ),
-              ),
-          ],
-        ),
-      );
-    } else {
-      child = Stack(
-        fit: StackFit.expand,
-        children: [
-          if (safeThumb != null)
-            CachedNetworkImage(
-              imageUrl: safeThumb,
-              fit: BoxFit.contain,
-              placeholder: (context, url) => const PostGridShimmer(),
-              errorWidget: (context, url, error) =>
-                  _profileFullScreenPlaceholder(context),
-            )
-          else
-            _profileFullScreenPlaceholder(context),
-          const Center(
-            child: SizedBox(
-              height: 48,
-              width: 48,
-              child: CircularProgressIndicator(),
-            ),
-          ),
-        ],
-      );
-    }
-
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: IconThemeData(color: onSurface),
-      ),
-      body: Center(
-        child: Hero(
-          tag: 'profile_post_${widget.item.id}',
-          child: child,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFallback(BuildContext context, String? safeThumb) {
-    if (safeThumb != null) {
-      return CachedNetworkImage(
-        imageUrl: safeThumb,
-        fit: BoxFit.contain,
-        placeholder: (context, url) => const PostGridShimmer(),
-        errorWidget: (imageContext, url, error) =>
-            _profileFullScreenPlaceholder(context),
-      );
-    }
-    return _profileFullScreenPlaceholder(context);
-  }
-}
-
-class _ProfilePostViewerPage extends StatelessWidget {
-  const _ProfilePostViewerPage({required this.item});
-
-  final PostItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    final safeThumb = validPostThumbUrl(item.thumbUrl);
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final Widget heroChild = safeThumb != null
-        ? CachedNetworkImage(
-            imageUrl: safeThumb,
-            fit: BoxFit.contain,
-            placeholder: (context, url) => const PostGridShimmer(),
-            errorWidget: (imageContext, url, error) =>
-                _profileFullScreenPlaceholder(context),
-          )
-        : _profileFullScreenPlaceholder(context);
-
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: IconThemeData(color: colorScheme.onSurface),
-      ),
-      body: Center(
-        child: Hero(
-          tag: 'profile_post_${item.id}',
-          child: heroChild,
-        ),
-      ),
-    );
-  }
-}
-
-Widget _profileFullScreenPlaceholder(BuildContext context) {
-  final colorScheme = Theme.of(context).colorScheme;
-  return ColoredBox(
-    color: colorScheme.surface,
-    child: Center(
-      child: Icon(
-        Icons.broken_image_outlined,
-        color: colorScheme.onSurface.withValues(alpha: 0.70),
-        size: 48,
-      ),
-    ),
-  );
 }

@@ -1,3 +1,4 @@
+import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
 import 'package:coalition_app_v2/router/app_router.dart' show rootNavigatorKey;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -77,12 +78,13 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   Widget _buildFeed(List<Post> posts) {
-    if (posts.isEmpty) {
+    final canonicalPosts = _canonicalizePosts(posts);
+    if (canonicalPosts.isEmpty) {
       return _FeedEmptyView(onRetry: _refreshFeed);
     }
 
-    _currentPosts = posts;
-    _cleanupKeys(posts);
+    _currentPosts = canonicalPosts;
+    _cleanupKeys(canonicalPosts);
     _scheduleActivationSync();
 
     return Stack(
@@ -93,12 +95,16 @@ class _FeedPageState extends ConsumerState<FeedPage> {
           allowImplicitScrolling: false,
           padEnds: false,
           pageSnapping: true,
-          itemCount: posts.length,
+          itemCount: canonicalPosts.length,
           onPageChanged: _handlePageChanged,
           itemBuilder: (context, index) {
-            final post = posts[index];
+            final post = canonicalPosts[index];
+            final postId = normalizePostId(post.id);
+            if (postId.isEmpty) {
+              return const SizedBox.shrink();
+            }
             final key = _postKeys.putIfAbsent(
-              post.id,
+              postId,
               () => GlobalKey<PostViewState>(),
             );
             return PostView(
@@ -163,6 +169,15 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   void _handleCommentsTap(Post post) {
+    final postId = normalizePostId(post.id);
+    if (postId.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Comments unavailable for this post.')),
+        );
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -173,7 +188,7 @@ class _FeedPageState extends ConsumerState<FeedPage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) => CommentsSheet(
-        postId: post.id,
+        postId: postId,
         onProfileTap: (userId) {
           final resolvedUserId = userId.trim();
           if (resolvedUserId.isEmpty) {
@@ -198,7 +213,10 @@ class _FeedPageState extends ConsumerState<FeedPage> {
   }
 
   void _cleanupKeys(List<Post> posts) {
-    final validIds = posts.map((post) => post.id).toSet();
+    final validIds = posts
+        .map((post) => normalizePostId(post.id))
+        .where((id) => id.isNotEmpty)
+        .toSet();
     final staleIds =
         _postKeys.keys.where((id) => !validIds.contains(id)).toList();
     for (final id in staleIds) {
@@ -227,7 +245,11 @@ class _FeedPageState extends ConsumerState<FeedPage> {
       }
       for (var i = 0; i < _currentPosts.length; i++) {
         final post = _currentPosts[i];
-        final key = _postKeys[post.id];
+        final postId = normalizePostId(post.id);
+        if (postId.isEmpty) {
+          continue;
+        }
+        final key = _postKeys[postId];
         key?.currentState?.onActiveChanged(i == _activeIndex);
       }
     });
@@ -242,14 +264,15 @@ class _FeedPageState extends ConsumerState<FeedPage> {
         return;
       }
 
-      _currentPosts = posts;
-      _cleanupKeys(posts);
+      final canonicalPosts = _canonicalizePosts(posts);
+      _currentPosts = canonicalPosts;
+      _cleanupKeys(canonicalPosts);
 
       int targetIndex = _activeIndex;
-      if (posts.isEmpty) {
+      if (canonicalPosts.isEmpty) {
         targetIndex = 0;
-      } else if (_activeIndex >= posts.length) {
-        targetIndex = posts.length - 1;
+      } else if (_activeIndex >= canonicalPosts.length) {
+        targetIndex = canonicalPosts.length - 1;
       }
 
       if (targetIndex != _activeIndex) {
@@ -261,6 +284,12 @@ class _FeedPageState extends ConsumerState<FeedPage> {
 
       _scheduleActivationSync();
     });
+  }
+
+  List<Post> _canonicalizePosts(List<Post> posts) {
+    return posts
+        .where((post) => normalizePostId(post.id).isNotEmpty)
+        .toList(growable: false);
   }
 }
 

@@ -1,11 +1,17 @@
+import 'package:coalition_app_v2/core/ids.dart' show normalizePostId;
+import 'package:coalition_app_v2/core/realtime/realtime_providers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../models/post.dart';
+import '../../../engagement/models/post_engagement.dart';
+import '../../../engagement/providers/engagement_providers.dart';
+import '../../../engagement/ui/likers_sheet.dart';
 import 'expandable_description.dart';
 import 'overlay_actions.dart';
 
-class PostView extends StatefulWidget {
+class PostView extends ConsumerStatefulWidget {
   const PostView({
     super.key,
     required this.post,
@@ -20,19 +26,19 @@ class PostView extends StatefulWidget {
   final bool initiallyActive;
 
   @override
-  State<PostView> createState() => PostViewState();
+  ConsumerState<PostView> createState() => PostViewState();
 }
 
-class PostViewState extends State<PostView>
+class PostViewState extends ConsumerState<PostView>
     with AutomaticKeepAliveClientMixin<PostView> {
   VideoPlayerController? _videoController;
-  bool _isFavorite = false;
   bool _isActive = false;
   // --- NEW: user-intent & speed coordination ---
   bool _userPaused = false; // true if user explicitly paused via tap
   double _userSpeed = 1.0; // baseline playback speed user expects
   double? _holdPrevSpeed; // temporary cache used during long-press
   bool _holdWasPaused = false; // whether video was paused before the hold
+  late String _postId;
 
   @override
   bool get wantKeepAlive => true;
@@ -40,7 +46,20 @@ class PostViewState extends State<PostView>
   @override
   void initState() {
     super.initState();
+    _postId = normalizePostId(widget.post.id);
+    assert(() {
+      debugPrint('[PostView] postId=$_postId');
+      return true;
+    }());
     _isActive = widget.initiallyActive;
+    ref.read(realtimeReducerProvider);
+    if (_postId.isNotEmpty) {
+      ref.read(realtimeServiceProvider).subscribePost(_postId);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _seedEngagement();
+      });
+    }
     _updatePlayback();
   }
 
@@ -58,17 +77,38 @@ class PostViewState extends State<PostView>
       _updatePlayback();
     }
     if (widget.post.id != oldWidget.post.id) {
+      final previousId = _postId;
+      if (previousId.isNotEmpty) {
+        ref.read(realtimeServiceProvider).unsubscribePost(previousId);
+      }
+      _postId = normalizePostId(widget.post.id);
+      assert(() {
+        debugPrint('[PostView] postId=$_postId');
+        return true;
+      }());
+      if (_postId.isNotEmpty) {
+        ref.read(realtimeServiceProvider).subscribePost(_postId);
+      }
       _isActive = widget.initiallyActive;
       _userPaused = false;
       _userSpeed = 1.0;
       _holdPrevSpeed = null;
       _holdWasPaused = false;
+      if (_postId.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _seedEngagement();
+        });
+      }
       _updatePlayback();
     }
   }
 
   @override
   void dispose() {
+    if (_postId.isNotEmpty) {
+      ref.read(realtimeServiceProvider).unsubscribePost(_postId);
+    }
     _disposeVideo();
     super.dispose();
   }
@@ -175,15 +215,21 @@ class PostViewState extends State<PostView>
   }
 
   void _toggleFavorite() {
-    setState(() => _isFavorite = !_isFavorite);
+    if (_postId.isEmpty) {
+      _showEngagementUnavailable();
+      return;
+    }
+    final notifier =
+        ref.read(postEngagementProvider(_postId).notifier);
+    final current = ref.read(postEngagementProvider(_postId));
+    final target = !current.isLiked;
+    notifier.toggleLike();
     final messenger = ScaffoldMessenger.maybeOf(context);
     messenger
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(
-            _isFavorite ? 'Liked!' : 'Unliked.',
-          ),
+          content: Text(target ? 'Liked!' : 'Unliked.'),
         ),
       );
   }
@@ -199,9 +245,38 @@ class PostViewState extends State<PostView>
       );
   }
 
+  void _showEngagementUnavailable() {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Engagement unavailable for this post.'),
+        ),
+      );
+  }
+
+  void _showLikers() {
+    if (_postId.isEmpty) {
+      _showEngagementUnavailable();
+      return;
+    }
+    showLikersSheet(context, _postId);
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final bool engagementEnabled = _postId.isNotEmpty;
+    final PostEngagementState engagement = engagementEnabled
+        ? ref.watch(postEngagementProvider(_postId))
+        : PostEngagementState(
+            postId: '',
+            isLiked: widget.post.isLiked ?? false,
+            likeCount: widget.post.likeCount ?? 0,
+            commentCount: widget.post.commentCount ?? 0,
+            loadedOnce: true,
+          );
     debugPrint(
       '[PostView] bind onProfileTap | postId=${widget.post.id} userId=${widget.post.userId ?? '<null>'}',
     );
@@ -220,10 +295,20 @@ class PostViewState extends State<PostView>
                   child: OverlayActions(
                     avatarUrl: widget.post.userAvatarUrl,
                     onProfileTap: widget.onProfileTap,
-                    onCommentsTap: widget.onCommentsTap,
-                    onFavoriteTap: _toggleFavorite,
+                    onCommentsTap: engagementEnabled
+                        ? widget.onCommentsTap
+                        : _showEngagementUnavailable,
+                    onFavoriteTap: engagementEnabled
+                        ? _toggleFavorite
+                        : _showEngagementUnavailable,
+                    onFavoriteLongPress:
+                        engagementEnabled ? _showLikers : null,
+                    onLikersTap: engagementEnabled
+                        ? _showLikers
+                        : _showEngagementUnavailable,
                     onShareTap: _share,
-                    isFavorite: _isFavorite,
+                    isFavorite: engagement.isLiked,
+                    likeCount: engagement.likeCount,
                   ),
                 ),
                 Align(
@@ -411,5 +496,18 @@ class PostViewState extends State<PostView>
     _holdPrevSpeed = null;
     _holdWasPaused = false;
     setState(() {});
+  }
+
+  void _seedEngagement() {
+    if (_postId.isEmpty) {
+      return;
+    }
+    ref
+        .read(postEngagementProvider(_postId).notifier)
+        .ensureLoaded(
+          isLikedSeed: widget.post.isLiked,
+          likeCountSeed: widget.post.likeCount,
+          commentCountSeed: widget.post.commentCount,
+        );
   }
 }

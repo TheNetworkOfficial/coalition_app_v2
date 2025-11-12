@@ -13,6 +13,10 @@ class PostItem {
     required this.thumbUrl,
     required this.status,
     this.playbackUrl,
+    this.description,
+    this.caption,
+    this.likesCount,
+    this.likedByMe,
   });
 
   factory PostItem.fromJson(Map<String, dynamic> json) {
@@ -107,6 +111,11 @@ class PostItem {
         _readString(json, 'playbackUrl') ??
         _readString(json, 'playback_url');
     final status = _normalizeStatus(json['status']);
+    final description = _readString(json, 'description');
+    final caption = _readString(json, 'caption');
+    final likesCount = (json['likesCount'] as num?)?.toInt() ??
+        (json['likeCount'] as num?)?.toInt();
+    final likedByMe = json['likedByMe'] as bool?;
 
     return PostItem(
       id: id,
@@ -117,6 +126,10 @@ class PostItem {
       thumbUrl: thumbUrl,
       status: status,
       playbackUrl: playbackUrl,
+      description: description,
+      caption: caption,
+      likesCount: likesCount,
+      likedByMe: likedByMe,
     );
   }
 
@@ -128,6 +141,10 @@ class PostItem {
   final String? thumbUrl;
   final String status;
   final String? playbackUrl;
+  final String? description;
+  final String? caption;
+  final int? likesCount;
+  final bool? likedByMe;
 
   Duration get duration => Duration(milliseconds: durationMs);
 

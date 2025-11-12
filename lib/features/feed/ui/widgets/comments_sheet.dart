@@ -1,4 +1,10 @@
+import 'dart:async';
+
+import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
+import 'package:coalition_app_v2/core/realtime/realtime_providers.dart';
+import 'package:coalition_app_v2/core/realtime/realtime_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../debug/logging.dart';
@@ -24,29 +30,58 @@ class CommentsSheet extends ConsumerStatefulWidget {
 class _CommentsSheetState extends ConsumerState<CommentsSheet> {
   final TextEditingController _textController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
+  late final String _postId;
+  ActiveCommentsRegistry? _registry;
+  RealtimeService? _realtimeService;
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
+    _postId = normalizePostId(widget.postId);
+    if (_postId.isEmpty) {
+      return;
+    }
+    _realtimeService = ref.read(realtimeServiceProvider);
+    ref.read(realtimeReducerProvider);
+    _realtimeService?.subscribePost(_postId);
+    // ⚠️ Do not modify providers synchronously during initState.
+    // Defer both the registry "acquire" and the initial load to AFTER first frame.
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _postId.isEmpty) {
+        return;
+      }
+      _registry = ref.read(activeCommentsRegistryProvider.notifier);
+      _registry?.acquire(_postId);
       final base =
           normalizedApiBaseUrl.isEmpty ? 'unset' : normalizedApiBaseUrl;
       logDebug(
         'COMMENTS',
         'sheet open',
         extra: <String, Object?>{
-          'postId': widget.postId,
+          'postId': _postId,
           'apiBase': base,
         },
       );
       ref
-          .read(commentsControllerProvider(widget.postId).notifier)
+          .read(commentsControllerProvider(_postId).notifier)
           .loadInitial();
     });
   }
 
   @override
   void dispose() {
+    final pid = _postId;
+    if (pid.isNotEmpty) {
+      // ⚠️ Do not modify providers synchronously during dispose either.
+      // Defer the release to the next microtask so it's outside the build/teardown phase.
+      // ignore: discarded_futures
+      Future.microtask(() {
+        try {
+          _registry?.release(pid);
+        } catch (_) {/* noop */}
+      });
+      _realtimeService?.unsubscribePost(pid);
+    }
     _textController.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -54,6 +89,20 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    if (_postId.isEmpty) {
+      return SafeArea(
+        top: false,
+        child: Material(
+          color: Theme.of(context).colorScheme.surface,
+          child: const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('Comments unavailable for this post.'),
+            ),
+          ),
+        ),
+      );
+    }
     final cs = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final nameStyle = textTheme.bodyMedium?.copyWith(
@@ -66,9 +115,9 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
     final metaStyle = textTheme.bodySmall?.copyWith(
       color: cs.onSurface.withValues(alpha: 0.6),
     );
-    final state = ref.watch(commentsControllerProvider(widget.postId));
+    final state = ref.watch(commentsControllerProvider(_postId));
     final controller =
-        ref.read(commentsControllerProvider(widget.postId).notifier);
+        ref.read(commentsControllerProvider(_postId).notifier);
     final Map<String, Comment> commentById = {
       for (final comment in state.items) comment.commentId: comment,
     };
@@ -141,7 +190,7 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
                       'COMMENTS',
                       'send start',
                       extra: <String, Object?>{
-                        'postId': widget.postId,
+                        'postId': _postId,
                         'textLength': text.length,
                         if (replyTo != null) 'replyTo': replyTo,
                       },
@@ -152,7 +201,7 @@ class _CommentsSheetState extends ConsumerState<CommentsSheet> {
                         'COMMENTS',
                         'send success',
                         extra: <String, Object?>{
-                          'postId': widget.postId,
+                          'postId': _postId,
                           if (replyTo != null) 'replyTo': replyTo,
                         },
                       );

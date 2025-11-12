@@ -1,3 +1,4 @@
+import 'package:coalition_app_v2/core/ids.dart' show normalizePostId;
 import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
 
 enum PostStatus { processing, ready, failed }
@@ -16,12 +17,12 @@ class Post {
     this.status = PostStatus.ready,
     this.playbackId,
     this.duration,
+    this.likeCount,
+    this.isLiked,
+    this.commentCount,
   });
 
-  factory Post.fromJson(
-    Map<String, dynamic> json, {
-    required String fallbackId,
-  }) {
+  factory Post.fromJson(Map<String, dynamic> json) {
     String? _asString(dynamic value) {
       if (value is String) {
         final trimmed = value.trim();
@@ -95,7 +96,7 @@ class Post {
       return null;
     }
 
-    final id = _asString(json['id']) ?? fallbackId;
+    final id = normalizePostId(_asString(json['postId']) ?? '');
     final userMap = json['user'] is Map<String, dynamic>
         ? Map<String, dynamic>.from(json['user'] as Map<String, dynamic>)
         : null;
@@ -163,6 +164,12 @@ class Post {
           json['videoDurationSeconds'] ??
           json['videoDuration'],
     );
+    final likeCount = (json['likesCount'] as num?)?.toInt() ??
+        (json['likeCount'] as num?)?.toInt();
+    final isLiked = (json['likedByMe'] as bool?) ??
+        (json['liked'] as bool?) ??
+        (json['isLiked'] as bool?);
+    final commentCount = (json['commentsCount'] as num?)?.toInt();
 
     return Post(
       id: id,
@@ -177,6 +184,9 @@ class Post {
       status: status,
       playbackId: playbackId,
       duration: duration,
+      likeCount: likeCount,
+      isLiked: isLiked,
+      commentCount: commentCount,
     );
   }
 
@@ -192,4 +202,7 @@ class Post {
   final PostStatus status;
   final String? playbackId;
   final Duration? duration;
+  final int? likeCount;
+  final bool? isLiked;
+  final int? commentCount;
 }

@@ -3,6 +3,7 @@
 // - UploadService + UploadManager handle post media uploads; reused for avatar pipeline.
 // - No dedicated image compression helper located; current flows use source files directly.
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../../widgets/user_avatar.dart';
 
@@ -52,6 +53,36 @@ Map<String, String> normalizedCandidateSocials(Map<String, String?>? socials) {
     }
   });
   return result;
+}
+
+Future<void> _launchSocial(
+  BuildContext context,
+  String key,
+  String raw,
+) async {
+  String url;
+  switch (key.toLowerCase()) {
+    case 'phone':
+    case 'tel':
+      final digits = raw.replaceAll(RegExp(r'[^0-9+]'), '');
+      url = 'tel:$digits';
+      break;
+    case 'email':
+    case 'mailto':
+      url = raw.startsWith('mailto:') ? raw : 'mailto:$raw';
+      break;
+    default:
+      url = (raw.startsWith('http://') || raw.startsWith('https://'))
+          ? raw
+          : 'https://$raw';
+  }
+
+  final ok = await launchUrlString(url);
+  if (!ok && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not open link')),
+    );
+  }
 }
 
 class CandidateHeaderView extends StatelessWidget {
@@ -181,15 +212,8 @@ class CandidateSocialsView extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final tiles = normalized.entries
-        .map(
-          (entry) => ListTile(
-            leading: Icon(kCandidateSocialIcons[entry.key] ?? Icons.link_outlined),
-            title: Text(candidateSocialLabel(entry.key)),
-            subtitle: Text(entry.value),
-            dense: true,
-          ),
-        )
+    final entries = normalized.entries
+        .where((entry) => entry.value.isNotEmpty)
         .toList(growable: false);
 
     return Column(
@@ -197,10 +221,24 @@ class CandidateSocialsView extends StatelessWidget {
       children: [
         if (title != null) title!,
         if (title != null) const SizedBox(height: 8),
-        Card(
-          margin: EdgeInsets.zero,
-          child: Column(children: tiles),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: entries
+              .map(
+                (entry) => IconButton(
+                  tooltip: candidateSocialLabel(entry.key),
+                  icon: Icon(
+                    kCandidateSocialIcons[entry.key] ?? Icons.link_outlined,
+                    size: 24,
+                  ),
+                  onPressed: () =>
+                      _launchSocial(context, entry.key, entry.value),
+                ),
+              )
+              .toList(growable: false),
         ),
+        const SizedBox(height: 12),
       ],
     );
   }

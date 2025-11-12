@@ -1,6 +1,8 @@
 import 'package:coalition_app_v2/features/auth/ui/auth_gate_page.dart';
 import 'package:coalition_app_v2/features/auth/ui/confirm_code_page.dart';
+import 'package:coalition_app_v2/features/feed/models/post.dart';
 import 'package:coalition_app_v2/features/feed/ui/feed_page.dart';
+import 'package:coalition_app_v2/features/feed/ui/pages/post_player_page.dart';
 import 'package:coalition_app_v2/pages/candidate_access_page.dart';
 import 'package:coalition_app_v2/pages/settings_page.dart';
 import 'package:flutter/material.dart';
@@ -60,6 +62,30 @@ final GoRouter appRouter = GoRouter(
             state.extra is String ? state.extra as String : null;
         return NoTransitionPage(
           child: ProfilePage(targetUserId: targetUserId),
+        );
+      },
+    ),
+    GoRoute(
+      path: '/posts/view',
+      name: 'post_view',
+      parentNavigatorKey: rootNavigatorKey,
+      pageBuilder: (context, state) {
+        final extra = state.extra;
+        assert(
+          extra is Post,
+          'post_view route expects a Post instance via state.extra',
+        );
+        final post = extra is Post ? extra : null;
+        if (post == null) {
+          return const MaterialPage<void>(
+            child: Scaffold(
+              body: Center(child: Text('Post unavailable')),
+            ),
+          );
+        }
+        return MaterialPage<void>(
+          key: state.pageKey,
+          child: PostPlayerPage(post: post),
         );
       },
     ),
