@@ -8,6 +8,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
+import '../env.dart';
 import '../models/post_draft.dart';
 import '../providers/upload_manager.dart';
 import '../services/video_proxy_service.dart';
@@ -35,7 +36,6 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
   Uint8List? _coverThumbnail;
   bool _isCoverLoading = false;
   Object? _videoInitError;
-  bool _uploadCompleted = false;
 
   @override
   void initState() {
@@ -60,12 +60,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     _descriptionController.dispose();
     _videoController?.removeListener(_handleVideoLoop);
     _videoController?.dispose();
-    if (_uploadCompleted) {
-      final proxyPath = widget.draft.proxyFilePath;
-      if (proxyPath != null) {
-        unawaited(VideoProxyService().deleteProxy(proxyPath));
-      }
-    }
+    _cleanupProxyCache();
     super.dispose();
   }
 
@@ -83,43 +78,47 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     final navigator = Navigator.of(context);
 
     try {
-      final updatedDraft = PostDraft(
-        originalFilePath: widget.draft.originalFilePath,
-        proxyFilePath: widget.draft.proxyFilePath,
-        proxyMetadata: widget.draft.proxyMetadata,
-        originalDurationMs: widget.draft.originalDurationMs,
-        type: widget.draft.type,
+      final updatedDraft = widget.draft.copyWith(
         description: _descriptionController.text,
-        videoTrim: widget.draft.videoTrim,
         coverFrameMs: widget.draft.type == 'video'
             ? _effectiveCoverFrameMs
             : widget.draft.coverFrameMs,
-        imageCrop: widget.draft.imageCrop,
       );
 
-      final outcome = await uploadManager.startUpload(
+      final uploadFuture = uploadManager.startUpload(
         draft: updatedDraft,
         description: _descriptionController.text,
       );
 
-      if (!outcome.ok) {
+      if (kBlockOnUpload) {
+        final outcome = await uploadFuture;
         if (!mounted) {
           return;
         }
-        final friendlyMessage = outcome.message ?? 'Failed to finalize upload.';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(friendlyMessage)),
-        );
-        return;
+        if (!outcome.ok) {
+          final friendlyMessage =
+              outcome.message ?? 'Failed to finalize upload.';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(friendlyMessage)),
+          );
+          return;
+        }
+        _cleanupProxyCache();
+        _navigateToFeed(navigator, router);
+      } else {
+        uploadFuture.then((outcome) {
+          if (outcome.ok) {
+            _cleanupProxyCache();
+          } else {
+            debugPrint(
+              '[PostReviewPage] Upload failed after navigation: ${outcome.message}',
+            );
+          }
+        }).catchError((error, stackTrace) {
+          debugPrint('[PostReviewPage] Upload future failed: $error\n$stackTrace');
+        });
+        _navigateToFeed(navigator, router);
       }
-
-      _uploadCompleted = true;
-      final proxyPath = widget.draft.proxyFilePath;
-      if (proxyPath != null) {
-        unawaited(VideoProxyService().deleteProxy(proxyPath));
-      }
-      navigator.popUntil((route) => route.isFirst);
-      router.go('/feed');
     } catch (error) {
       if (!mounted) {
         return;
@@ -136,6 +135,11 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     }
   }
 
+  void _navigateToFeed(NavigatorState navigator, GoRouter router) {
+    navigator.popUntil((route) => route.isFirst);
+    router.go('/feed');
+  }
+
   void _initializeVideoPreview() {
     if (kIsWeb) {
       return;
@@ -145,8 +149,9 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
         trim != null ? Duration(milliseconds: trim.startMs) : Duration.zero;
     _trimEnd = trim != null ? Duration(milliseconds: trim.endMs) : null;
 
-    final controller =
-        VideoPlayerController.file(File(widget.draft.videoPlaybackPath));
+    final controller = VideoPlayerController.file(
+      File(widget.draft.videoPlaybackPath(preferOriginal: true)),
+    );
     _videoController = controller;
     _videoInitFuture = controller.initialize().then((_) {
       _videoDuration = controller.value.duration;
@@ -184,6 +189,13 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     }
   }
 
+  void _cleanupProxyCache() {
+    final proxyPath = widget.draft.proxyFilePath;
+    if (proxyPath != null) {
+      unawaited(VideoProxyService().deleteProxy(proxyPath));
+    }
+  }
+
   Future<void> _refreshCoverThumbnail(int? frameMs) async {
     if (kIsWeb || frameMs == null) {
       return;
@@ -209,7 +221,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     }
     try {
       return await VideoThumbnail.thumbnailData(
-        video: widget.draft.videoPlaybackPath,
+        video: widget.draft.videoPlaybackPath(preferOriginal: true),
         timeMs: frameMs,
         quality: 80,
         imageFormat: ImageFormat.JPEG,

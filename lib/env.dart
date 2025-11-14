@@ -5,11 +5,17 @@ const String kApiBaseUrl =
 const bool kAuthBypassEnabled =
     bool.fromEnvironment('AUTH_BYPASS', defaultValue: false);
 const bool kPreferVideoProxyUploads =
-    bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: true);
+    bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: false);
+const bool kUseNativeTusUploader =
+    bool.fromEnvironment('USE_NATIVE_TUS_UPLOADER', defaultValue: true);
+const bool kTusRequireUnmeteredNetwork =
+    bool.fromEnvironment('TUS_REQUIRE_UNMETERED', defaultValue: false);
 // Feature flag to enable segmented (chunked) preview proxying (10s segments).
 // Enabled by default; pass --dart-define=ENABLE_SEGMENTED_PREVIEW=false to opt out.
 const bool kEnableSegmentedPreview =
     bool.fromEnvironment('ENABLE_SEGMENTED_PREVIEW', defaultValue: true);
+const bool kBlockOnUpload =
+    bool.fromEnvironment('BLOCK_ON_UPLOAD', defaultValue: false);
 const String kCloudflareImagesAccountHash =
     String.fromEnvironment('CF_IMAGES_ACCOUNT_HASH', defaultValue: '');
 const String kCloudflareImagesVariant =

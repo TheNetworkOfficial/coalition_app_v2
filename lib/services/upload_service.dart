@@ -14,6 +14,7 @@ import '../models/post_draft.dart';
 import '../models/upload_outcome.dart';
 import '../models/posts_page.dart';
 import 'api_client.dart';
+import 'file_persistence.dart';
 import 'tus_uploader.dart';
 
 const int _kDefaultTusChunkSizeBytes =
@@ -23,12 +24,15 @@ class UploadService {
   UploadService({
     ApiClient? apiClient,
     TusUploader? tusUploader,
+    FilePersistenceService? filePersistence,
   })  : _apiClient = apiClient ?? ApiClient(),
         _tusUploader = tusUploader ?? TusUploader(),
+        _filePersistence = filePersistence ?? FilePersistenceService(),
         _updatesController = StreamController<TaskUpdate>.broadcast();
 
   final ApiClient _apiClient;
   final TusUploader _tusUploader;
+  final FilePersistenceService _filePersistence;
   final StreamController<TaskUpdate> _updatesController;
   final Map<String, _TusUploadState> _tusUploads = {};
   final Map<String, Future<UploadOutcome>> _finalizationInFlight = {};
@@ -37,6 +41,7 @@ class UploadService {
   final Map<String, _PostReadyPoller> _postReadyControllers = {};
   final Map<String, PostItem> _pendingPostSnapshots = {};
   final Map<String, String> _postMediaTypes = {};
+  final Map<String, String> _persistedOriginals = {};
 
   static const Duration _postReadyPollInterval = Duration(seconds: 2);
   static const Duration _postReadyPollTimeout = Duration(minutes: 2);
@@ -75,6 +80,7 @@ class UploadService {
     _postReadyControllers.clear();
     _pendingPostSnapshots.clear();
     _postMediaTypes.clear();
+    _persistedOriginals.clear();
     _updatesController.close();
   }
 
@@ -83,23 +89,59 @@ class UploadService {
     required String description,
     VoidCallback? onFeedRefreshRequested,
   }) async {
-    final preferProxy = draft.type == 'video' &&
-        draft.hasVideoProxy &&
-        kPreferVideoProxyUploads;
-    var resolvedPath = draft.resolveUploadPath(preferProxy: preferProxy);
+    String? resolvedPathCandidate = draft.persistedFilePath?.trim();
+    resolvedPathCandidate ??=
+        _persistedOriginals[draft.originalFilePath]?.trim();
+    var resolvedPath = resolvedPathCandidate ?? _resolveUploadPath(draft);
     var file = File(resolvedPath);
-    if (!await file.exists() && preferProxy) {
+    var fileExists = await file.exists();
+    if (!fileExists && draft.originalFilePath.isNotEmpty) {
       debugPrint(
-          '[UploadService] Proxy not found at $resolvedPath; using original file');
-      resolvedPath = draft.resolveUploadPath(preferProxy: false);
-      file = File(resolvedPath);
+          '[UploadService][metric] original_unreadable path=${draft.originalFilePath}');
+      if (draft.proxyFilePath != null && draft.proxyFilePath!.isNotEmpty) {
+        resolvedPath = draft.proxyFilePath!;
+        file = File(resolvedPath);
+        fileExists = await file.exists();
+        if (fileExists) {
+          debugPrint(
+            '[UploadService][metric] proxy_upload_selected_due_to_missing_original',
+          );
+        }
+      }
     }
 
-    if (!await file.exists()) {
+    if (!fileExists) {
       debugPrint('[UploadService] Upload file missing at $resolvedPath');
       return const UploadOutcome(
         ok: false,
         message: 'Upload file not found',
+      );
+    }
+
+    try {
+      final persisted = await _filePersistence.persistOriginalForUpload(
+        resolvedPath,
+        preferredName: p.basename(resolvedPath),
+        assetId: draft.sourceAssetId,
+      );
+      if (persisted.path != resolvedPath) {
+        debugPrint(
+          '[UploadService][metric] persist_original_copied path=${persisted.path}',
+        );
+      }
+      resolvedPath = persisted.path;
+      file = persisted;
+      _persistedOriginals[draft.originalFilePath] = resolvedPath;
+      unawaited(
+        _filePersistence.cleanupObsoleteUploads(
+          exclusions: {resolvedPath},
+        ),
+      );
+    } on FileSystemException catch (error) {
+      debugPrint('[UploadService] persistOriginalForUpload failed: $error');
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[UploadService] persistOriginalForUpload unexpected error: $error\n$stackTrace',
       );
     }
 
@@ -109,10 +151,15 @@ class UploadService {
         ? 'upload'
         : resolvedFileName;
 
-    if (preferProxy && resolvedPath == draft.proxyFilePath) {
+    final usingProxy = resolvedPath == draft.proxyFilePath;
+    debugPrint(
+      '[UploadService][metric] upload_source=${usingProxy ? 'proxy' : 'original'} size=$fileSize bytes',
+    );
+    if (usingProxy) {
       final resolution = draft.proxyMetadata?.resolution;
       debugPrint(
-          '[UploadService] Uploading proxy file (resolution=$resolution)');
+        '[UploadService] Uploading proxy fallback (resolution=$resolution)',
+      );
     }
 
     final assumedContentType =
@@ -335,12 +382,15 @@ class UploadService {
           file: file,
           create: create,
           fallbackContentType: contentType,
+          fileSize: fileSize,
+          fileName: fileName,
         );
       } else {
         await _performDirectBinaryUpload(
           file: file,
           create: create,
           fallbackContentType: contentType,
+          fileSize: fileSize,
         );
       }
 
@@ -383,6 +433,21 @@ class UploadService {
       _emitStatus(task, TaskStatus.failed);
       return failure;
     }
+  }
+
+  String _resolveUploadPath(PostDraft draft) {
+    final original = draft.originalFilePath.trim();
+    if (original.isNotEmpty) {
+      return original;
+    }
+    final proxy = draft.proxyFilePath?.trim() ?? '';
+    if (proxy.isNotEmpty) {
+      debugPrint(
+        '[UploadService][metric] original_path_missing_using_proxy',
+      );
+      return proxy;
+    }
+    throw StateError('Draft is missing original and proxy paths.');
   }
 
   UploadTask _createSyntheticTusTask({
@@ -1152,6 +1217,8 @@ class UploadService {
     required File file,
     required CreateUploadResponse create,
     required String fallbackContentType,
+    required int fileSize,
+    required String fileName,
   }) async {
     final request = http.MultipartRequest('POST', create.uploadUrl);
     if (create.headers.isNotEmpty) {
@@ -1169,13 +1236,14 @@ class UploadService {
     final resolvedContentType =
         _resolveMediaType(create.contentType, fallbackContentType);
 
-    request.files.add(
-      await http.MultipartFile.fromPath(
-        create.fileFieldName ?? 'file',
-        file.path,
-        contentType: resolvedContentType,
-      ),
+    final multipartFile = http.MultipartFile(
+      create.fileFieldName ?? 'file',
+      file.openRead(),
+      fileSize,
+      filename: fileName,
+      contentType: resolvedContentType,
     );
+    request.files.add(multipartFile);
 
     final streamed = await request.send();
     final status = streamed.statusCode;
@@ -1196,8 +1264,8 @@ class UploadService {
     required File file,
     required CreateUploadResponse create,
     required String fallbackContentType,
+    required int fileSize,
   }) async {
-    final bytes = await file.readAsBytes();
     final resolvedContentType =
         (create.contentType != null && create.contentType!.trim().isNotEmpty)
             ? create.contentType!.trim()
@@ -1208,22 +1276,25 @@ class UploadService {
     }
     headers[HttpHeaders.contentTypeHeader] = resolvedContentType;
 
-    final response = await http.post(
-      create.uploadUrl,
-      headers: headers,
-      body: bytes,
-    );
+    final request = http.StreamedRequest(create.method, create.uploadUrl);
+    request.headers.addAll(headers);
+    await request.sink.addStream(file.openRead());
+    await request.sink.close();
+
+    final response = await request.send();
 
     final status = response.statusCode;
     if (status < 200 || status >= 300) {
+      final body = await response.stream.bytesToString();
       throw ApiException(
         'Direct upload failed',
         statusCode: status,
-        details: response.body.isEmpty ? null : response.body,
+        details: body.isEmpty ? null : body,
       );
     }
     debugPrint(
         '[UploadService] direct upload completed for asset ${create.uid} (status $status)');
+    await response.stream.drain();
   }
 
   MediaType _resolveMediaType(String? provided, String fallback) {
