@@ -6,8 +6,10 @@ import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
 import 'package:video_editor_2/video_editor.dart';
 
+import '../env.dart';
 import '../models/post_draft.dart';
 import '../models/video_proxy.dart';
+import '../router/route_observers.dart';
 import '../services/video_proxy_service.dart';
 import '../widgets/video_proxy_dialog.dart';
 import 'post_review_page.dart';
@@ -46,8 +48,9 @@ class EditMediaPage extends StatefulWidget {
   State<EditMediaPage> createState() => _EditMediaPageState();
 }
 
-class _EditMediaPageState extends State<EditMediaPage> {
+class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
   static const _videoTrimHeight = 72.0;
+  static const int _preparingBarrierMaxMs = 300;
 
   VideoEditorController? _videoController;
   VideoProxyJob? _activeJob;
@@ -66,6 +69,10 @@ class _EditMediaPageState extends State<EditMediaPage> {
   StreamSubscription<VideoProxyProgress>? _jobProgressSub;
   final Stopwatch _editorReadyStopwatch = Stopwatch()..start();
   bool _editorReadyMetricSent = false;
+  bool _releasedForNavigation = false;
+  bool _isNavigatingToReview = false;
+  bool _routeAwareSubscribed = false;
+  bool _releasingForNavigation = false;
 
   double? _imageWidth;
   double? _imageHeight;
@@ -114,6 +121,23 @@ class _EditMediaPageState extends State<EditMediaPage> {
     }
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _subscribeToRouteObserver();
+  }
+
+  void _subscribeToRouteObserver() {
+    if (_routeAwareSubscribed) {
+      return;
+    }
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      appRouteObserver.subscribe(this, route);
+      _routeAwareSubscribed = true;
+    }
+  }
+
   void _attachProxyJob(VideoProxyJob job) {
     _activeJob = job;
     setState(() {
@@ -129,13 +153,7 @@ class _EditMediaPageState extends State<EditMediaPage> {
       debugPrint('[EditMediaPage] Proxy preview stream failed: $error');
     });
 
-    _jobProgressSub?.cancel();
-    _jobProgressSub = job.progress.listen((event) {
-      if (!mounted) return;
-      setState(() {
-        _optimizingProgress = event.fraction;
-      });
-    });
+    _listenToProxyProgress(job);
 
     job.future.then((result) {
       if (!mounted) return;
@@ -162,6 +180,16 @@ class _EditMediaPageState extends State<EditMediaPage> {
         _optimizingProgress = null;
       });
       _handleProxyError(error);
+    });
+  }
+
+  void _listenToProxyProgress(VideoProxyJob job) {
+    _jobProgressSub?.cancel();
+    _jobProgressSub = job.progress.listen((event) {
+      if (!mounted) return;
+      setState(() {
+        _optimizingProgress = event.fraction;
+      });
     });
   }
 
@@ -202,6 +230,10 @@ class _EditMediaPageState extends State<EditMediaPage> {
 
   @override
   void dispose() {
+    if (_routeAwareSubscribed) {
+      appRouteObserver.unsubscribe(this);
+      _routeAwareSubscribed = false;
+    }
     final controller = _videoController;
     if (controller != null) {
       controller.removeListener(_handleVideoControllerUpdate);
@@ -219,7 +251,8 @@ class _EditMediaPageState extends State<EditMediaPage> {
         unawaited(VideoProxyService().deleteProxy(proxy.filePath));
       }
     }
-    _jobProgressSub?.cancel();
+    unawaited(_jobProgressSub?.cancel());
+    _jobProgressSub = null;
     _trimSeekDebounce?.cancel();
     super.dispose();
   }
@@ -823,34 +856,160 @@ class _EditMediaPageState extends State<EditMediaPage> {
     return _rotationTurns.isOdd ? 1 / baseAspect : baseAspect;
   }
 
-  Future<void> _onContinuePressed() async {
-    _retainProxyForNextStep = true;
-
-    final draft = PostDraft(
-      originalFilePath: widget.media.originalFilePath,
-      proxyFilePath: _activeProxy?.filePath,
-      proxyMetadata: _activeProxy?.metadata,
-      originalDurationMs: widget.media.originalDurationMs,
-      type: widget.media.type,
-      description: '',
-      videoTrim: _buildVideoTrim(),
-      coverFrameMs: _buildCoverFrameMs(),
-      imageCrop: _buildImageCrop(),
-      sourceAssetId: widget.media.sourceAssetId,
+  Future<void> _withPreparingOverlay(
+    Future<void> Function() releaseAction,
+  ) async {
+    if (!kShowEditContinueBarrier) {
+      await releaseAction();
+      return;
+    }
+    final OverlayState overlay = Overlay.of(context, rootOverlay: true);
+    final entry = OverlayEntry(
+      builder: (context) => const _PreparingOverlay(),
     );
+    final stopwatch = Stopwatch()..start();
+    overlay.insert(entry);
+    try {
+      await releaseAction();
+    } finally {
+      final elapsedMs = stopwatch.elapsedMilliseconds;
+      final remaining = _preparingBarrierMaxMs - elapsedMs;
+      if (remaining > 0) {
+        await Future<void>.delayed(Duration(milliseconds: remaining));
+      }
+      entry.remove();
+    }
+  }
 
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => PostReviewPage(draft: draft),
+  Future<void> _releaseForNavigation() async {
+    if (_releasedForNavigation) {
+      return;
+    }
+    if (_releasingForNavigation) {
+      // Another release is already running; wait for it to complete.
+      while (_releasingForNavigation) {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+      return;
+    }
+    _releasingForNavigation = true;
+    PostReviewTelemetry.recordDualDecoderGuardTriggered();
+    final stopwatch = Stopwatch()..start();
+    try {
+      final controller = _videoController;
+      if (controller != null) {
+        controller.removeListener(_handleVideoControllerUpdate);
+        if (mounted) {
+          setState(() {
+            _videoController = null;
+            _videoInitialized = false;
+          });
+        } else {
+          _videoController = null;
+          _videoInitialized = false;
+        }
+        try {
+          final videoCtrl = controller.video;
+          if (videoCtrl.value.isInitialized && videoCtrl.value.isPlaying) {
+            await videoCtrl.pause();
+          }
+        } catch (error, stackTrace) {
+          debugPrint(
+            '[EditMediaPage] Failed to pause editor video: $error\n$stackTrace',
+          );
+        }
+        await controller.dispose();
+      }
+      await _jobProgressSub?.cancel();
+      _jobProgressSub = null;
+      _releasedForNavigation = true;
+      PostReviewTelemetry.recordEditorTeardown(
+        elapsedMs: stopwatch.elapsedMilliseconds,
+      );
+    } finally {
+      _releasingForNavigation = false;
+    }
+  }
+
+  void _reinitializeEditorAfterReturn() {
+    if (!_isVideo) {
+      return;
+    }
+    final proxy = _activeProxy;
+    final path = proxy?.filePath ?? widget.media.originalFilePath;
+    final durationMs =
+        proxy?.metadata.durationMs ?? widget.media.originalDurationMs;
+    final job = _activeJob;
+    if (job != null && _jobProgressSub == null) {
+      _listenToProxyProgress(job);
+    }
+    unawaited(
+      _initVideoControllerWithSource(
+        path: path,
+        sourceDurationMs: durationMs,
+        isProxySource: proxy != null,
       ),
     );
+  }
 
-    if (mounted) {
-      setState(() {
+  @override
+  void didPopNext() {
+    super.didPopNext();
+    if (!_releasedForNavigation) {
+      return;
+    }
+    _releasedForNavigation = false;
+    _reinitializeEditorAfterReturn();
+  }
+
+  Future<void> _onContinuePressed() async {
+    if (_isNavigatingToReview) {
+      return;
+    }
+    _retainProxyForNextStep = true;
+    _isNavigatingToReview = true;
+
+    try {
+      await _withPreparingOverlay(_releaseForNavigation);
+      if (!mounted) {
+        return;
+      }
+
+      final draft = PostDraft(
+        originalFilePath: widget.media.originalFilePath,
+        proxyFilePath: _activeProxy?.filePath,
+        proxyMetadata: _activeProxy?.metadata,
+        originalDurationMs: widget.media.originalDurationMs,
+        type: widget.media.type,
+        description: '',
+        videoTrim: _buildVideoTrim(),
+        coverFrameMs: _buildCoverFrameMs(),
+        imageCrop: _buildImageCrop(),
+        sourceAssetId: widget.media.sourceAssetId,
+      );
+
+      final route = MaterialPageRoute(
+        builder: (_) => PostReviewPage(draft: draft),
+      );
+
+      if (kUsePushReplacementForReview) {
+        await Navigator.of(context).pushReplacement(route);
+      } else {
+        await Navigator.of(context).push(route);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _retainProxyForNextStep = false;
+        });
+      } else {
         _retainProxyForNextStep = false;
-      });
-    } else {
-      _retainProxyForNextStep = false;
+      }
+      if (!_routeAwareSubscribed && mounted && _releasedForNavigation) {
+        _releasedForNavigation = false;
+        _reinitializeEditorAfterReturn();
+      }
+      _isNavigatingToReview = false;
     }
   }
 
@@ -1036,6 +1195,47 @@ class _EditMediaPageState extends State<EditMediaPage> {
     setState(() {
       _videoTrimRangeMs = nextRange;
     });
+  }
+}
+
+class _PreparingOverlay extends StatelessWidget {
+  const _PreparingOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Stack(
+      children: [
+        ModalBarrier(
+          color: Colors.black.withValues(alpha: 0.45),
+          dismissible: false,
+        ),
+        Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface.withValues(alpha: 0.95),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Preparing...',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 

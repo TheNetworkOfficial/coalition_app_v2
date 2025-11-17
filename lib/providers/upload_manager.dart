@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
@@ -31,19 +32,25 @@ class UploadManager extends ChangeNotifier {
   final UploadService _uploadService;
   StreamSubscription<TaskUpdate>? _updatesSubscription;
 
-  String? _currentTaskId;
-  double? _progress;
-  TaskStatus? _status;
+  final LinkedHashMap<String, UploadTaskInfo> _activeUploads =
+      LinkedHashMap<String, UploadTaskInfo>();
   final List<PostItem> _pendingPosts = <PostItem>[];
   VideoProcessingUpdate? _processingStatus;
   Timer? _processingClearTimer;
 
   static const Duration _processingDismissDelay = Duration(seconds: 6);
 
-  bool get hasActiveUpload => _currentTaskId != null;
-  double? get progress => _progress;
-  TaskStatus? get status => _status;
-  String? get currentTaskId => _currentTaskId;
+  bool get hasActiveUpload => _activeUploads.isNotEmpty;
+  double? get progress => _activeUploads.isEmpty
+      ? null
+      : _activeUploads.values.first.progress;
+  TaskStatus? get status => _activeUploads.isEmpty
+      ? null
+      : _activeUploads.values.first.status;
+  String? get currentTaskId =>
+      _activeUploads.isEmpty ? null : _activeUploads.keys.first;
+  List<UploadTaskInfo> get activeUploads =>
+      List<UploadTaskInfo>.unmodifiable(_activeUploads.values);
   List<PostItem> get pendingPosts => List<PostItem>.unmodifiable(_pendingPosts);
   VideoProcessingUpdate? get processingStatus => _processingStatus;
   String? get processingMessage {
@@ -78,10 +85,12 @@ class UploadManager extends ChangeNotifier {
       draft: draft,
       description: description,
     );
-    _currentTaskId = _uploadService.lastStartedTaskId;
-    if (_currentTaskId != null) {
-      _progress = 0;
-      _status = null;
+    final taskId = _uploadService.lastStartedTaskId;
+    if (taskId != null) {
+      _activeUploads.putIfAbsent(
+        taskId,
+        () => UploadTaskInfo(taskId: taskId),
+      );
       notifyListeners();
     }
     final outcome = await future;
@@ -89,39 +98,38 @@ class UploadManager extends ChangeNotifier {
   }
 
   void _handleUpdate(TaskUpdate update) {
-    if (_currentTaskId == null || update.task.taskId != _currentTaskId) {
-      return;
-    }
+    final taskId = update.task.taskId;
+    final info = _activeUploads.putIfAbsent(
+      taskId,
+      () => UploadTaskInfo(
+        taskId: taskId,
+        task: update.task,
+      ),
+    );
+    info.task = update.task;
+
+    bool changed = false;
 
     if (update is TaskProgressUpdate) {
       final clamped = update.progress.clamp(0.0, 1.0).toDouble();
-      if (_progress != clamped) {
-        _progress = clamped;
-        notifyListeners();
+      if (info.progress != clamped) {
+        info.progress = clamped;
+        changed = true;
       }
-      return;
-    }
-
-    if (update is TaskStatusUpdate) {
-      _status = update.status;
+    } else if (update is TaskStatusUpdate) {
+      if (info.status != update.status) {
+        info.status = update.status;
+        changed = true;
+      }
       if (update.status.isFinalState) {
-        notifyListeners();
-        if (_clearCurrentUpload()) {
-          notifyListeners();
-        }
-      } else {
-        notifyListeners();
+        _activeUploads.remove(taskId);
+        changed = true;
       }
     }
-  }
 
-  bool _clearCurrentUpload() {
-    final hasChanges =
-        _currentTaskId != null || _progress != null || _status != null;
-    _currentTaskId = null;
-    _progress = null;
-    _status = null;
-    return hasChanges;
+    if (changed) {
+      notifyListeners();
+    }
   }
 
   @override
@@ -197,4 +205,29 @@ class UploadManager extends ChangeNotifier {
       });
     }
   }
+
+  Future<void> cancelUpload(String taskId) async {
+    try {
+      await _uploadService.cancelTusUpload(taskId);
+    } finally {
+      _activeUploads.remove(taskId);
+      notifyListeners();
+    }
+  }
+}
+
+class UploadTaskInfo {
+  UploadTaskInfo({
+    required this.taskId,
+    this.task,
+    this.progress = 0,
+    this.status,
+  });
+
+  final String taskId;
+  Task? task;
+  double progress;
+  TaskStatus? status;
+
+  bool get isFinal => status?.isFinalState ?? false;
 }

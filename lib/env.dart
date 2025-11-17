@@ -6,8 +6,18 @@ const bool kAuthBypassEnabled =
     bool.fromEnvironment('AUTH_BYPASS', defaultValue: false);
 const bool kPreferVideoProxyUploads =
     bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: false);
-const bool kUseNativeTusUploader =
+const bool _kLegacyNativeTusUploader =
     bool.fromEnvironment('USE_NATIVE_TUS_UPLOADER', defaultValue: true);
+const bool kUseNativeTusUploader =
+    bool.fromEnvironment('USE_NATIVE_TUS', defaultValue: _kLegacyNativeTusUploader);
+const bool kShowUploadHud =
+    bool.fromEnvironment('SHOW_UPLOAD_HUD', defaultValue: true);
+const bool kUsePushReplacementForReview = bool.fromEnvironment(
+  'USE_PUSH_REPLACEMENT_FOR_REVIEW',
+  defaultValue: false,
+);
+const bool kShowEditContinueBarrier =
+    bool.fromEnvironment('SHOW_EDIT_CONTINUE_BARRIER', defaultValue: false);
 const bool kTusRequireUnmeteredNetwork =
     bool.fromEnvironment('TUS_REQUIRE_UNMETERED', defaultValue: false);
 // Feature flag to enable segmented (chunked) preview proxying (10s segments).

@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:background_downloader/background_downloader.dart';
-import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -23,18 +22,29 @@ const int _kDefaultTusChunkSizeBytes =
 class UploadService {
   UploadService({
     ApiClient? apiClient,
-    TusUploader? tusUploader,
+    Uploader? uploader,
+    @visibleForTesting TusUploader? tusUploader,
     FilePersistenceService? filePersistence,
   })  : _apiClient = apiClient ?? ApiClient(),
-        _tusUploader = tusUploader ?? TusUploader(),
         _filePersistence = filePersistence ?? FilePersistenceService(),
-        _updatesController = StreamController<TaskUpdate>.broadcast();
+        _updatesController = StreamController<TaskUpdate>.broadcast() {
+    _uploader = uploader ??
+        (tusUploader != null
+            ? TusUploaderAdapter(tusUploader)
+            : (kUseNativeTusUploader
+                ? TusBackgroundUploader()
+                : TusDioUploader()));
+    _usesNativeUploader = _uploader is TusBackgroundUploader;
+    _uploaderEventsSubscription = _uploader.events.listen(_handleTusEvent);
+  }
 
   final ApiClient _apiClient;
-  final TusUploader _tusUploader;
+  late final Uploader _uploader;
+  late final bool _usesNativeUploader;
   final FilePersistenceService _filePersistence;
   final StreamController<TaskUpdate> _updatesController;
-  final Map<String, _TusUploadState> _tusUploads = {};
+  final Map<String, _TusUploadSession> _tusSessions = {};
+  StreamSubscription<TusUploadEvent>? _uploaderEventsSubscription;
   final Map<String, Future<UploadOutcome>> _finalizationInFlight = {};
   final Map<String, UploadOutcome> _finalizedOutcomes = {};
   final Map<String, Future<void>> _postReadyPolling = {};
@@ -42,6 +52,7 @@ class UploadService {
   final Map<String, PostItem> _pendingPostSnapshots = {};
   final Map<String, String> _postMediaTypes = {};
   final Map<String, String> _persistedOriginals = {};
+  final Map<String, String> _postUploadTaskIds = {};
 
   static const Duration _postReadyPollInterval = Duration(seconds: 2);
   static const Duration _postReadyPollTimeout = Duration(minutes: 2);
@@ -59,19 +70,18 @@ class UploadService {
   Stream<TaskUpdate> get updates => _updatesController.stream;
 
   void dispose() {
-    for (final state in _tusUploads.values) {
-      state.cancelToken?.cancel('dispose');
-      if (!state.completer.isCompleted) {
-        state.completer.complete(
+    for (final session in _tusSessions.values) {
+      if (!session.completer.isCompleted) {
+        session.completer.complete(
           UploadOutcome(
             ok: false,
-            uploadId: state.response.uid,
+            uploadId: session.response.uid,
             message: 'Upload canceled',
           ),
         );
       }
     }
-    _tusUploads.clear();
+    _tusSessions.clear();
     _finalizationInFlight.clear();
     _finalizedOutcomes.clear();
     for (final controller in _postReadyControllers.values) {
@@ -81,6 +91,9 @@ class UploadService {
     _pendingPostSnapshots.clear();
     _postMediaTypes.clear();
     _persistedOriginals.clear();
+    _postUploadTaskIds.clear();
+    _uploaderEventsSubscription?.cancel();
+    unawaited(_uploader.dispose());
     _updatesController.close();
   }
 
@@ -484,8 +497,8 @@ class UploadService {
     required VoidCallback? feedRefreshCallback,
     required int chunkSize,
   }) {
-    final taskId = create.taskId ?? create.uid;
-    final task = _createSyntheticTusTask(
+    final String taskId = create.taskId ?? create.uid;
+    final UploadTask task = _createSyntheticTusTask(
       taskId: taskId,
       file: file,
       tusEndpoint: tusEndpoint,
@@ -494,8 +507,7 @@ class UploadService {
 
     _lastStartedTaskId = taskId;
 
-    final completer = Completer<UploadOutcome>();
-    final state = _TusUploadState(
+    final _TusUploadSession session = _TusUploadSession(
       task: task,
       file: file,
       fileName: fileName,
@@ -506,139 +518,175 @@ class UploadService {
       response: create,
       draft: draft,
       description: description.trim(),
-      completer: completer,
       feedRefreshCallback: feedRefreshCallback,
       chunkSize: chunkSize,
     );
-    _tusUploads[taskId] = state;
+    _tusSessions[taskId] = session;
 
-    state.lastProgress = 0;
+    _emitStatus(task, TaskStatus.enqueued);
     _emitProgress(task, 0);
 
-    _startTusTransfer(state);
+    final TusUploadRequest request = TusUploadRequest(
+      taskId: taskId,
+      uploadId: create.uid,
+      filePath: file.path,
+      fileSize: fileSize,
+      fileName: fileName,
+      endpoint: tusEndpoint,
+      headers: tusHeaders,
+      chunkSize: chunkSize,
+      contentType: contentType,
+      description: session.description,
+      postType: draft.type,
+      notificationTitle: 'Uploading ${draft.type == 'video' ? 'video' : 'post'}',
+      notificationBody: description.trim().isEmpty
+          ? 'Preparing your ${draft.type}'
+          : description.trim(),
+      metadata: <String, dynamic>{
+        'postId': create.uid,
+        'draftType': draft.type,
+        'apiBaseUrl': normalizedApiBaseUrl,
+      },
+    );
+    session.request = request;
 
-    return completer.future;
+    _enqueueTusRequest(session, request);
+
+    return session.completer.future;
   }
 
-  void _startTusTransfer(_TusUploadState state) {
-    if (state.isUploading) {
-      return;
-    }
-    state.isPaused = false;
-    final existingProgress = state.lastProgress;
-    if (existingProgress > 0) {
-      _emitProgress(state.task, existingProgress);
-    }
-    state.isUploading = true;
-    final cancelToken = CancelToken();
-    state.cancelToken = cancelToken;
-    _emitStatus(state.task, TaskStatus.running);
-
+  void _enqueueTusRequest(
+    _TusUploadSession session,
+    TusUploadRequest request,
+  ) {
     unawaited(() async {
-      UploadOutcome? outcome;
       try {
-        await _tusUploader.uploadFile(
-          file: state.file,
-          tusUploadUrl: state.tusEndpoint.toString(),
-          chunkSize: state.chunkSize,
-          cancelToken: cancelToken,
-          headers: state.tusHeaders,
-          onProgress: (sent, total) {
-            if (total <= 0) {
-              state.lastProgress = 0;
-              _emitProgress(state.task, 0);
-              return;
-            }
-            final fraction = (sent / total).clamp(0.0, 1.0);
-            state.lastProgress = fraction;
-            _emitProgress(state.task, fraction);
-          },
-        );
-        state.lastProgress = 1;
-        _emitProgress(state.task, 1);
-        await _apiClient.postMetadata(
-          postId: state.response.uid,
-          type: state.draft.type,
-          description: state.description,
-          fileName: state.fileName,
-          fileSize: state.fileSize,
-          contentType: state.contentType,
-          trim: state.draft.videoTrim,
-          coverFrameMs: state.draft.coverFrameMs,
-          imageCrop: state.draft.imageCrop,
-        );
-        final trimmedDescription = state.description.trim();
-        const visibility = 'public';
-        final hasDescription = trimmedDescription.isNotEmpty;
-        debugPrint(
-          '[UploadService] TUS complete -> finalize createPost: '
-          '{type: ${state.draft.type}, cfUid: ${state.response.uid}, hasDescription: $hasDescription, visibility: $visibility}',
-        );
-        outcome = await _finalizePostUpload(
-          type: state.draft.type,
-          cfUid: state.response.uid,
-          description: trimmedDescription,
-          visibility: visibility,
-          feedRefreshCallback: state.feedRefreshCallback,
-        );
-        if (outcome.ok) {
-          _emitStatus(state.task, TaskStatus.complete);
-        } else {
-          _emitStatus(state.task, TaskStatus.failed);
-        }
-      } on DioException catch (dioError, stackTrace) {
-        if (dioError.type == DioExceptionType.cancel) {
-          if (state.isPaused) {
-            debugPrint(
-              '[UploadService] TUS upload paused for ${state.response.uid}',
-            );
-            _emitStatus(state.task, TaskStatus.paused);
-          } else {
-            debugPrint(
-              '[UploadService] TUS upload canceled for ${state.response.uid}',
-            );
-            _emitStatus(state.task, TaskStatus.canceled);
-            outcome = UploadOutcome(
-              ok: false,
-              uploadId: state.response.uid,
-              message: 'Upload canceled',
-            );
-          }
-        } else {
-          debugPrint(
-            '[UploadService] TUS upload Dio failure for ${state.response.uid}: $dioError\n$stackTrace',
-          );
-          _emitStatus(state.task, TaskStatus.failed);
-          outcome = UploadOutcome(
-            ok: false,
-            uploadId: state.response.uid,
-            message: dioError.message ?? dioError.toString(),
-            statusCode: dioError.response?.statusCode,
-          );
-        }
+        await _uploader.enqueue(request);
       } catch (error, stackTrace) {
         debugPrint(
-          '[UploadService] TUS upload failed for ${state.response.uid}: $error\n$stackTrace',
+          '[UploadService] Failed to enqueue TUS upload ${session.response.uid}: $error\n$stackTrace',
         );
-        _emitStatus(state.task, TaskStatus.failed);
-        outcome = _mapFailure(error, uploadId: state.response.uid);
-      } finally {
-        state.isUploading = false;
-        state.cancelToken = null;
-        if (outcome != null) {
-          _completeTusState(state, outcome);
-        }
+        _emitStatus(session.task, TaskStatus.failed);
+        final UploadOutcome outcome =
+            _mapFailure(error, uploadId: session.response.uid);
+        _completeTusSession(session, outcome);
       }
     }());
   }
 
-  void _completeTusState(_TusUploadState state, UploadOutcome outcome) {
-    final taskId = state.task.taskId;
-    final tracked = _tusUploads.remove(taskId);
-    if (tracked != null && !tracked.completer.isCompleted) {
-      tracked.completer.complete(outcome);
+  void _handleTusEvent(TusUploadEvent event) {
+    final _TusUploadSession? session = _tusSessions[event.taskId];
+    if (session == null) {
+      debugPrint(
+        '[UploadService] Received TUS event for unknown task ${event.taskId}',
+      );
+      return;
+    }
+
+    switch (event.state) {
+      case TusUploadState.queued:
+        _emitStatus(session.task, TaskStatus.enqueued);
+        break;
+      case TusUploadState.running:
+      case TusUploadState.resumed:
+        final int totalBytes =
+            event.bytesTotal > 0 ? event.bytesTotal : session.fileSize;
+        final double progress =
+            totalBytes <= 0 ? 0 : event.bytesSent / totalBytes;
+        session.lastProgress = progress.clamp(0.0, 1.0);
+        _emitStatus(session.task, TaskStatus.running);
+        _emitProgress(session.task, session.lastProgress);
+        break;
+      case TusUploadState.uploaded:
+        _emitProgress(session.task, 1);
+        _handleTusUploadComplete(session);
+        break;
+      case TusUploadState.failed:
+        _emitStatus(session.task, TaskStatus.failed);
+        final UploadOutcome failure = UploadOutcome(
+          ok: false,
+          uploadId: session.response.uid,
+          message: event.error ?? 'Upload failed',
+        );
+        _completeTusSession(session, failure);
+        break;
+      case TusUploadState.canceled:
+        _emitStatus(session.task, TaskStatus.canceled);
+        final UploadOutcome canceled = UploadOutcome(
+          ok: false,
+          uploadId: session.response.uid,
+          message: event.error ?? 'Upload canceled',
+        );
+        _completeTusSession(session, canceled);
+        break;
     }
   }
+
+  void _handleTusUploadComplete(_TusUploadSession session) {
+    if (session.isFinalizing) {
+      return;
+    }
+    session.isFinalizing = true;
+    unawaited(() async {
+      try {
+        if (!session.metadataPosted) {
+          await _apiClient.postMetadata(
+            postId: session.response.uid,
+            type: session.draft.type,
+            description: session.description,
+            fileName: session.fileName,
+            fileSize: session.fileSize,
+            contentType: session.contentType,
+            trim: session.draft.videoTrim,
+            coverFrameMs: session.draft.coverFrameMs,
+            imageCrop: session.draft.imageCrop,
+          );
+          session.metadataPosted = true;
+        }
+
+        final String trimmedDescription = session.description.trim();
+        const String visibility = 'public';
+        final bool hasDescription = trimmedDescription.isNotEmpty;
+        debugPrint(
+          '[UploadService] TUS complete -> finalize createPost: '
+          '{type: ${session.draft.type}, cfUid: ${session.response.uid}, hasDescription: $hasDescription, visibility: $visibility}',
+        );
+        final UploadOutcome outcome = await _finalizePostUpload(
+          type: session.draft.type,
+          cfUid: session.response.uid,
+          description: trimmedDescription,
+          visibility: visibility,
+          feedRefreshCallback: session.feedRefreshCallback,
+        );
+        if (outcome.ok) {
+          _emitStatus(session.task, TaskStatus.complete);
+        } else {
+          _emitStatus(session.task, TaskStatus.failed);
+        }
+        _completeTusSession(session, outcome);
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[UploadService] finalize after TUS failed: $error\n$stackTrace',
+        );
+        _emitStatus(session.task, TaskStatus.failed);
+        final UploadOutcome failure =
+            _mapFailure(error, uploadId: session.response.uid);
+        _completeTusSession(session, failure);
+      }
+    }());
+  }
+
+  void _completeTusSession(
+    _TusUploadSession session,
+    UploadOutcome outcome,
+  ) {
+    final _TusUploadSession? tracked = _tusSessions.remove(session.task.taskId);
+    final _TusUploadSession target = tracked ?? session;
+    if (!target.completer.isCompleted) {
+      target.completer.complete(outcome);
+    }
+  }
+
 
   Future<UploadOutcome> _finalizePostUpload({
     required String type,
@@ -835,6 +883,7 @@ class UploadService {
   }) {
     final postId = _extractPostId(response) ?? cfUid;
     final status = _normalizeStatus(response['status']);
+    _postUploadTaskIds[postId] = cfUid;
     final normalizedType = type.trim().toLowerCase();
     _postMediaTypes[postId] = normalizedType;
     PostItem placeholder;
@@ -982,6 +1031,9 @@ class UploadService {
             hasTriggeredRefresh = true;
           }
           if (readyWithThumb) {
+            final message =
+                isVideo ? 'Video ready to view' : 'Post ready to view';
+            _notifyUploadReady(postId, message: message);
             if (isVideo) {
               _notifyVideoProcessing(
                 postId: postId,
@@ -1170,11 +1222,33 @@ class UploadService {
           timestamp: DateTime.now().toUtc(),
         ),
       );
+      if (phase == VideoProcessingPhase.ready) {
+        _notifyUploadReady(postId, message: 'Video ready to view');
+      }
     } catch (error, stackTrace) {
       debugPrint(
         '[UploadService] video processing callback error: $error\n$stackTrace',
       );
     }
+  }
+
+  void _notifyUploadReady(String postId, {String message = 'Post ready'}) {
+    final taskId = _postUploadTaskIds.remove(postId);
+    if (taskId == null) {
+      return;
+    }
+    unawaited(() async {
+      try {
+        await _uploader.markPostReady(taskId, message);
+        debugPrint(
+          '[UploadService][metric] post_ready_notification_sent post=$postId task=$taskId',
+        );
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[UploadService] markPostReady failed: $error\n$stackTrace',
+        );
+      }
+    }());
   }
 
   void _emitStatus(Task task, TaskStatus status) {
@@ -1193,24 +1267,32 @@ class UploadService {
   }
 
   Future<void> pauseTusUpload(String taskId) async {
-    final state = _tusUploads[taskId];
-    if (state == null || !state.isUploading) {
+    if (_usesNativeUploader) {
+      debugPrint('[UploadService] pauseTusUpload is handled natively');
       return;
     }
-    state.isPaused = true;
-    state.cancelToken?.cancel('pause');
-    while (state.isUploading) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+    await _uploader.cancel(taskId);
+    final _TusUploadSession? session = _tusSessions[taskId];
+    if (session != null) {
+      _emitStatus(session.task, TaskStatus.paused);
     }
   }
 
   Future<void> resumeTusUpload(String taskId) async {
-    final state = _tusUploads[taskId];
-    if (state == null || state.isUploading) {
+    if (_usesNativeUploader) {
+      debugPrint('[UploadService] resumeTusUpload is handled natively');
       return;
     }
-    state.isPaused = false;
-    _startTusTransfer(state);
+    final _TusUploadSession? session = _tusSessions[taskId];
+    final TusUploadRequest? request = session?.request;
+    if (session == null || request == null) {
+      return;
+    }
+    _enqueueTusRequest(session, request);
+  }
+
+  Future<void> cancelTusUpload(String taskId) async {
+    await _uploader.cancel(taskId);
   }
 
   Future<void> _performDirectMultipartUpload({
@@ -1313,8 +1395,8 @@ class UploadService {
   }
 }
 
-class _TusUploadState {
-  _TusUploadState({
+class _TusUploadSession {
+  _TusUploadSession({
     required this.task,
     required this.file,
     required this.fileName,
@@ -1325,11 +1407,11 @@ class _TusUploadState {
     required this.response,
     required this.draft,
     required this.description,
-    required this.completer,
     required this.feedRefreshCallback,
     required this.chunkSize,
   })  : assert(chunkSize > 0),
-        tusHeaders = Map.unmodifiable(Map<String, String>.from(tusHeaders));
+        tusHeaders = Map.unmodifiable(Map<String, String>.from(tusHeaders)),
+        completer = Completer<UploadOutcome>();
 
   final UploadTask task;
   final File file;
@@ -1341,13 +1423,13 @@ class _TusUploadState {
   final CreateUploadResponse response;
   final PostDraft draft;
   final String description;
-  final Completer<UploadOutcome> completer;
   final VoidCallback? feedRefreshCallback;
   final int chunkSize;
-  CancelToken? cancelToken;
-  bool isUploading = false;
-  bool isPaused = false;
+  final Completer<UploadOutcome> completer;
+  TusUploadRequest? request;
   double lastProgress = 0.0;
+  bool metadataPosted = false;
+  bool isFinalizing = false;
 }
 
 class _PostReadyPoller {

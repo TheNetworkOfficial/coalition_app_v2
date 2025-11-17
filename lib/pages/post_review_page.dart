@@ -13,6 +13,38 @@ import '../models/post_draft.dart';
 import '../providers/upload_manager.dart';
 import '../services/video_proxy_service.dart';
 
+class PostReviewTelemetry {
+  const PostReviewTelemetry._();
+
+  static int? _lastEditorTeardownEpochMs;
+
+  static void recordDualDecoderGuardTriggered() {
+    debugPrint('[DecoderGuard][metric] dual_decoder_guard_triggered=true');
+  }
+
+  static void recordEditorTeardown({required int elapsedMs}) {
+    _lastEditorTeardownEpochMs = DateTime.now().millisecondsSinceEpoch;
+    debugPrint(
+      '[DecoderGuard][metric] editor_teardown_before_navigate_ms=$elapsedMs',
+    );
+  }
+
+  static void logReviewPlayerInitDelay() {
+    final lastTeardownMs = _lastEditorTeardownEpochMs;
+    if (lastTeardownMs == null) {
+      debugPrint(
+        '[DecoderGuard][metric] review_player_init_after_teardown_ms=unknown',
+      );
+      return;
+    }
+    final delta =
+        DateTime.now().millisecondsSinceEpoch - lastTeardownMs;
+    debugPrint(
+      '[DecoderGuard][metric] review_player_init_after_teardown_ms=$delta',
+    );
+  }
+}
+
 class PostReviewPage extends ConsumerStatefulWidget {
   const PostReviewPage({super.key, required this.draft});
 
@@ -48,7 +80,10 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
           widget.draft.coverFrameMs ?? widget.draft.videoTrim?.startMs ?? 0;
       _coverFrameMs = initialCover;
       if (!kIsWeb) {
-        _initializeVideoPreview();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _initializeVideoPreview();
+        });
       }
     } else {
       _coverFrameMs = widget.draft.coverFrameMs;
@@ -144,6 +179,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     if (kIsWeb) {
       return;
     }
+    PostReviewTelemetry.logReviewPlayerInitDelay();
     final trim = widget.draft.videoTrim;
     _trimStart =
         trim != null ? Duration(milliseconds: trim.startMs) : Duration.zero;

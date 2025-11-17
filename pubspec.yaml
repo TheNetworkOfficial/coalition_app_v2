@@ -32,6 +32,7 @@ dependencies:
   video_thumbnail: ^0.5.3
   equatable: ^2.0.5
   url_launcher: ^6.3.0
+  flutter_local_notifications: ^17.1.2
 
 dev_dependencies:
   flutter_test:
