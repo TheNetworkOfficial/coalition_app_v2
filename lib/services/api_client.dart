@@ -16,6 +16,7 @@ import '../debug/logging_http_client.dart';
 import '../env.dart';
 import '../features/engagement/models/liker.dart';
 import '../models/create_upload_response.dart';
+import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../models/posts_page.dart';
 import '../models/profile.dart';
@@ -392,6 +393,7 @@ class ApiClient {
     VideoTrimData? trim,
     int? coverFrameMs,
     ImageCropData? imageCrop,
+    EditManifest? editManifest,
   }) async {
     final uri = _resolve('/api/posts/metadata');
     final body = <String, dynamic>{
@@ -421,6 +423,9 @@ class ApiClient {
               'height': imageCrop.height,
               'rotation': imageCrop.rotation,
             },
+      'editTimeline': editManifest == null
+          ? null
+          : jsonEncode(editManifest.toJson()),
     }..removeWhere((key, value) => value == null);
 
     final headers = await _jsonHeaders();

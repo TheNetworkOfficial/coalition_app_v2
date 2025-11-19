@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
 
 import 'package:coalition_app_v2/models/create_upload_response.dart';
+import 'package:coalition_app_v2/models/edit_manifest.dart';
 import 'package:coalition_app_v2/models/post_draft.dart';
 import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/services/tus_uploader.dart';
@@ -302,6 +303,7 @@ class _StubbedApiClient extends ApiClient {
     VideoTrimData? trim,
     int? coverFrameMs,
     ImageCropData? imageCrop,
+    EditManifest? editManifest,
   }) async {
     lastPostedMetadataDescription = description;
   }

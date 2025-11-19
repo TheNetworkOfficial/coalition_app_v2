@@ -3,14 +3,20 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
+import 'package:flutter/services.dart';
 import 'package:video_editor_2/video_editor.dart';
 
 import '../env.dart';
+import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../models/video_proxy.dart';
 import '../router/route_observers.dart';
 import '../services/video_proxy_service.dart';
+import '../services/native_editor_channel.dart';
 import '../widgets/video_proxy_dialog.dart';
 import 'post_review_page.dart';
 
@@ -67,6 +73,9 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
   Timer? _trimSeekDebounce;
   double? _optimizingProgress;
   StreamSubscription<VideoProxyProgress>? _jobProgressSub;
+  EditManifest _editManifest = const EditManifest();
+  final NativeEditorChannel _nativeEditorChannel = NativeEditorChannel();
+  int? _nativePreviewViewId;
   final Stopwatch _editorReadyStopwatch = Stopwatch()..start();
   bool _editorReadyMetricSent = false;
   bool _releasedForNavigation = false;
@@ -254,6 +263,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     unawaited(_jobProgressSub?.cancel());
     _jobProgressSub = null;
     _trimSeekDebounce?.cancel();
+    unawaited(_nativeEditorChannel.release());
     super.dispose();
   }
 
@@ -315,6 +325,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
         _usingProxyPreview = isProxySource;
       });
       _markEditorReady();
+      _maybePrepareNativePreview();
     } catch (error, stackTrace) {
       debugPrint(
         '[EditMediaPage] Failed to initialize ${isProxySource ? 'proxy' : 'original'} preview: $error\n$stackTrace',
@@ -520,6 +531,8 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
   }
 
   bool get _isVideo => widget.media.type == 'video';
+  bool get _useNativePreview =>
+      kEnableNativeEditorPreview && supportsNativePreview && !kIsWeb;
 
   @override
   Widget build(BuildContext context) {
@@ -606,13 +619,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
               Center(
                 child: AspectRatio(
                   aspectRatio: aspectRatio,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      color: Colors.black,
-                      child: CropGridViewer.preview(controller: controller),
-                    ),
-                  ),
+                  child: _buildPreviewSurface(controller, aspectRatio),
                 ),
               ),
               if (isProxyJobRunning)
@@ -640,7 +647,85 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
         ),
         const SizedBox(height: 16),
         _buildTrimControls(controller),
+        if (kDebugMode)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                _manifestDebugSummary(),
+                style: Theme.of(context).textTheme.bodySmall,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  Widget _buildPreviewSurface(
+    VideoEditorController controller,
+    double aspectRatio,
+  ) {
+    if (_useNativePreview) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: _buildNativePreviewSurface(aspectRatio),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        color: Colors.black,
+        child: CropGridViewer.preview(controller: controller),
+      ),
+    );
+  }
+
+  Widget _buildNativePreviewSurface(double aspectRatio) {
+    if (Platform.isAndroid) {
+      return PlatformViewLink(
+        viewType: 'EditorPreviewView',
+        surfaceFactory: (context, controller) {
+          return PlatformViewSurface(
+            controller: controller,
+            hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+            gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+          );
+        },
+        onCreatePlatformView: (params) {
+          final controller = PlatformViewsService.initSurfaceAndroidView(
+            id: params.id,
+            viewType: params.viewType,
+            layoutDirection: TextDirection.ltr,
+            creationParams: null,
+            creationParamsCodec: const StandardMessageCodec(),
+            onFocus: () => params.onFocusChanged(true),
+          );
+          controller.addOnPlatformViewCreatedListener((id) {
+            params.onPlatformViewCreated(id);
+            setState(() {
+              _nativePreviewViewId = id;
+            });
+            _maybePrepareNativePreview();
+          });
+          controller.create();
+          return controller;
+        },
+      );
+    }
+    return UiKitView(
+      viewType: 'EditorPreviewView',
+      layoutDirection: TextDirection.ltr,
+      creationParams: null,
+      creationParamsCodec: const StandardMessageCodec(),
+      onPlatformViewCreated: (id) {
+        setState(() {
+          _nativePreviewViewId = id;
+        });
+        _maybePrepareNativePreview();
+      },
     );
   }
 
@@ -784,6 +869,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
                 if (value) {
                   setState(() {
                     _selectedAspectId = option.id;
+                    _applyCropOpLocked();
                   });
                 }
               },
@@ -802,6 +888,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
               tooltip: 'Rotate left',
               onPressed: () => setState(() {
                 _rotationTurns = (_rotationTurns + 1) % 4;
+                _applyRotateOpLocked();
               }),
               icon: const Icon(Icons.rotate_left),
             ),
@@ -809,6 +896,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
               tooltip: 'Rotate right',
               onPressed: () => setState(() {
                 _rotationTurns = (_rotationTurns - 1) % 4;
+                _applyRotateOpLocked();
               }),
               icon: const Icon(Icons.rotate_right),
             ),
@@ -922,6 +1010,9 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
       }
       await _jobProgressSub?.cancel();
       _jobProgressSub = null;
+      if (_useNativePreview) {
+        await _nativeEditorChannel.release();
+      }
       _releasedForNavigation = true;
       PostReviewTelemetry.recordEditorTeardown(
         elapsedMs: stopwatch.elapsedMilliseconds,
@@ -949,6 +1040,34 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
         sourceDurationMs: durationMs,
         isProxySource: proxy != null,
       ),
+    );
+  }
+
+  void _maybePrepareNativePreview() {
+    if (!_useNativePreview || !_videoInitialized) {
+      return;
+    }
+    final viewId = _nativePreviewViewId;
+    if (viewId == null) {
+      return;
+    }
+    final mediaPath = _activeProxy?.filePath ?? widget.media.originalFilePath;
+    if (mediaPath.isEmpty) {
+      return;
+    }
+    final manifest = currentManifest.toJson();
+    unawaited(
+      _nativeEditorChannel
+          .prepareTimeline(
+            sourcePath: widget.media.originalFilePath,
+            proxyPath: _activeProxy?.filePath,
+            manifest: manifest,
+            surfaceId: viewId,
+          )
+          .then((_) => _nativeEditorChannel.setPlayback(playing: true, speed: 1))
+          .catchError((error, stack) {
+        debugPrint('Native preview init failed: $error\n$stack');
+      }),
     );
   }
 
@@ -986,6 +1105,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
         coverFrameMs: _buildCoverFrameMs(),
         imageCrop: _buildImageCrop(),
         sourceAssetId: widget.media.sourceAssetId,
+        editManifest: currentManifest,
       );
 
       final route = MaterialPageRoute(
@@ -1103,6 +1223,32 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     );
   }
 
+  void _applyCropOpLocked() {
+    if (_isVideo) {
+      return;
+    }
+    final cropRect = _currentCropRect();
+    final isIdentity = cropRect.left == 0 &&
+        cropRect.top == 0 &&
+        cropRect.width == 1 &&
+        cropRect.height == 1;
+    final replacement = isIdentity
+        ? null
+        : CropOp(
+            left: cropRect.left,
+            top: cropRect.top,
+            width: cropRect.width,
+            height: cropRect.height,
+          );
+    _editManifest = _editManifest.copyWith(
+      ops: _opsWithReplacement(
+        predicate: (op) => op is CropOp,
+        replacement: replacement,
+      ),
+    );
+    _syncNativeTimeline();
+  }
+
   void _onTrimChangeStart() {
     final controller = _videoController;
     if (controller == null) return;
@@ -1135,6 +1281,9 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
       unawaited(
         video.seekTo(Duration(milliseconds: clamped.start.round())),
       );
+      if (_useNativePreview) {
+        unawaited(_nativeEditorChannel.seek(clamped.start.round()));
+      }
     });
   }
 
@@ -1157,6 +1306,8 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     if (video.value.isInitialized) {
       unawaited(video.seekTo(Duration(milliseconds: clampedStart.round())));
     }
+
+    _setTrimOp(clampedStart.round(), clampedEnd.round());
   }
 
   String _formatDuration(double milliseconds) {
@@ -1195,6 +1346,73 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     setState(() {
       _videoTrimRangeMs = nextRange;
     });
+  }
+
+  void _applyRotateOpLocked() {
+    final normalizedTurns = (_rotationTurns % 4 + 4) % 4;
+    _editManifest = _editManifest.copyWith(
+      ops: _opsWithReplacement(
+        predicate: (op) => op is RotateOp,
+        replacement: normalizedTurns == 0 ? null : RotateOp(turns: normalizedTurns),
+      ),
+    );
+    _syncNativeTimeline();
+  }
+
+  void _setTrimOp(int startMs, int endMs) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _editManifest = _editManifest.copyWith(
+        ops: _opsWithReplacement(
+          predicate: (op) => op is TrimOp,
+          replacement: TrimOp(startMs: startMs, endMs: endMs),
+        ),
+      );
+    });
+    _syncNativeTimeline();
+  }
+
+  List<EditOp> _opsWithReplacement({
+    required bool Function(EditOp op) predicate,
+    EditOp? replacement,
+  }) {
+    final updated = <EditOp>[];
+    for (final op in _editManifest.ops) {
+      if (!predicate(op)) {
+        updated.add(op.copy());
+      }
+    }
+    if (replacement != null) {
+      updated.add(replacement);
+    }
+    return updated;
+  }
+
+  EditManifest get currentManifest => _editManifest.copy();
+
+  void _syncNativeTimeline() {
+    if (!_useNativePreview || _nativePreviewViewId == null) {
+      return;
+    }
+    unawaited(_nativeEditorChannel.updateTimeline(currentManifest.toJson()));
+  }
+
+  String _manifestDebugSummary() {
+    TrimOp? trim;
+    for (final op in _editManifest.ops) {
+      if (op is TrimOp) {
+        trim = op;
+        break;
+      }
+    }
+    final trimJson = trim == null
+        ? 'null'
+        : '{"start":${trim.startMs ?? 0},"end":${trim.endMs ?? 0}}';
+    final poster = _editManifest.posterFrameMs;
+    final posterValue = poster?.toString() ?? 'null';
+    return '{"trim":$trimJson,"poster":$posterValue}';
   }
 }
 

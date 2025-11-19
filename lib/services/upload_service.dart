@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -409,6 +410,12 @@ class UploadService {
 
       _emitProgress(task, 1);
 
+      if (draft.editManifest != null) {
+        debugPrint(
+          '[UploadService] edit_manifest=${jsonEncode(draft.editManifest!.toJson())}',
+        );
+      }
+
       await _apiClient.postMetadata(
         postId: create.uid,
         type: draft.type,
@@ -419,6 +426,7 @@ class UploadService {
         trim: draft.videoTrim,
         coverFrameMs: draft.coverFrameMs,
         imageCrop: draft.imageCrop,
+        editManifest: draft.editManifest,
       );
 
       debugPrint(
@@ -630,6 +638,12 @@ class UploadService {
     unawaited(() async {
       try {
         if (!session.metadataPosted) {
+          final manifest = session.draft.editManifest;
+          if (manifest != null) {
+            debugPrint(
+              '[UploadService] edit_manifest=${jsonEncode(manifest.toJson())}',
+            );
+          }
           await _apiClient.postMetadata(
             postId: session.response.uid,
             type: session.draft.type,
@@ -640,6 +654,7 @@ class UploadService {
             trim: session.draft.videoTrim,
             coverFrameMs: session.draft.coverFrameMs,
             imageCrop: session.draft.imageCrop,
+            editManifest: manifest,
           );
           session.metadataPosted = true;
         }

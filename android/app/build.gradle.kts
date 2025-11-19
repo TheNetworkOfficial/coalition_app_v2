@@ -8,6 +8,8 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val media3Version = (project.findProperty("MEDIA3_VERSION") as String?) ?: "1.4.1"
+
 android {
     namespace = "com.example.coalition_app_v2"
     compileSdk = flutter.compileSdkVersion
@@ -57,7 +59,9 @@ flutter {
 dependencies {
     implementation("com.github.bumptech.glide:glide:4.16.0")
     kapt("com.github.bumptech.glide:compiler:4.16.0")
-    implementation("com.otaliastudios:transcoder:0.10.5")
+    implementation("com.otaliastudios:transcoder:0.10.5") {
+        exclude(group = "com.google.android.exoplayer")
+    }
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     // Use a jar-publishing version of the Java TUS client (0.5.x line)
     // Pin to a published version; 0.5.1 is the latest available in Maven Central
@@ -67,6 +71,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // Core library desugaring support libs (stable 2.x line)
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-transformer:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.media3:media3-effect:$media3Version")
 }
 
 // Ensure EVERY compile task uses JVM 17 (Kotlin, KAPT, and Java)

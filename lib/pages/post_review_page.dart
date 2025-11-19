@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
 import '../env.dart';
+import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../providers/upload_manager.dart';
 import '../services/video_proxy_service.dart';
@@ -68,12 +69,14 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
   Uint8List? _coverThumbnail;
   bool _isCoverLoading = false;
   Object? _videoInitError;
+  EditManifest? _editManifest;
 
   @override
   void initState() {
     super.initState();
     _descriptionController =
         TextEditingController(text: widget.draft.description);
+    _editManifest = widget.draft.editManifest?.copy();
 
     if (widget.draft.type == 'video') {
       final initialCover =
@@ -118,6 +121,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
         coverFrameMs: widget.draft.type == 'video'
             ? _effectiveCoverFrameMs
             : widget.draft.coverFrameMs,
+        editManifest: _editManifest ?? widget.draft.editManifest,
       );
 
       final uploadFuture = uploadManager.startUpload(
@@ -249,6 +253,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
       _coverThumbnail = bytes;
       _isCoverLoading = false;
     });
+    _setPosterFrameManifest(clamped);
   }
 
   Future<Uint8List?> _createThumbnail(int frameMs) async {
@@ -428,7 +433,13 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
                           currentValue = value;
                         });
                       },
-                      onChangeEnd: updatePreview,
+                      onChangeEnd: (value) {
+                        updatePreview(value);
+                        if (!mounted) return;
+                        setState(() {
+                          _setPosterFrameManifest(value.toInt());
+                        });
+                      },
                     ),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -486,9 +497,16 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
         _coverThumbnail = result.bytes;
       }
     });
+    _setPosterFrameManifest(result.frameMs);
     if (result.bytes == null) {
       unawaited(_refreshCoverThumbnail(result.frameMs));
     }
+  }
+
+  void _setPosterFrameManifest(int frameMs) {
+    final manifest =
+        _editManifest ?? widget.draft.editManifest?.copy() ?? const EditManifest();
+    _editManifest = manifest.copyWith(posterFrameMs: frameMs);
   }
 
   Widget _buildVideoPreview(BorderRadius borderRadius) {

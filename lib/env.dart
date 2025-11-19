@@ -26,6 +26,10 @@ const bool kEnableSegmentedPreview =
     bool.fromEnvironment('ENABLE_SEGMENTED_PREVIEW', defaultValue: true);
 const bool kBlockOnUpload =
     bool.fromEnvironment('BLOCK_ON_UPLOAD', defaultValue: false);
+const bool kEnableNativeEditorPreview = bool.fromEnvironment(
+  'ENABLE_NATIVE_EDITOR_PREVIEW',
+  defaultValue: false,
+);
 const String kCloudflareImagesAccountHash =
     String.fromEnvironment('CF_IMAGES_ACCOUNT_HASH', defaultValue: '');
 const String kCloudflareImagesVariant =

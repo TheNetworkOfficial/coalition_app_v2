@@ -1,3 +1,4 @@
+import 'edit_manifest.dart';
 import 'video_proxy.dart';
 
 class PostDraft {
@@ -13,6 +14,7 @@ class PostDraft {
     this.imageCrop,
     this.sourceAssetId,
     this.persistedFilePath,
+    this.editManifest,
   }) : assert(type == 'image' || type == 'video');
 
   final String originalFilePath;
@@ -26,6 +28,7 @@ class PostDraft {
   final ImageCropData? imageCrop;
   final String? sourceAssetId;
   final String? persistedFilePath;
+  final EditManifest? editManifest;
 
   PostDraft copyWith({
     String? originalFilePath,
@@ -38,6 +41,7 @@ class PostDraft {
     ImageCropData? imageCrop,
     String? sourceAssetId,
     String? persistedFilePath,
+    EditManifest? editManifest,
   }) {
     return PostDraft(
       originalFilePath: originalFilePath ?? this.originalFilePath,
@@ -51,6 +55,7 @@ class PostDraft {
       imageCrop: imageCrop ?? this.imageCrop,
       sourceAssetId: sourceAssetId ?? this.sourceAssetId,
       persistedFilePath: persistedFilePath ?? this.persistedFilePath,
+      editManifest: editManifest ?? this.editManifest,
     );
   }
 
