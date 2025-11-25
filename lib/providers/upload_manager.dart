@@ -41,9 +41,9 @@ class UploadManager extends ChangeNotifier {
   static const Duration _processingDismissDelay = Duration(seconds: 6);
 
   bool get hasActiveUpload => _activeUploads.isNotEmpty;
-  double? get progress => _activeUploads.isEmpty
-      ? null
-      : _activeUploads.values.first.progress;
+  double get uploadProgress =>
+      _activeUploads.isEmpty ? 0 : _activeUploads.values.first.progress;
+  double? get progress => hasActiveUpload ? uploadProgress : null;
   TaskStatus? get status => _activeUploads.isEmpty
       ? null
       : _activeUploads.values.first.status;
@@ -52,6 +52,9 @@ class UploadManager extends ChangeNotifier {
   List<UploadTaskInfo> get activeUploads =>
       List<UploadTaskInfo>.unmodifiable(_activeUploads.values);
   List<PostItem> get pendingPosts => List<PostItem>.unmodifiable(_pendingPosts);
+  bool get hasPendingNotReady =>
+      _pendingPosts.any((post) => !post.isReady);
+  bool get isUploadHudActive => hasActiveUpload || hasPendingNotReady;
   VideoProcessingUpdate? get processingStatus => _processingStatus;
   String? get processingMessage {
     final status = _processingStatus;

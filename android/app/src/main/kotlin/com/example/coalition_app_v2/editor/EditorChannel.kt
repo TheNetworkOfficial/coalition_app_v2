@@ -1,11 +1,13 @@
 package com.example.coalition_app_v2.editor
 
 import android.content.Context
+import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -35,6 +37,7 @@ class EditorChannel(
         private const val EVENT_CHANNEL = "EditorChannelEvents"
     }
 
+    private val appContext = context.applicationContext
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -46,6 +49,12 @@ class EditorChannel(
     private var currentViewId: Int? = null
     private var currentMediaPath: String? = null
     private var currentTimelineJson: String? = null
+
+    private fun releasePlayer() {
+        player?.removeListener(this)
+        player?.release()
+        player = null
+    }
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -85,7 +94,7 @@ class EditorChannel(
         currentTimelineJson = timelineJson
         currentViewId = surfaceId
         scope.launch {
-            preparePlayer(mediaPath, surfaceId, timelineJson)
+            prepareTimeline(mediaPath, surfaceId, timelineJson)
             result.success(null)
         }
     }
@@ -100,7 +109,7 @@ class EditorChannel(
             val mediaPath = currentMediaPath
             val viewId = currentViewId
             if (mediaPath != null && viewId != null) {
-                preparePlayer(mediaPath, viewId, currentTimelineJson)
+                updateTimeline(mediaPath, viewId, currentTimelineJson)
             }
             result.success(null)
         }
@@ -160,40 +169,127 @@ class EditorChannel(
         }
     }
 
-    private suspend fun preparePlayer(path: String, surfaceId: Int, timelineJson: String?) {
+    private suspend fun prepareTimeline(path: String, surfaceId: Int, timelineJson: String?) {
+        releasePlayer()
         val preview = previewFactory.findView(surfaceId)
         if (preview == null) {
             Log.w(TAG, "Preview view not found for $surfaceId")
             return
         }
         val timeline = effectBuilder.parseTimeline(timelineJson)
-        if (player == null) {
-            player = ExoPlayer.Builder(context).build().also { it.addListener(this) }
+        val overlays = parseTextOverlaysFromManifest(timelineJson)
+        val mediaItem = buildMediaItem(path, timeline)
+        val p = ExoPlayer.Builder(appContext).build().also {
+            it.setAudioAttributes(AudioAttributes.DEFAULT, true)
+            it.repeatMode = ExoPlayer.REPEAT_MODE_ALL
+            it.addListener(this)
         }
+        player = p
+        p.setPlaybackParameters(PlaybackParameters(timeline.speed))
+        p.setMediaItem(mediaItem)
+        p.prepare()
+        p.playWhenReady = true
+        preview.bindPlayer(p)
+        preview.setTextOverlays(overlays)
+        preview.getView().rotation = timeline.rotationDegrees
+        emitEvent(mapOf("type" to "prepared"))
+    }
+
+    private suspend fun updateTimeline(path: String, surfaceId: Int, timelineJson: String?) {
+        val preview = previewFactory.findView(surfaceId)
+        if (preview == null) {
+            Log.w(TAG, "Preview view not found for $surfaceId")
+            return
+        }
+        val timeline = effectBuilder.parseTimeline(timelineJson)
+        val overlays = parseTextOverlaysFromManifest(timelineJson)
+        val existingPlayer = player
+        if (existingPlayer == null) {
+            prepareTimeline(path, surfaceId, timelineJson)
+            return
+        }
+        val mediaItem = buildMediaItem(path, timeline)
+        existingPlayer.setPlaybackParameters(PlaybackParameters(timeline.speed))
+        existingPlayer.setMediaItem(mediaItem)
+        existingPlayer.prepare()
+        existingPlayer.playWhenReady = true
+        preview.bindPlayer(existingPlayer)
+        preview.setTextOverlays(overlays)
+        preview.getView().rotation = timeline.rotationDegrees
+        emitEvent(mapOf("type" to "prepared"))
+    }
+
+    private fun buildMediaItem(path: String, timeline: TimelineConfig): MediaItem {
         val uri = Uri.fromFile(File(path))
         val itemBuilder = MediaItem.Builder().setUri(uri)
         val clippingBuilder = MediaItem.ClippingConfiguration.Builder()
         timeline.trimStartMs?.let { clippingBuilder.setStartPositionMs(it) }
         timeline.trimEndMs?.let { clippingBuilder.setEndPositionMs(it) }
         itemBuilder.setClippingConfiguration(clippingBuilder.build())
-        val mediaItem = itemBuilder.build()
-        player?.apply {
-            setPlaybackParameters(PlaybackParameters(timeline.speed))
-            setMediaItem(mediaItem)
-            prepare()
-            playWhenReady = true
+        return itemBuilder.build()
+    }
+
+    private fun parseTextOverlaysFromManifest(json: String?): List<PreviewView.TextOverlay> {
+        if (json.isNullOrEmpty()) {
+            return emptyList()
         }
-        preview.bindPlayer(player)
-        preview.getView().rotation = timeline.rotationDegrees
-        emitEvent(mapOf("type" to "prepared"))
+        return try {
+            val root = JSONObject(json)
+            val ops = root.optJSONArray("ops") ?: return emptyList()
+            val overlays = mutableListOf<PreviewView.TextOverlay>()
+            for (i in 0 until ops.length()) {
+                val entry = ops.optJSONObject(i) ?: continue
+                if (entry.optString("type") != "overlay_text") {
+                    continue
+                }
+                val text = entry.optString("text")
+                if (text.isEmpty()) {
+                    continue
+                }
+                val x = entry.optDouble("x", 0.5).toFloat().coerceIn(0f, 1f)
+                val y = entry.optDouble("y", 0.5).toFloat().coerceIn(0f, 1f)
+                val scale = entry.optDouble("scale", 1.0).toFloat().coerceAtLeast(0.1f)
+                val rotation = entry.optDouble("rotationDeg", 0.0).toFloat()
+                val start = entry.optLong("startMs", 0L)
+                val endValue = if (entry.has("endMs")) entry.optLong("endMs", Long.MAX_VALUE) else Long.MAX_VALUE
+                val end = if (endValue >= start) endValue else start
+                val color = parseOverlayColor(entry.optString("color"))
+                overlays.add(
+                    PreviewView.TextOverlay(
+                        text = text,
+                        x = x,
+                        y = y,
+                        scale = scale,
+                        rotationDeg = rotation,
+                        color = color,
+                        startMs = start,
+                        endMs = end,
+                    ),
+                )
+            }
+            overlays
+        } catch (error: Exception) {
+            Log.w(TAG, "Failed to parse overlay ops", error)
+            emptyList()
+        }
+    }
+
+    private fun parseOverlayColor(raw: String?): Int {
+        if (raw.isNullOrBlank()) {
+            return Color.WHITE
+        }
+        return try {
+            Color.parseColor(raw)
+        } catch (_: IllegalArgumentException) {
+            Color.WHITE
+        }
     }
 
     fun release() {
-        player?.removeListener(this)
-        player?.release()
-        player = null
+        releasePlayer()
         currentViewId = null
         currentMediaPath = null
+        currentTimelineJson = null
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {

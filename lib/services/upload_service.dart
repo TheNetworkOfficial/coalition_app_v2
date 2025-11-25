@@ -309,13 +309,11 @@ class UploadService {
 
     final Map<String, String> tusHeaders = parseStringMap(
       tusInfoRaw is Map ? tusInfoRaw['headers'] : null,
-    );
-    final hasTusResumable = tusHeaders.keys.any(
-      (key) => key.toLowerCase() == 'tus-resumable',
-    );
-    if (!hasTusResumable) {
-      tusHeaders['Tus-Resumable'] = '1.0.0';
-    }
+    )
+      ..removeWhere(
+        (key, _) =>
+            key.toLowerCase() == 'tus-resumable', // TusClient adds this itself.
+      );
 
     final feedRefreshCallback =
         onFeedRefreshRequested ?? this.onFeedRefreshRequested;
@@ -937,7 +935,7 @@ class UploadService {
     } else {
       onPostStatusUpdated?.call(placeholder);
     }
-    final shouldPoll = !placeholder.isReady || placeholder.thumbUrl == null;
+    final shouldPoll = !placeholder.isReady;
     if (shouldPoll) {
       _pendingPostSnapshots[postId] = placeholder;
     } else {
@@ -1038,14 +1036,13 @@ class UploadService {
         if (snapshot != null) {
           _pendingPostSnapshots[postId] = snapshot;
           onPostStatusUpdated?.call(snapshot);
-          final hasThumb = snapshot.thumbUrl != null;
-          final readyWithThumb = snapshot.isReady && hasThumb;
+          final bool isReady = snapshot.isReady;
           final failed = snapshot.status.toUpperCase() == 'FAILED';
-          if (readyWithThumb && !hasTriggeredRefresh) {
+          if (isReady && !hasTriggeredRefresh) {
             await _notifyFeedRefreshRequested(feedRefreshCallback);
             hasTriggeredRefresh = true;
           }
-          if (readyWithThumb) {
+          if (isReady) {
             final message =
                 isVideo ? 'Video ready to view' : 'Post ready to view';
             _notifyUploadReady(postId, message: message);
@@ -1180,10 +1177,10 @@ class UploadService {
     if (value is String) {
       final trimmed = value.trim();
       if (trimmed.isNotEmpty) {
-        return trimmed;
+        return trimmed.toUpperCase();
       }
     }
-    return 'UNKNOWN';
+    return 'PROCESSING';
   }
 
   PostItem _clonePostWithStatus(PostItem source, String status) {

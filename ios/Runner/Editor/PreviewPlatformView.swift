@@ -5,12 +5,14 @@ import UIKit
 final class PreviewPlatformView: NSObject, FlutterPlatformView {
   private final class PreviewContainer: UIView {
     let playerLayer: AVPlayerLayer
+    let overlayLayer = CALayer()
 
-    init(layer: AVPlayerLayer) {
-      self.playerLayer = layer
+    init(playerLayer: AVPlayerLayer) {
+      self.playerLayer = playerLayer
       super.init(frame: .zero)
-      layer.needsDisplayOnBoundsChange = true
-      self.layer.addSublayer(layer)
+      playerLayer.needsDisplayOnBoundsChange = true
+      layer.addSublayer(playerLayer)
+      layer.addSublayer(overlayLayer)
     }
 
     required init?(coder: NSCoder) {
@@ -20,17 +22,19 @@ final class PreviewPlatformView: NSObject, FlutterPlatformView {
     override func layoutSubviews() {
       super.layoutSubviews()
       playerLayer.frame = bounds
+      overlayLayer.frame = bounds
     }
   }
 
   private let container: PreviewContainer
-  private let playerLayer = AVPlayerLayer()
+  private let playerLayer: AVPlayerLayer
   private let disposeHandler: (() -> Void)?
 
   init(frame: CGRect, viewId: Int64, disposeHandler: (() -> Void)? = nil) {
     let layer = AVPlayerLayer()
     layer.videoGravity = .resizeAspect
-    self.container = PreviewContainer(layer: layer)
+    self.playerLayer = layer
+    self.container = PreviewContainer(playerLayer: layer)
     self.disposeHandler = disposeHandler
     super.init()
     container.frame = frame
@@ -43,6 +47,10 @@ final class PreviewPlatformView: NSObject, FlutterPlatformView {
 
   func bind(player: AVPlayer?) {
     playerLayer.player = player
+  }
+
+  var overlayLayer: CALayer {
+    container.overlayLayer
   }
 
   func dispose() {

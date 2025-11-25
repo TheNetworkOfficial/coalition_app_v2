@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../models/edit_manifest.dart';
+
 class NativeEditorChannel {
   NativeEditorChannel()
       : _methodChannel = const MethodChannel('EditorChannel'),
@@ -36,10 +38,14 @@ class NativeEditorChannel {
     }
   }
 
-  Future<void> updateTimeline(Map<String, dynamic> manifest) async {
+  Future<void> updateTimeline({
+    required EditManifest manifest,
+    int? surfaceId,
+  }) async {
     try {
       await _methodChannel.invokeMethod('updateTimeline', {
-        'timelineJson': jsonEncode(manifest),
+        'timelineJson': jsonEncode(manifest.toJson()),
+        if (surfaceId != null) 'surfaceId': surfaceId,
       });
     } catch (error, stack) {
       if (kDebugMode) {

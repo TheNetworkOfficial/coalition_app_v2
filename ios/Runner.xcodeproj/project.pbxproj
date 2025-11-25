@@ -15,6 +15,7 @@
 		E1F05F251234567800000001 /* EditorChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1F05F241234567800000001 /* EditorChannel.swift */; };
 		E1F05F251234567800000002 /* CompositionBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1F05F241234567800000002 /* CompositionBuilder.swift */; };
 		E1F05F251234567800000003 /* OverlayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1F05F241234567800000003 /* OverlayRenderer.swift */; };
+		E1F05F251234567800000006 /* CompositionOverlayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1F05F241234567800000006 /* CompositionOverlayRenderer.swift */; };
 		E1F05F251234567800000004 /* PreviewPlatformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1F05F241234567800000004 /* PreviewPlatformView.swift */; };
 		E1F05F251234567800000005 /* PreviewPlatformViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1F05F241234567800000005 /* PreviewPlatformViewFactory.swift */; };
                 97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
@@ -57,6 +58,7 @@
 		E1F05F241234567800000001 /* EditorChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorChannel.swift; sourceTree = "<group>"; };
 		E1F05F241234567800000002 /* CompositionBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompositionBuilder.swift; sourceTree = "<group>"; };
 		E1F05F241234567800000003 /* OverlayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayRenderer.swift; sourceTree = "<group>"; };
+		E1F05F241234567800000006 /* CompositionOverlayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompositionOverlayRenderer.swift; sourceTree = "<group>"; };
 		E1F05F241234567800000004 /* PreviewPlatformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPlatformView.swift; sourceTree = "<group>"; };
 		E1F05F241234567800000005 /* PreviewPlatformViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPlatformViewFactory.swift; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
@@ -140,6 +142,7 @@
 			children = (
 				E1F05F241234567800000001 /* EditorChannel.swift */,
 				E1F05F241234567800000002 /* CompositionBuilder.swift */,
+				E1F05F241234567800000006 /* CompositionOverlayRenderer.swift */,
 				E1F05F241234567800000003 /* OverlayRenderer.swift */,
 				E1F05F241234567800000004 /* PreviewPlatformView.swift */,
 				E1F05F241234567800000005 /* PreviewPlatformViewFactory.swift */,
@@ -290,14 +293,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-                97C146EA1CF9000F007C117D /* Sources */ = {
-                        isa = PBXSourcesBuildPhase;
-                        buildActionMask = 2147483647;
+		97C146EA1CF9000F007C117D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
 				files = (
 					74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 					A1B2C3D4E5F60718293A4B5D /* VideoProxyChannel.swift in Sources */,
 					E1F05F251234567800000001 /* EditorChannel.swift in Sources */,
 					E1F05F251234567800000002 /* CompositionBuilder.swift in Sources */,
+					E1F05F251234567800000006 /* CompositionOverlayRenderer.swift in Sources */,
 					E1F05F251234567800000003 /* OverlayRenderer.swift in Sources */,
 					E1F05F251234567800000004 /* PreviewPlatformView.swift in Sources */,
 					E1F05F251234567800000005 /* PreviewPlatformViewFactory.swift in Sources */,

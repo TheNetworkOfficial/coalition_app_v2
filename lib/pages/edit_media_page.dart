@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart';
@@ -9,8 +9,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
 import 'package:flutter/services.dart';
 import 'package:video_editor_2/video_editor.dart';
+import 'package:video_player/video_player.dart';
 
 import '../env.dart';
+import '../features/editor/overlay_text_editor.dart';
 import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../models/video_proxy.dart';
@@ -306,8 +308,17 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
       }
       controller.addListener(_handleVideoControllerUpdate);
       await controller.video.setLooping(true);
-      if (!controller.video.value.isPlaying) {
-        await controller.video.play();
+      if (kEnableNativeEditorPreview) {
+        // Native preview owns playback; keep Flutter video silent.
+        await controller.video.setVolume(0.0);
+        if (controller.video.value.isPlaying) {
+          await controller.video.pause();
+        }
+      } else {
+        await controller.video.setVolume(1.0);
+        if (!controller.video.value.isPlaying) {
+          await controller.video.play();
+        }
       }
 
       final appliedTrim =
@@ -374,7 +385,19 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     unawaited(
       controller.video.seekTo(Duration(milliseconds: start.round())),
     );
+    _enforceNativePreviewSilence(controller);
     return RangeValues(start, end);
+  }
+
+  void _enforceNativePreviewSilence(VideoEditorController controller) {
+    if (!kEnableNativeEditorPreview) {
+      return;
+    }
+    final video = controller.video;
+    unawaited(video.setVolume(0.0));
+    if (video.value.isPlaying) {
+      unawaited(video.pause());
+    }
   }
 
   void _markEditorReady() {
@@ -534,6 +557,14 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
   bool get _useNativePreview =>
       kEnableNativeEditorPreview && supportsNativePreview && !kIsWeb;
 
+  bool _shouldShowFlutterOverlay(BuildContext context) {
+    final platform = Theme.of(context).platform;
+    if (!kEnableNativeEditorPreview) {
+      return true;
+    }
+    return platform == TargetPlatform.android;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -610,6 +641,12 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
       return 'Optimizing… $percent%';
     }();
 
+    final overlayOp = _editManifest.firstTextOverlay;
+    final showFlutterOverlay =
+        overlayOp != null && _shouldShowFlutterOverlay(context);
+    final overlayForPreview =
+        showFlutterOverlay ? overlayOp : null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -619,7 +656,22 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
               Center(
                 child: AspectRatio(
                   aspectRatio: aspectRatio,
-                  child: _buildPreviewSurface(controller, aspectRatio),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _buildPreviewSurface(controller, aspectRatio),
+                        if (overlayForPreview != null)
+                          IgnorePointer(
+                            child: _OverlayTextPreview(
+                              overlay: overlayForPreview,
+                              videoListenable: controller.video,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
               if (isProxyJobRunning)
@@ -646,6 +698,15 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
           ),
         ),
         const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.title),
+            label: const Text('Text'),
+            onPressed: _onTextOverlayPressed,
+          ),
+        ),
+        const SizedBox(height: 16),
         _buildTrimControls(controller),
         if (kDebugMode)
           Padding(
@@ -669,18 +730,42 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     double aspectRatio,
   ) {
     if (_useNativePreview) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: _buildNativePreviewSurface(aspectRatio),
+      return _buildNativePreviewSurface(aspectRatio);
+    }
+    return Container(
+      color: Colors.black,
+      child: CropGridViewer.preview(controller: controller),
+    );
+  }
+
+  Future<void> _onTextOverlayPressed() async {
+    if (!_isVideo) {
+      return;
+    }
+    final duration = _videoDuration;
+    if (duration == null) {
+      return;
+    }
+    final result = await showOverlayTextEditor(
+      context: context,
+      total: duration,
+      initial: _editManifest.firstTextOverlay,
+    );
+    if (!mounted || result == null) {
+      return;
+    }
+    final nextManifest = _editManifest.replaceTextOverlay(result);
+    if (kEnableNativeEditorPreview) {
+      unawaited(
+        _nativeEditorChannel.updateTimeline(
+          manifest: nextManifest,
+          surfaceId: _nativePreviewViewId,
+        ),
       );
     }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        color: Colors.black,
-        child: CropGridViewer.preview(controller: controller),
-      ),
-    );
+    setState(() {
+      _editManifest = nextManifest;
+    });
   }
 
   Widget _buildNativePreviewSurface(double aspectRatio) {
@@ -973,6 +1058,10 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     if (_releasedForNavigation) {
       return;
     }
+    final controller = _videoController;
+    if (controller != null) {
+      unawaited(controller.video.pause());
+    }
     if (_releasingForNavigation) {
       // Another release is already running; wait for it to complete.
       while (_releasingForNavigation) {
@@ -984,7 +1073,6 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     PostReviewTelemetry.recordDualDecoderGuardTriggered();
     final stopwatch = Stopwatch()..start();
     try {
-      final controller = _videoController;
       if (controller != null) {
         controller.removeListener(_handleVideoControllerUpdate);
         if (mounted) {
@@ -1257,6 +1345,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     if (video.value.isInitialized && video.value.isPlaying) {
       video.pause();
     }
+    _enforceNativePreviewSilence(controller);
     _trimSeekDebounce?.cancel();
   }
 
@@ -1281,6 +1370,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
       unawaited(
         video.seekTo(Duration(milliseconds: clamped.start.round())),
       );
+      _enforceNativePreviewSilence(controller);
       if (_useNativePreview) {
         unawaited(_nativeEditorChannel.seek(clamped.start.round()));
       }
@@ -1305,6 +1395,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     final video = controller.video;
     if (video.value.isInitialized) {
       unawaited(video.seekTo(Duration(milliseconds: clampedStart.round())));
+      _enforceNativePreviewSilence(controller);
     }
 
     _setTrimOp(clampedStart.round(), clampedEnd.round());
@@ -1396,7 +1487,12 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     if (!_useNativePreview || _nativePreviewViewId == null) {
       return;
     }
-    unawaited(_nativeEditorChannel.updateTimeline(currentManifest.toJson()));
+    unawaited(
+      _nativeEditorChannel.updateTimeline(
+        manifest: currentManifest,
+        surfaceId: _nativePreviewViewId,
+      ),
+    );
   }
 
   String _manifestDebugSummary() {
@@ -1473,3 +1569,94 @@ const List<_AspectRatioOption> _aspectRatioOptions = [
   _AspectRatioOption('fourFive', '4:5', 4 / 5),
   _AspectRatioOption('sixteenNine', '16:9', 16 / 9),
 ];
+
+class _OverlayTextPreview extends StatelessWidget {
+  const _OverlayTextPreview({
+    required this.overlay,
+    required this.videoListenable,
+  });
+
+  final OverlayTextOp overlay;
+  final ValueListenable<VideoPlayerValue> videoListenable;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<VideoPlayerValue>(
+      valueListenable: videoListenable,
+      builder: (context, value, _) {
+        if (!_isVisibleAt(value.position.inMilliseconds)) {
+          return const SizedBox.shrink();
+        }
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final height = constraints.maxHeight;
+            if (width <= 0 || height <= 0) {
+              return const SizedBox.shrink();
+            }
+            final normalizedX = overlay.x.clamp(0.0, 1.0);
+            final normalizedY = overlay.y.clamp(0.0, 1.0);
+            final left = normalizedX * width;
+            final top = normalizedY * height;
+            final color = _overlayColorFromHex(overlay.color) ?? Colors.white;
+            final baseStyle = Theme.of(context).textTheme.headlineMedium;
+            final textStyle = baseStyle?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w600,
+                ) ??
+                TextStyle(
+                  color: color,
+                  fontSize: 32,
+                  fontWeight: FontWeight.w600,
+                );
+            final clampedScale = overlay.scale.clamp(0.5, 3.0);
+            final radians = overlay.rotationDeg * math.pi / 180;
+            final textWidget = Transform.rotate(
+              angle: radians,
+              child: Transform.scale(
+                scale: clampedScale,
+                child: Text(
+                  overlay.text,
+                  textAlign: TextAlign.center,
+                  style: textStyle,
+                ),
+              ),
+            );
+            return Stack(
+              children: [
+                Positioned(
+                  left: left,
+                  top: top,
+                  child: FractionalTranslation(
+                    translation: const Offset(-0.5, -0.5),
+                    child: textWidget,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  bool _isVisibleAt(int positionMs) {
+    final start = overlay.startMs ?? 0;
+    final end = overlay.endMs;
+    if (end != null && end >= start) {
+      return positionMs >= start && positionMs <= end;
+    }
+    return positionMs >= start;
+  }
+}
+
+Color? _overlayColorFromHex(String? hex) {
+  if (hex == null || hex.length != 7 || !hex.startsWith('#')) {
+    return null;
+  }
+  final value = int.tryParse(hex.substring(1), radix: 16);
+  if (value == null) {
+    return null;
+  }
+  return Color(0xFF000000 | value);
+}

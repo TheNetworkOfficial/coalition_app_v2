@@ -14,7 +14,7 @@ struct TimelineConfig {
   let rotationDegrees: CGFloat
   let cropRect: CGRect?
   let filter: FilterOpConfig?
-  let overlays: [OverlayTextOp]
+  let overlays: [CompositionOverlayTextOp]
 }
 
 struct CompositionBuildResult {
@@ -84,10 +84,10 @@ final class CompositionBuilder {
             output = filtered
           }
         }
-        output = OverlayRenderer.apply(overlays: config.overlays,
-                                       to: output,
-                                       renderSize: renderSize,
-                                       time: request.compositionTime)
+        output = CompositionOverlayRenderer.apply(overlays: config.overlays,
+                                                  to: output,
+                                                  renderSize: renderSize,
+                                                  time: request.compositionTime)
         request.finish(with: output, context: nil)
       }
       videoComposition?.renderSize = renderSize
@@ -117,7 +117,7 @@ final class CompositionBuilder {
     var turns = 0
     var cropRect: CGRect?
     var filter: FilterOpConfig?
-    var overlays: [OverlayTextOp] = []
+    var overlays: [CompositionOverlayTextOp] = []
     for op in ops {
       switch op["type"] as? String {
       case "trim":
@@ -144,7 +144,7 @@ final class CompositionBuilder {
         if let text = op["text"] as? String {
           let colorHex = (op["color"] as? String) ?? "#FFFFFFFF"
           let color = UIColor(hex: colorHex)
-          let overlay = OverlayTextOp(
+          let overlay = CompositionOverlayTextOp(
             text: text,
             x: CGFloat(op["x"] as? Double ?? 0.5),
             y: CGFloat(op["y"] as? Double ?? 0.5),

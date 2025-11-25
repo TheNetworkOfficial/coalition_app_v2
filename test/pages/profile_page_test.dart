@@ -191,6 +191,16 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
   @override
   List<PostItem> get pendingPosts => List<PostItem>.unmodifiable(_pendingPosts);
 
+  @override
+  double get uploadProgress => _progress ?? 0;
+
+  @override
+  bool get hasPendingNotReady =>
+      _pendingPosts.any((post) => !post.isReady);
+
+  @override
+  bool get isUploadHudActive => hasActiveUpload || hasPendingNotReady;
+
   // The real UploadManager exposes some additional getters related to video processing.
   @override
   VideoProcessingUpdate? get processingStatus => null;

@@ -8,6 +8,7 @@ import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import 'package:video_thumbnail/video_thumbnail.dart';
 
+import '../env.dart';
 import '../models/video_proxy.dart';
 import '../pickers/lightweight_asset_picker.dart';
 import '../services/video_proxy_service.dart';
@@ -124,24 +125,28 @@ class _CreateEntryPageState extends State<CreateEntryPage> {
         debugPrint('[CreateEntryPage] Failed to create video poster: $error');
       }
 
-      final service = VideoProxyService();
-      // Request a fast, low-bitrate proxy that covers the entire clip.
-      final videoRequest = VideoProxyRequest(
-        sourcePath: file.path,
-        targetWidth: 540,
-        targetHeight: 960,
-        estimatedDurationMs: originalDurationMs,
-        frameRateHint: 24,
-        keyframeIntervalSeconds: 1,
-        audioBitrateKbps: 96,
-        previewQuality: VideoProxyPreviewQuality.fast,
-        segmentedPreview: false,
-      );
-      request = videoRequest;
-      proxyJob = service.createJob(
-        request: videoRequest,
-        enableLogging: true,
-      );
+      if (!kEnableNativeEditorPreview) {
+        final service = VideoProxyService();
+        // Request a fast, low-bitrate proxy that covers the entire clip.
+        final videoRequest = VideoProxyRequest(
+          sourcePath: file.path,
+          targetWidth: 540,
+          targetHeight: 960,
+          estimatedDurationMs: originalDurationMs,
+          frameRateHint: 24,
+          keyframeIntervalSeconds: 1,
+          audioBitrateKbps: 96,
+          previewQuality: VideoProxyPreviewQuality.fast,
+          segmentedPreview: false,
+        );
+        request = videoRequest;
+        proxyJob = service.createJob(
+          request: videoRequest,
+          enableLogging: true,
+        );
+      } else {
+        debugPrint('[Proxy] Skipped: native editor preview is enabled');
+      }
     }
 
     final media = EditMediaData(

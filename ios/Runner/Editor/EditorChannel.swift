@@ -1,6 +1,7 @@
 import AVFoundation
 import Flutter
 import Foundation
+import UIKit
 
 final class EditorChannel: NSObject, FlutterStreamHandler {
   private let methodChannel: FlutterMethodChannel
@@ -8,6 +9,8 @@ final class EditorChannel: NSObject, FlutterStreamHandler {
   private weak var previewRegistry: PreviewPlatformViewFactory?
   private let compositionBuilder = CompositionBuilder()
 
+  private let overlayRenderer = OverlayRenderer()
+  private var textOverlays: [TextOverlay] = []
   private var eventSink: FlutterEventSink?
   private var player: AVPlayer?
   private var timeObserver: Any?
@@ -119,6 +122,7 @@ final class EditorChannel: NSObject, FlutterStreamHandler {
       let build = try compositionBuilder.build(url: url, timelineJson: currentTimeline)
       currentPosterAsset = build.posterAsset
       let item = build.playerItem
+      textOverlays = parseTextOverlays(from: currentTimeline)
       let existingTime = player?.currentTime() ?? .zero
       if player == nil {
         player = AVPlayer(playerItem: item)
@@ -132,11 +136,12 @@ final class EditorChannel: NSObject, FlutterStreamHandler {
         player?.replaceCurrentItem(with: item)
       }
       let targetViewId = viewId ?? currentViewId
-      if let id = targetViewId {
+      if let id = targetViewId, let preview = previewRegistry?.view(for: id) {
         currentViewId = id
-        if let preview = previewRegistry?.view(for: id) {
-          preview.bind(player: player)
-        }
+        preview.bind(player: player)
+        applyTextOverlays(on: preview)
+      } else if let id = currentViewId, let preview = previewRegistry?.view(for: id) {
+        applyTextOverlays(on: preview)
       }
       player?.seek(to: existingTime, toleranceBefore: .zero, toleranceAfter: .zero)
       player?.play()
@@ -149,11 +154,14 @@ final class EditorChannel: NSObject, FlutterStreamHandler {
 
   private func addTimeObserver() {
     guard timeObserver == nil else { return }
-    timeObserver = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.3, preferredTimescale: 1000),
+    timeObserver = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.2, preferredTimescale: 600),
                                                    queue: .main) { [weak self] time in
-      self?.emit(event: [
+      guard let self = self else { return }
+      let positionMs = Int64(time.seconds * 1000)
+      self.overlayRenderer.updateVisibility(currentMs: positionMs, overlays: self.textOverlays)
+      self.emit(event: [
         "type": "progress",
-        "positionMs": Int(time.seconds * 1000),
+        "positionMs": Int(positionMs),
       ])
     }
   }
@@ -183,6 +191,10 @@ final class EditorChannel: NSObject, FlutterStreamHandler {
     player?.replaceCurrentItem(with: nil)
     player = nil
     currentPosterAsset = nil
+    textOverlays = []
+    if let id = currentViewId, let preview = previewRegistry?.view(for: id) {
+      overlayRenderer.applyTextOverlays([], in: preview.overlayLayer)
+    }
   }
 
   func onListen(withArguments _: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
@@ -197,5 +209,100 @@ final class EditorChannel: NSObject, FlutterStreamHandler {
 
   private func emit(event: [String: Any]) {
     eventSink?(event)
+  }
+
+  private func applyTextOverlays(on preview: PreviewPlatformView) {
+    let view = preview.view()
+    view.setNeedsLayout()
+    view.layoutIfNeeded()
+    overlayRenderer.applyTextOverlays(textOverlays, in: preview.overlayLayer)
+    updateOverlayVisibility()
+  }
+
+  private func updateOverlayVisibility() {
+    guard !textOverlays.isEmpty else { return }
+    guard let player = player else { return }
+    let seconds = CMTimeGetSeconds(player.currentTime())
+    let positionMs = Int64(seconds * 1000)
+    overlayRenderer.updateVisibility(currentMs: positionMs, overlays: textOverlays)
+  }
+
+  private func parseTextOverlays(from json: String?) -> [TextOverlay] {
+    guard let data = json?.data(using: .utf8),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else {
+      return []
+    }
+    let ops = (root["ops"] as? [[String: Any]]) ?? []
+    var overlays: [TextOverlay] = []
+    for entry in ops {
+      guard let type = entry["type"] as? String, type == "overlay_text" else { continue }
+      guard let text = entry["text"] as? String, !text.isEmpty else { continue }
+      let x = CGFloat(doubleValue(entry["x"], fallback: 0.5)).clamped(min: 0, max: 1)
+      let y = CGFloat(doubleValue(entry["y"], fallback: 0.5)).clamped(min: 0, max: 1)
+      let rawScale = CGFloat(doubleValue(entry["scale"], fallback: 1.0))
+      let scale = rawScale.clamped(min: 0.5, max: 3.0)
+      let rotation = CGFloat(doubleValue(entry["rotationDeg"], fallback: 0.0))
+      let start = int64Value(entry["startMs"]) ?? 0
+      let rawEnd = int64Value(entry["endMs"]) ?? Int64.max
+      let end = max(start, rawEnd)
+      let color = color(from: entry["color"] as? String)
+      let overlay = TextOverlay(
+        text: text,
+        x: x,
+        y: y,
+        scale: scale,
+        rotationDeg: rotation,
+        color: color,
+        startMs: start,
+        endMs: end
+      )
+      overlays.append(overlay)
+    }
+    return overlays
+  }
+
+  private func doubleValue(_ value: Any?, fallback: Double) -> Double {
+    if let number = value as? NSNumber {
+      return number.doubleValue
+    }
+    if let string = value as? String, let parsed = Double(string) {
+      return parsed
+    }
+    return fallback
+  }
+
+  private func int64Value(_ value: Any?) -> Int64? {
+    if let number = value as? NSNumber {
+      return number.int64Value
+    }
+    if let string = value as? String, let parsed = Double(string) {
+      return Int64(parsed)
+    }
+    return nil
+  }
+
+  private func color(from hex: String?) -> UIColor {
+    guard var raw = hex?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+      return .white
+    }
+    if raw.hasPrefix("#") {
+      raw.removeFirst()
+    }
+    guard raw.count == 6 else {
+      return .white
+    }
+    var value: UInt64 = 0
+    Scanner(string: raw).scanHexInt64(&value)
+    let r = CGFloat((value & 0xFF0000) >> 16) / 255
+    let g = CGFloat((value & 0x00FF00) >> 8) / 255
+    let b = CGFloat(value & 0x0000FF) / 255
+    return UIColor(red: r, green: g, blue: b, alpha: 1)
+  }
+}
+
+private extension CGFloat {
+  func clamped(min: CGFloat, max: CGFloat) -> CGFloat {
+    Swift.max(min, Swift.min(self, max))
   }
 }

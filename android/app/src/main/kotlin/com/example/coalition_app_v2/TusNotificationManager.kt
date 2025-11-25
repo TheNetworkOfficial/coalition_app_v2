@@ -8,24 +8,25 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.ForegroundInfo
 
-object UploadNotificationManager {
-    private const val CHANNEL_ID = "native_uploads"
+object TusNotificationManager {
+    const val UPLOAD_CHANNEL_ID = "native_uploads"
     private const val CHANNEL_NAME = "Uploads"
     private const val CHANNEL_DESCRIPTION = "Background uploads and processing progress."
 
     private fun notificationManager(context: Context): NotificationManagerCompat {
-        ensureChannel(context)
+        ensureUploadChannel(context)
         return NotificationManagerCompat.from(context)
     }
 
-    fun ensureChannel(context: Context) {
+    @JvmStatic
+    fun ensureUploadChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return
         }
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+        if (manager.getNotificationChannel(UPLOAD_CHANNEL_ID) == null) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
+                UPLOAD_CHANNEL_ID,
                 CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_LOW,
             )
@@ -84,8 +85,8 @@ object UploadNotificationManager {
         context: Context,
         request: NativeTusRequest,
     ): NotificationCompat.Builder {
-        ensureChannel(context)
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        ensureUploadChannel(context)
+        return NotificationCompat.Builder(context, UPLOAD_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOnlyAlertOnce(true)
             .setSilent(true)

@@ -87,13 +87,17 @@ class TusUploadChannel(
 
         TusUploadStore.save(context, request)
         val metadataString = if (request.metadata.isNotEmpty()) {
-            JSONObject(request.metadata as Map<*, *>).toString()
+            JSONObject(request.metadata).toString()
         } else {
             null
         }
+        val headersJson = JSONObject(request.headers).toString()
         val dataBuilder = Data.Builder()
+            .putString(TusWorker.KEY_TASK_ID, request.taskId)
             .putString(TusWorker.KEY_FILE_PATH, request.filePath)
             .putString(TusWorker.KEY_ENDPOINT, request.endpoint)
+            .putString(TusWorker.KEY_HEADERS, headersJson)
+            .putLong(TusWorker.KEY_CHUNK_SIZE, request.chunkSize.toLong())
         metadataString?.let { dataBuilder.putString(TusWorker.KEY_METADATA, it) }
         val data = dataBuilder.build()
         val constraints = Constraints.Builder()
@@ -121,7 +125,7 @@ class TusUploadChannel(
             return
         }
         workManager.cancelUniqueWork(taskId)
-        UploadNotificationManager.cancel(context, taskId)
+        TusNotificationManager.cancel(context, taskId)
         emitLocalEvent(taskId, "canceled", 0, 0)
         TusUploadStore.remove(context, taskId)
         result.success(null)
@@ -137,9 +141,9 @@ class TusUploadChannel(
         }
         val request = TusUploadStore.get(context, taskId)
         if (request != null) {
-            UploadNotificationManager.showSuccess(context, request, message)
+            TusNotificationManager.showSuccess(context, request, message)
         } else {
-            UploadNotificationManager.cancel(context, taskId)
+            TusNotificationManager.cancel(context, taskId)
         }
         result.success(null)
     }

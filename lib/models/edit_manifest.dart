@@ -47,7 +47,7 @@ abstract class EditOp {
           x: (json['x'] as num?)?.toDouble() ?? 0,
           y: (json['y'] as num?)?.toDouble() ?? 0,
           scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
-          rotationDeg: (json['rotationDeg'] as num?)?.toDouble() ?? 0,
+          rotationDeg: (json['rotationDeg'] as num?)?.toInt() ?? 0,
           startMs: (json['startMs'] as num?)?.toInt(),
           endMs: (json['endMs'] as num?)?.toInt(),
           color: json['color'] as String?,
@@ -102,6 +102,27 @@ class EditManifest {
   }
 
   EditManifest copy() => copyWith(ops: ops.map((op) => op.copy()).toList());
+
+  OverlayTextOp? get firstTextOverlay {
+    for (final op in ops) {
+      if (op is OverlayTextOp) {
+        return op;
+      }
+    }
+    return null;
+  }
+
+  EditManifest replaceTextOverlay(OverlayTextOp op) {
+    final updated = <EditOp>[];
+    for (final existing in ops) {
+      if (existing is OverlayTextOp) {
+        continue;
+      }
+      updated.add(existing.copy());
+    }
+    updated.add(op.copy());
+    return copyWith(ops: updated);
+  }
 
   bool isTrimOnly() {
     if (ops.isEmpty) {
@@ -257,7 +278,7 @@ class OverlayTextOp extends EditOp {
   final double x;
   final double y;
   final double scale;
-  final double rotationDeg;
+  final int rotationDeg;
   final String? color;
   final String? fontFamily;
 
