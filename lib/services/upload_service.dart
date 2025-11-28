@@ -10,6 +10,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as p;
 import '../env.dart';
 import '../models/create_upload_response.dart';
+import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../models/upload_outcome.dart';
 import '../models/posts_page.dart';
@@ -437,6 +438,7 @@ class UploadService {
         cfUid: create.uid,
         description: trimmedDescription,
         visibility: visibility,
+        editManifest: draft.editManifest,
         feedRefreshCallback: feedRefreshCallback,
       );
 
@@ -635,8 +637,8 @@ class UploadService {
     session.isFinalizing = true;
     unawaited(() async {
       try {
+        final EditManifest? manifest = session.draft.editManifest;
         if (!session.metadataPosted) {
-          final manifest = session.draft.editManifest;
           if (manifest != null) {
             debugPrint(
               '[UploadService] edit_manifest=${jsonEncode(manifest.toJson())}',
@@ -669,6 +671,7 @@ class UploadService {
           cfUid: session.response.uid,
           description: trimmedDescription,
           visibility: visibility,
+          editManifest: manifest,
           feedRefreshCallback: session.feedRefreshCallback,
         );
         if (outcome.ok) {
@@ -706,6 +709,7 @@ class UploadService {
     required String cfUid,
     required String description,
     required String visibility,
+    required EditManifest? editManifest,
     required VoidCallback? feedRefreshCallback,
   }) {
     final completed = _finalizedOutcomes[cfUid];
@@ -734,6 +738,7 @@ class UploadService {
             cfUid: cfUid,
             description: effectiveDescription,
             visibility: visibility,
+            editManifest: editManifest,
           );
           final status = _apiClient.lastCreatePostStatusCode;
           debugPrint(
@@ -1193,6 +1198,13 @@ class UploadService {
       thumbUrl: source.thumbUrl,
       status: status,
       playbackUrl: source.playbackUrl,
+      description: source.description,
+      caption: source.caption,
+      likesCount: source.likesCount,
+      likedByMe: source.likedByMe,
+      editTimeline: source.editTimeline,
+      editTimelineMap: source.editTimelineMap,
+      editManifest: source.editManifest,
     );
   }
 

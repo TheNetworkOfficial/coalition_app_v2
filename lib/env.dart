@@ -1,3 +1,4 @@
+// cspell:ignore Unmetered UNMETERED
 import 'package:flutter/foundation.dart';
 
 const String kApiBaseUrl =

@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
+
+import 'edit_manifest.dart';
 
 @immutable
 class PostItem {
@@ -17,7 +21,10 @@ class PostItem {
     this.caption,
     this.likesCount,
     this.likedByMe,
-  });
+    this.editTimeline,
+    this.editTimelineMap,
+    EditManifest? editManifest,
+  }) : _editManifest = editManifest;
 
   factory PostItem.fromJson(Map<String, dynamic> json) {
     String _requireString(String key) {
@@ -116,6 +123,15 @@ class PostItem {
     final likesCount = (json['likesCount'] as num?)?.toInt() ??
         (json['likeCount'] as num?)?.toInt();
     final likedByMe = json['likedByMe'] as bool?;
+    final rawEditTimeline = json['editTimeline'] ??
+        json['edit_timeline'] ??
+        json['editManifest'] ??
+        json['edit_manifest'];
+    final editTimelineMap = EditManifest.parseTimelineMap(rawEditTimeline);
+    final editTimeline = EditManifest.stringifyTimeline(rawEditTimeline) ??
+        (editTimelineMap != null ? jsonEncode(editTimelineMap) : null);
+    final parsedEditManifest =
+        EditManifest.tryParseFromRawTimeline(rawEditTimeline);
 
     return PostItem(
       id: id,
@@ -130,6 +146,9 @@ class PostItem {
       caption: caption,
       likesCount: likesCount,
       likedByMe: likedByMe,
+      editTimeline: editTimeline,
+      editTimelineMap: editTimelineMap,
+      editManifest: parsedEditManifest,
     );
   }
 
@@ -145,8 +164,15 @@ class PostItem {
   final String? caption;
   final int? likesCount;
   final bool? likedByMe;
+  final String? editTimeline;
+  final Map<String, dynamic>? editTimelineMap;
+  final EditManifest? _editManifest;
 
   Duration get duration => Duration(milliseconds: durationMs);
+
+  EditManifest? get editManifest =>
+      _editManifest ??
+      EditManifest.tryParseFromRawTimeline(editTimelineMap ?? editTimeline);
 
   double get aspectRatio => height <= 0 ? 1 : width / height;
 

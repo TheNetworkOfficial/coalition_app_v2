@@ -19,6 +19,7 @@ import '../models/video_proxy.dart';
 import '../router/route_observers.dart';
 import '../services/video_proxy_service.dart';
 import '../services/native_editor_channel.dart';
+import '../utils/soft_input_mode.dart';
 import '../widgets/video_proxy_dialog.dart';
 import 'post_review_page.dart';
 
@@ -56,6 +57,8 @@ class EditMediaPage extends StatefulWidget {
   State<EditMediaPage> createState() => _EditMediaPageState();
 }
 
+enum _EditorTool { trim, text }
+
 class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
   static const _videoTrimHeight = 72.0;
   static const int _preparingBarrierMaxMs = 300;
@@ -84,6 +87,11 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
   bool _isNavigatingToReview = false;
   bool _routeAwareSubscribed = false;
   bool _releasingForNavigation = false;
+  OverlayTextOp? _editingOverlay;
+  int? _editingOverlayIndex;
+  _EditorTool _selectedTool = _EditorTool.trim;
+  int? _draggingOverlayIndex;
+  bool _draggingOverTrash = false;
 
   double? _imageWidth;
   double? _imageHeight;
@@ -92,10 +100,13 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
 
   String _selectedAspectId = _AspectRatioOption.original.id;
   int _rotationTurns = 0;
+  double? _fullEditorHeight;
 
   @override
   void initState() {
     super.initState();
+    // Prevent keyboard from resizing this screen; it will be restored on dispose.
+    SoftInputModeController.setAdjustNothing();
     if (widget.media.type == 'video') {
       final proxyResult = widget.media.proxyResult;
       final proxyJob = widget.media.proxyJob;
@@ -241,6 +252,8 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
 
   @override
   void dispose() {
+    // Restore default keyboard behavior for other screens.
+    SoftInputModeController.setAdjustResize();
     if (_routeAwareSubscribed) {
       appRouteObserver.unsubscribe(this);
       _routeAwareSubscribed = false;
@@ -557,44 +570,176 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
   bool get _useNativePreview =>
       kEnableNativeEditorPreview && supportsNativePreview && !kIsWeb;
 
-  bool _shouldShowFlutterOverlay(BuildContext context) {
-    final platform = Theme.of(context).platform;
-    if (!kEnableNativeEditorPreview) {
-      return true;
-    }
-    return platform == TargetPlatform.android;
-  }
+  bool get _shouldShowFlutterOverlay => true;
+  int get _videoDurationMs => _videoDuration?.inMilliseconds ?? 0;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Edit ${_isVideo ? 'Video' : 'Image'}'),
+      resizeToAvoidBottomInset: false,
+      backgroundColor: Colors.black,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final maxHeight = constraints.maxHeight;
+          final fullHeight = _fullEditorHeight ?? maxHeight;
+          if (_fullEditorHeight == null && maxHeight > 0) {
+            _fullEditorHeight = maxHeight;
+          }
+
+          return OverflowBox(
+            alignment: Alignment.topCenter,
+            minHeight: fullHeight,
+            maxHeight: fullHeight,
+            minWidth: constraints.maxWidth,
+            maxWidth: constraints.maxWidth,
+            child: SizedBox(
+              height: fullHeight,
+              width: constraints.maxWidth,
+              child: _buildEditBody(context),
+            ),
+          );
+        },
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: _isVideo ? _buildVideoEditor() : _buildImageEditor(),
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                0,
-                16,
-                MediaQuery.of(context).padding.bottom + 16,
-              ),
-              child: ElevatedButton(
-                onPressed: _canContinue ? () => _onContinuePressed() : null,
-                child: const Text('Continue'),
-              ),
-            ),
-          ],
+    );
+  }
+
+  Widget _buildEditBody(BuildContext context) {
+    if (_isVideo) {
+      return _buildEditStack(context);
+    }
+    return SafeArea(child: _buildImageLayout(context));
+  }
+
+  Widget _buildEditStack(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: _buildVideoCanvas(context),
         ),
-      ),
+        Positioned(
+          left: 8,
+          top: 0,
+          child: SafeArea(
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+        ),
+        Positioned(
+          right: 16,
+          top: 0,
+          bottom: 0,
+          child: SafeArea(
+            child: _EditorToolRail(
+              selectedTool: _selectedTool,
+              onSelectTrim: () {
+                setState(() {
+                  _selectedTool = _EditorTool.trim;
+                });
+              },
+              onSelectText: () {
+                setState(() {
+                  _selectedTool = _EditorTool.text;
+                });
+                _onTextOverlayPressed();
+              },
+            ),
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: SafeArea(
+            top: false,
+            child: _buildBottomControls(context),
+          ),
+        ),
+        if (_draggingOverlayIndex != null)
+          Positioned(
+            bottom: 32,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _draggingOverTrash
+                      ? Colors.redAccent.withValues(alpha: 0.9)
+                      : Colors.black54,
+                ),
+                child: const Icon(
+                  Icons.delete,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+            ),
+          ),
+        if (_editingOverlay != null && _editingOverlayIndex != null)
+          Positioned.fill(
+            child: OverlayTextEditorOverlay(
+              initialOverlay: _editingOverlay!,
+              videoDurationMs: _videoDurationMs,
+              onChanged: (updated) {
+                setState(() {
+                  _editingOverlay = updated;
+                });
+              },
+              onCancel: () {
+                setState(() {
+                  _editingOverlay = null;
+                  _editingOverlayIndex = null;
+                });
+              },
+              onDone: (updated) {
+                setState(() {
+                  if (_editingOverlayIndex != null &&
+                      _editingOverlayIndex! <
+                          _editManifest.overlayTextOps.length) {
+                    _editManifest = _editManifest.replaceOverlayTextAt(
+                      _editingOverlayIndex!,
+                      updated,
+                    );
+                  } else {
+                    _editManifest = _editManifest.addOverlayText(updated);
+                  }
+                  _editingOverlay = null;
+                  _editingOverlayIndex = null;
+                });
+                _updateNativeTimelineIfNeeded();
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildImageLayout(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _buildImageEditor(),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            0,
+            16,
+            MediaQuery.of(context).padding.bottom + 16,
+          ),
+          child: ElevatedButton(
+            onPressed: _canContinue ? () => _onContinuePressed() : null,
+            child: const Text('Continue'),
+          ),
+        ),
+      ],
     );
   }
 
@@ -610,7 +755,7 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     return true;
   }
 
-  Widget _buildVideoEditor() {
+  Widget _buildVideoCanvas(BuildContext context) {
     final controller = _videoController;
     if (_videoInitError != null) {
       return Center(
@@ -641,96 +786,74 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
       return 'Optimizing… $percent%';
     }();
 
-    final overlayOp = _editManifest.firstTextOverlay;
+    final overlays = _editManifest.overlayTextOps;
     final showFlutterOverlay =
-        overlayOp != null && _shouldShowFlutterOverlay(context);
-    final overlayForPreview =
-        showFlutterOverlay ? overlayOp : null;
+        _shouldShowFlutterOverlay &&
+            _editingOverlayIndex == null &&
+            _editingOverlay == null;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: Stack(
-            children: [
-              Center(
-                child: AspectRatio(
-                  aspectRatio: aspectRatio,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        _buildPreviewSurface(controller, aspectRatio),
-                        if (overlayForPreview != null)
-                          IgnorePointer(
-                            child: _OverlayTextPreview(
-                              overlay: overlayForPreview,
-                              videoListenable: controller.video,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              if (isProxyJobRunning)
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      optimizingLabel,
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelMedium
-                          ?.copyWith(color: Colors.white),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: OutlinedButton.icon(
-            icon: const Icon(Icons.title),
-            label: const Text('Text'),
-            onPressed: _onTextOverlayPressed,
-          ),
-        ),
-        const SizedBox(height: 16),
-        _buildTrimControls(controller),
-        if (kDebugMode)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                _manifestDebugSummary(),
-                style: Theme.of(context).textTheme.bodySmall,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+    return Center(
+      child: AspectRatio(
+        aspectRatio: aspectRatio,
+        child: Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _buildVideoPreview(controller),
+                  if (showFlutterOverlay)
+                    for (int i = 0; i < overlays.length; i++)
+                      _OverlayTextPreview(
+                        overlay: overlays[i],
+                        videoListenable: controller.video,
+                        onOverlayChanged: (updated) =>
+                            _onOverlayChangedAt(i, updated),
+                        onOverlayTap: (op) => _onOverlayTapped(i, op),
+                        onOverlayDragStart: () => _onOverlayDragStart(i),
+                        onOverlayDragUpdate: (pos) =>
+                            _onOverlayDragUpdate(i, pos),
+                        onOverlayDragEnd: () => _onOverlayDragEnd(i),
+                      ),
+                ],
               ),
             ),
-          ),
-      ],
+            if (isProxyJobRunning)
+              Positioned(
+                top: 12,
+                left: 12,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    optimizingLabel,
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelMedium
+                        ?.copyWith(color: Colors.white),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
+  }
+
+  Widget _buildVideoPreview(VideoEditorController controller) {
+    return _buildPreviewSurface(controller);
   }
 
   Widget _buildPreviewSurface(
     VideoEditorController controller,
-    double aspectRatio,
   ) {
     if (_useNativePreview) {
-      return _buildNativePreviewSurface(aspectRatio);
+      return _buildNativePreviewSurface();
     }
     return Container(
       color: Colors.black,
@@ -738,37 +861,179 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     );
   }
 
-  Future<void> _onTextOverlayPressed() async {
+  Widget _buildBottomControls(BuildContext context) {
+    if (!_isVideo) {
+      return const SizedBox.shrink();
+    }
+
+    final duration = _videoDuration;
+    final range = _videoTrimRangeMs;
+    final totalMs = duration?.inMilliseconds.toDouble() ?? 0;
+    final sliderDivisions =
+        duration != null && duration.inSeconds > 0 ? duration.inSeconds : null;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withValues(alpha: 0.0),
+            Colors.black.withValues(alpha: 0.4),
+          ],
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (range != null &&
+              duration != null &&
+              _selectedTool == _EditorTool.trim) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Trim: ${_formatMs(range.start.toInt())} - '
+                    '${_formatMs(range.end.toInt())}',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: Colors.white),
+              ),
+            ),
+            SizedBox(
+              height: _videoTrimHeight,
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  overlayShape: SliderComponentShape.noOverlay,
+                  trackHeight: 4,
+                  rangeThumbShape:
+                      const RoundRangeSliderThumbShape(enabledThumbRadius: 10),
+                ),
+                child: RangeSlider(
+                  min: 0,
+                  max: totalMs,
+                  divisions: sliderDivisions,
+                  values: RangeValues(
+                    range.start.clamp(0, totalMs),
+                    range.end.clamp(0, totalMs),
+                  ),
+                  labels: RangeLabels(
+                    _formatDuration(range.start),
+                    _formatDuration(range.end),
+                  ),
+                  onChangeStart: (_) => _onTrimChangeStart(),
+                  onChanged: (values) => _onTrimChanged(values, duration),
+                  onChangeEnd: (values) => _onTrimChangeEnd(values, duration),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _canContinue ? _onContinuePressed : null,
+              child: const Text('Continue'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onOverlayChangedAt(int index, OverlayTextOp updatedOp) {
+    setState(() {
+      _editManifest = _editManifest.replaceOverlayTextAt(index, updatedOp);
+    });
+    _updateNativeTimelineIfNeeded();
+  }
+
+  OverlayTextOp _createDefaultTextOverlay() {
+    final controller = _videoController;
+    final startMs = controller?.startTrim.inMilliseconds ?? 0;
+    final endMs = controller?.endTrim.inMilliseconds ?? _videoDurationMs;
+    return OverlayTextOp(
+      text: 'Your text',
+      x: 0.5,
+      y: 0.5,
+      scale: 1.0,
+      rotationDeg: 0.0,
+      startMs: startMs,
+      endMs: endMs,
+      color: '#FFFFFF',
+      fontFamily: null,
+      backgroundColorHex: null,
+    );
+  }
+
+  void _onTextOverlayPressed() {
     if (!_isVideo) {
       return;
     }
-    final duration = _videoDuration;
-    if (duration == null) {
+    final controller = _videoController;
+    if (_videoDuration == null || controller == null) {
       return;
     }
-    final result = await showOverlayTextEditor(
-      context: context,
-      total: duration,
-      initial: _editManifest.firstTextOverlay,
-    );
-    if (!mounted || result == null) {
-      return;
-    }
-    final nextManifest = _editManifest.replaceTextOverlay(result);
-    if (kEnableNativeEditorPreview) {
-      unawaited(
-        _nativeEditorChannel.updateTimeline(
-          manifest: nextManifest,
-          surfaceId: _nativePreviewViewId,
-        ),
-      );
-    }
+    final newOverlay = _createDefaultTextOverlay();
     setState(() {
-      _editManifest = nextManifest;
+      _editingOverlayIndex = _editManifest.overlayTextOps.length;
+      _editingOverlay = newOverlay;
     });
   }
 
-  Widget _buildNativePreviewSurface(double aspectRatio) {
+  void _onOverlayTapped(int index, OverlayTextOp overlay) {
+    setState(() {
+      _editingOverlayIndex = index;
+      _editingOverlay = overlay;
+    });
+  }
+
+  void _onOverlayDragStart(int index) {
+    setState(() {
+      _draggingOverlayIndex = index;
+      _draggingOverTrash = false;
+    });
+  }
+
+  void _onOverlayDragUpdate(int index, Offset normalizedPos) {
+    const double trashZoneTop = 0.9;
+    const double trashZoneHalfWidth = 0.08;
+
+    final double x = normalizedPos.dx;
+    final double y = normalizedPos.dy;
+
+    final bool inVerticalZone = y >= trashZoneTop;
+    final bool inHorizontalZone =
+        x >= 0.5 - trashZoneHalfWidth && x <= 0.5 + trashZoneHalfWidth;
+
+    final bool overTrash = inVerticalZone && inHorizontalZone;
+
+    if (_draggingOverlayIndex == index) {
+      setState(() {
+        _draggingOverTrash = overTrash;
+      });
+    }
+  }
+
+  void _onOverlayDragEnd(int index) {
+    if (_draggingOverlayIndex == index && _draggingOverTrash) {
+      setState(() {
+        _editManifest = _editManifest.removeOverlayTextAt(index);
+        _draggingOverlayIndex = null;
+        _draggingOverTrash = false;
+      });
+      _updateNativeTimelineIfNeeded();
+    } else {
+      setState(() {
+        _draggingOverlayIndex = null;
+        _draggingOverTrash = false;
+      });
+    }
+  }
+
+  Widget _buildNativePreviewSurface() {
     if (Platform.isAndroid) {
       return PlatformViewLink(
         viewType: 'EditorPreviewView',
@@ -811,58 +1076,6 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
         });
         _maybePrepareNativePreview();
       },
-    );
-  }
-
-  Widget _buildTrimControls(VideoEditorController controller) {
-    final duration = _videoDuration;
-    final range = _videoTrimRangeMs;
-    if (duration == null || range == null) {
-      return const SizedBox(
-        height: _videoTrimHeight,
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    final totalMs = duration.inMilliseconds.toDouble();
-    final trimRange = RangeValues(
-      range.start.clamp(0, totalMs),
-      range.end.clamp(0, totalMs),
-    );
-    final sliderDivisions = duration.inSeconds > 0 ? duration.inSeconds : null;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Trim: ${_formatDuration(trimRange.start)} - ${_formatDuration(trimRange.end)}',
-        ),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: _videoTrimHeight,
-          child: SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              overlayShape: SliderComponentShape.noOverlay,
-              trackHeight: 4,
-              rangeThumbShape:
-                  const RoundRangeSliderThumbShape(enabledThumbRadius: 10),
-            ),
-            child: RangeSlider(
-              min: 0,
-              max: totalMs,
-              divisions: sliderDivisions,
-              values: trimRange,
-              labels: RangeLabels(
-                _formatDuration(trimRange.start),
-                _formatDuration(trimRange.end),
-              ),
-              onChangeStart: (_) => _onTrimChangeStart(),
-              onChanged: (values) => _onTrimChanged(values, duration),
-              onChangeEnd: (values) => _onTrimChangeEnd(values, duration),
-            ),
-          ),
-        ),
-      ],
     );
   }
 
@@ -1401,6 +1614,17 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
     _setTrimOp(clampedStart.round(), clampedEnd.round());
   }
 
+  String _formatMs(int milliseconds) {
+    final duration = Duration(milliseconds: milliseconds);
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final hours = duration.inHours;
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:$minutes:$seconds';
+    }
+    return '$minutes:$seconds';
+  }
+
   String _formatDuration(double milliseconds) {
     final duration = Duration(milliseconds: milliseconds.round());
     final hours = duration.inHours;
@@ -1483,6 +1707,10 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
 
   EditManifest get currentManifest => _editManifest.copy();
 
+  void _updateNativeTimelineIfNeeded() {
+    _syncNativeTimeline();
+  }
+
   void _syncNativeTimeline() {
     if (!_useNativePreview || _nativePreviewViewId == null) {
       return;
@@ -1493,22 +1721,6 @@ class _EditMediaPageState extends State<EditMediaPage> with RouteAware {
         surfaceId: _nativePreviewViewId,
       ),
     );
-  }
-
-  String _manifestDebugSummary() {
-    TrimOp? trim;
-    for (final op in _editManifest.ops) {
-      if (op is TrimOp) {
-        trim = op;
-        break;
-      }
-    }
-    final trimJson = trim == null
-        ? 'null'
-        : '{"start":${trim.startMs ?? 0},"end":${trim.endMs ?? 0}}';
-    final poster = _editManifest.posterFrameMs;
-    final posterValue = poster?.toString() ?? 'null';
-    return '{"trim":$trimJson,"poster":$posterValue}';
   }
 }
 
@@ -1553,6 +1765,75 @@ class _PreparingOverlay extends StatelessWidget {
   }
 }
 
+class _EditorToolRail extends StatelessWidget {
+  final _EditorTool selectedTool;
+  final VoidCallback onSelectTrim;
+  final VoidCallback onSelectText;
+
+  const _EditorToolRail({
+    required this.selectedTool,
+    required this.onSelectTrim,
+    required this.onSelectText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color selectedColor = Theme.of(context).colorScheme.primary;
+    final Color unselectedColor =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.8);
+
+    Widget buildTool({
+      required IconData icon,
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
+      final color = selected ? selectedColor : unselectedColor;
+      return GestureDetector(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor:
+                  selected ? Colors.white.withValues(alpha: 0.12) : Colors.black26,
+              child: Icon(icon, color: color),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: color),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        buildTool(
+          icon: Icons.content_cut,
+          label: 'Trim',
+          selected: selectedTool == _EditorTool.trim,
+          onTap: onSelectTrim,
+        ),
+        const SizedBox(height: 16),
+        buildTool(
+          icon: Icons.title,
+          label: 'Text',
+          selected: selectedTool == _EditorTool.text,
+          onTap: onSelectText,
+        ),
+      ],
+    );
+  }
+}
+
 class _AspectRatioOption {
   const _AspectRatioOption(this.id, this.label, this.ratio);
 
@@ -1570,70 +1851,67 @@ const List<_AspectRatioOption> _aspectRatioOptions = [
   _AspectRatioOption('sixteenNine', '16:9', 16 / 9),
 ];
 
-class _OverlayTextPreview extends StatelessWidget {
+class _OverlayTextPreview extends StatefulWidget {
   const _OverlayTextPreview({
     required this.overlay,
     required this.videoListenable,
+    this.onOverlayChanged,
+    this.onOverlayTap,
+    this.onOverlayDragStart,
+    this.onOverlayDragUpdate,
+    this.onOverlayDragEnd,
   });
 
   final OverlayTextOp overlay;
   final ValueListenable<VideoPlayerValue> videoListenable;
+  final ValueChanged<OverlayTextOp>? onOverlayChanged;
+  final ValueChanged<OverlayTextOp>? onOverlayTap;
+  final VoidCallback? onOverlayDragStart;
+  final ValueChanged<Offset>? onOverlayDragUpdate;
+  final VoidCallback? onOverlayDragEnd;
+
+  @override
+  State<_OverlayTextPreview> createState() => _OverlayTextPreviewState();
+}
+
+class _OverlayTextPreviewState extends State<_OverlayTextPreview> {
+  OverlayTextOp? _currentOverlay;
+  double _startScale = 1.0;
+  double _startRotationDeg = 0.0;
+  Offset? _lastGlobalFocalPoint;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentOverlay = widget.overlay;
+  }
+
+  @override
+  void didUpdateWidget(covariant _OverlayTextPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _currentOverlay = widget.overlay;
+  }
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<VideoPlayerValue>(
-      valueListenable: videoListenable,
+      valueListenable: widget.videoListenable,
       builder: (context, value, _) {
         if (!_isVisibleAt(value.position.inMilliseconds)) {
           return const SizedBox.shrink();
         }
         return LayoutBuilder(
           builder: (context, constraints) {
-            final width = constraints.maxWidth;
-            final height = constraints.maxHeight;
-            if (width <= 0 || height <= 0) {
+            final size = constraints.biggest;
+            if (size.isEmpty) {
               return const SizedBox.shrink();
             }
-            final normalizedX = overlay.x.clamp(0.0, 1.0);
-            final normalizedY = overlay.y.clamp(0.0, 1.0);
-            final left = normalizedX * width;
-            final top = normalizedY * height;
-            final color = _overlayColorFromHex(overlay.color) ?? Colors.white;
-            final baseStyle = Theme.of(context).textTheme.headlineMedium;
-            final textStyle = baseStyle?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.w600,
-                ) ??
-                TextStyle(
-                  color: color,
-                  fontSize: 32,
-                  fontWeight: FontWeight.w600,
-                );
-            final clampedScale = overlay.scale.clamp(0.5, 3.0);
-            final radians = overlay.rotationDeg * math.pi / 180;
-            final textWidget = Transform.rotate(
-              angle: radians,
-              child: Transform.scale(
-                scale: clampedScale,
-                child: Text(
-                  overlay.text,
-                  textAlign: TextAlign.center,
-                  style: textStyle,
-                ),
-              ),
-            );
-            return Stack(
-              children: [
-                Positioned(
-                  left: left,
-                  top: top,
-                  child: FractionalTranslation(
-                    translation: const Offset(-0.5, -0.5),
-                    child: textWidget,
-                  ),
-                ),
-              ],
-            );
+            final overlay = widget.overlay;
+            final overlayWidget = _buildOverlayWidget(overlay, size);
+            if (widget.onOverlayChanged == null) {
+              return IgnorePointer(child: overlayWidget);
+            }
+            return overlayWidget;
           },
         );
       },
@@ -1641,16 +1919,155 @@ class _OverlayTextPreview extends StatelessWidget {
   }
 
   bool _isVisibleAt(int positionMs) {
-    final start = overlay.startMs ?? 0;
-    final end = overlay.endMs;
+    final start = widget.overlay.startMs ?? 0;
+    final end = widget.overlay.endMs;
     if (end != null && end >= start) {
       return positionMs >= start && positionMs <= end;
     }
     return positionMs >= start;
   }
+
+  Widget _buildOverlayWidget(OverlayTextOp overlay, Size size) {
+    final normalizedX = overlay.x.clamp(0.0, 1.0);
+    final normalizedY = overlay.y.clamp(0.0, 1.0);
+
+    final clampedScale = _normalizedScale(overlay.scale);
+    final radians = overlay.rotationDeg * math.pi / 180;
+
+    final Widget textChild = _buildStyledText(overlay);
+
+    final Widget gestureWrapped = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        widget.onOverlayTap?.call(overlay);
+      },
+      onScaleStart: (details) => _handleScaleStart(details, overlay, size),
+      onScaleUpdate: (details) => _handleScaleUpdate(details, overlay, size),
+      onScaleEnd: _handleScaleEnd,
+      child: textChild,
+    );
+
+    final Widget transformed = Transform.rotate(
+      angle: radians,
+      child: Transform.scale(
+        scale: clampedScale,
+        child: gestureWrapped,
+      ),
+    );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Align(
+          alignment: Alignment(normalizedX * 2 - 1, normalizedY * 2 - 1),
+          child: transformed,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStyledText(OverlayTextOp overlay) {
+    final textColor = _parseColorHex(overlay.color) ?? Colors.white;
+    final backgroundColor = overlay.backgroundColorHex != null
+        ? _parseColorHex(overlay.backgroundColorHex!)
+        : null;
+
+    final textChild = Text(
+      overlay.text,
+      textAlign: TextAlign.center,
+      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            color: textColor,
+            fontFamily: overlay.fontFamily,
+          ),
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: backgroundColor != null
+          ? BoxDecoration(
+              color: backgroundColor.withValues(alpha: 0.85),
+              borderRadius: BorderRadius.circular(8),
+            )
+          : null,
+      child: textChild,
+    );
+  }
+
+  void _handleScaleStart(
+    ScaleStartDetails details,
+    OverlayTextOp overlay,
+    Size size,
+  ) {
+    final current = _currentOverlay ?? overlay;
+
+    _startScale = current.scale;
+    _startRotationDeg = current.rotationDeg.toDouble();
+
+    // Remember global finger position to compute deltas in screen space
+    _lastGlobalFocalPoint = details.focalPoint;
+
+    widget.onOverlayDragStart?.call();
+  }
+
+  void _handleScaleUpdate(
+    ScaleUpdateDetails details,
+    OverlayTextOp overlay,
+    Size size,
+  ) {
+    final current = _currentOverlay ?? overlay;
+
+    // --- Screen-space translation (always up/down/left/right in screen coordinates) ---
+    final Offset currentGlobalFocal = details.focalPoint;
+    final Offset lastGlobalFocal = _lastGlobalFocalPoint ?? currentGlobalFocal;
+    final Offset globalDelta = currentGlobalFocal - lastGlobalFocal;
+    _lastGlobalFocalPoint = currentGlobalFocal;
+
+    final double dx = globalDelta.dx / size.width;
+    final double dy = globalDelta.dy / size.height;
+
+    double newX = (current.x + dx).clamp(0.0, 1.0);
+    double newY = (current.y + dy).clamp(0.0, 1.0);
+
+    // --- Scale and rotation (relative to gesture start, with 2+ fingers) ---
+    double newScale = current.scale;
+    double newRotationDeg = current.rotationDeg.toDouble();
+
+    if (details.pointerCount >= 2) {
+      newScale = _normalizedScale(_startScale * details.scale);
+      newRotationDeg =
+          _startRotationDeg + details.rotation * 180 / math.pi;
+    }
+
+    final updated = current.copyWith(
+      x: newX,
+      y: newY,
+      scale: newScale,
+      rotationDeg: newRotationDeg,
+    );
+
+    // Keep local state in sync for ultra responsive gestures
+    _currentOverlay = updated;
+
+    // Notify parent (manifest + native timeline)
+    widget.onOverlayChanged?.call(updated);
+    widget.onOverlayDragUpdate?.call(Offset(newX, newY));
+  }
+
+  void _handleScaleEnd(ScaleEndDetails details) {
+    _lastGlobalFocalPoint = null;
+
+    widget.onOverlayDragEnd?.call();
+  }
+
+  double _normalizedScale(double raw) {
+    if (!raw.isFinite || raw <= 0) {
+      return 1.0;
+    }
+    return raw.clamp(0.5, 3.0).toDouble();
+  }
 }
 
-Color? _overlayColorFromHex(String? hex) {
+Color? _parseColorHex(String? hex) {
   if (hex == null || hex.length != 7 || !hex.startsWith('#')) {
     return null;
   }

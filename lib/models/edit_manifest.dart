@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 
 abstract class EditOp {
   const EditOp({required this.type, this.startMs, this.endMs});
@@ -42,17 +43,7 @@ abstract class EditOp {
       case AudioGainOp.typeKey:
         return AudioGainOp(gain: (json['gain'] as num?)?.toDouble() ?? 1.0);
       case OverlayTextOp.typeKey:
-        return OverlayTextOp(
-          text: json['text']?.toString() ?? '',
-          x: (json['x'] as num?)?.toDouble() ?? 0,
-          y: (json['y'] as num?)?.toDouble() ?? 0,
-          scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
-          rotationDeg: (json['rotationDeg'] as num?)?.toInt() ?? 0,
-          startMs: (json['startMs'] as num?)?.toInt(),
-          endMs: (json['endMs'] as num?)?.toInt(),
-          color: json['color'] as String?,
-          fontFamily: json['fontFamily'] as String?,
-        );
+        return OverlayTextOp.fromJson(json);
       default:
         throw ArgumentError('Unsupported edit op: $type');
     }
@@ -66,26 +57,129 @@ class EditManifest {
   final List<EditOp> ops;
   final int? posterFrameMs;
 
+  /// Attempts to parse a raw editTimeline (string, map, or double-encoded string)
+  /// into an [EditManifest]. Returns null if the payload is missing or invalid.
+  static EditManifest? tryParseFromRawTimeline(dynamic raw) {
+    final decoded = _decodeTimeline(raw);
+    if (decoded == null) return null;
+    try {
+      return EditManifest.fromJson(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Parses the raw editTimeline into a Map, handling both map inputs and
+  /// single/double-encoded JSON strings. Returns null if it cannot be parsed.
+  static Map<String, dynamic>? parseTimelineMap(dynamic value) {
+    return _decodeTimeline(value);
+  }
+
+  static Map<String, dynamic>? _decodeTimeline(dynamic raw) {
+    if (raw == null) return null;
+
+    dynamic decoded = raw;
+
+    try {
+      if (decoded is String) {
+        decoded = jsonDecode(decoded);
+        if (decoded is String) {
+          decoded = jsonDecode(decoded);
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    if (decoded is Map<String, dynamic>) {
+      return decoded;
+    }
+    if (decoded is Map) {
+      return decoded.map((key, v) => MapEntry(key.toString(), v));
+    }
+    return null;
+  }
+
+  /// Converts the raw editTimeline to a JSON string if possible. Accepts maps
+  /// or already-encoded strings; returns null if it cannot produce a string.
+  static String? stringifyTimeline(dynamic value) {
+    if (value is String) {
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? null : trimmed;
+    }
+    if (value is Map<String, dynamic>) {
+      return jsonEncode(value);
+    }
+    if (value is Map) {
+      return jsonEncode(value.map((key, v) => MapEntry(key.toString(), v)));
+    }
+    return null;
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'version': version,
       'ops': ops.map((op) => op.toJson()).toList(),
+      'overlayTextOps': overlayTextOps.map((op) => op.toJson()).toList(),
       if (posterFrameMs != null) 'posterFrameMs': posterFrameMs,
     };
   }
 
   factory EditManifest.fromJson(Map<String, dynamic> json) {
-    final opsJson = json['ops'];
     final ops = <EditOp>[];
-    if (opsJson is List) {
-      for (final entry in opsJson) {
+
+    bool _looksLikeOverlay(Map<String, dynamic> map) {
+      final type = map['type']?.toString();
+      if (type == OverlayTextOp.typeKey) {
+        return true;
+      }
+      if (type == null) {
+        return map.containsKey('text') &&
+            (map.containsKey('x') || map.containsKey('y') || map.containsKey('scale'));
+      }
+      return false;
+    }
+
+    final overlayOpsJson = json['overlayTextOps'];
+    if (overlayOpsJson is List) {
+      for (final entry in overlayOpsJson) {
         if (entry is Map<String, dynamic>) {
-          ops.add(EditOp.fromJson(entry));
+          ops.add(OverlayTextOp.fromJson(entry));
         } else if (entry is Map) {
-          ops.add(EditOp.fromJson(entry.map((key, value) => MapEntry(key.toString(), value))));
+          ops.add(OverlayTextOp.fromJson(
+              entry.map((key, value) => MapEntry(key.toString(), value))));
         }
       }
     }
+
+    final parsedOverlayCount = ops.whereType<OverlayTextOp>().length;
+
+    final opsJson = json['ops'];
+    if (opsJson is List) {
+      for (final entry in opsJson) {
+        if (entry is Map<String, dynamic>) {
+          if (_looksLikeOverlay(entry)) {
+            if (parsedOverlayCount > 0) continue;
+            ops.add(OverlayTextOp.fromJson(entry));
+            continue;
+          }
+          try {
+            ops.add(EditOp.fromJson(entry));
+          } catch (_) {}
+        } else if (entry is Map) {
+          final mapped = entry.map((key, value) => MapEntry(key.toString(), value));
+          if (_looksLikeOverlay(mapped)) {
+            if (parsedOverlayCount > 0) continue;
+            ops.add(OverlayTextOp.fromJson(mapped));
+            continue;
+          }
+          try {
+            ops.add(EditOp.fromJson(mapped));
+          } catch (_) {}
+        }
+      }
+    }
+
     return EditManifest(
       version: (json['version'] as num?)?.toInt() ?? 1,
       ops: ops,
@@ -104,13 +198,12 @@ class EditManifest {
   EditManifest copy() => copyWith(ops: ops.map((op) => op.copy()).toList());
 
   OverlayTextOp? get firstTextOverlay {
-    for (final op in ops) {
-      if (op is OverlayTextOp) {
-        return op;
-      }
-    }
-    return null;
+    final overlays = overlayTextOps;
+    return overlays.isNotEmpty ? overlays.first : null;
   }
+
+  List<OverlayTextOp> get overlayTextOps =>
+      ops.whereType<OverlayTextOp>().toList();
 
   EditManifest replaceTextOverlay(OverlayTextOp op) {
     final updated = <EditOp>[];
@@ -122,6 +215,46 @@ class EditManifest {
     }
     updated.add(op.copy());
     return copyWith(ops: updated);
+  }
+
+  EditManifest replaceOverlayTextAt(int overlayIndex, OverlayTextOp updated) {
+    int seen = 0;
+    final List<EditOp> newOps = <EditOp>[];
+    for (final op in ops) {
+      if (op is OverlayTextOp) {
+        if (seen == overlayIndex) {
+          newOps.add(updated.copy());
+        } else {
+          newOps.add(op.copy());
+        }
+        seen++;
+      } else {
+        newOps.add(op.copy());
+      }
+    }
+    return copyWith(ops: newOps);
+  }
+
+  EditManifest addOverlayText(OverlayTextOp newOverlay) {
+    final List<EditOp> newOps = ops.map((op) => op.copy()).toList()
+      ..add(newOverlay.copy());
+    return copyWith(ops: newOps);
+  }
+
+  EditManifest removeOverlayTextAt(int overlayIndex) {
+    int seen = 0;
+    final List<EditOp> newOps = <EditOp>[];
+    for (final op in ops) {
+      if (op is OverlayTextOp) {
+        if (seen != overlayIndex) {
+          newOps.add(op.copy());
+        }
+        seen++;
+      } else {
+        newOps.add(op.copy());
+      }
+    }
+    return copyWith(ops: newOps);
   }
 
   bool isTrimOnly() {
@@ -272,15 +405,101 @@ class OverlayTextOp extends EditOp {
     int? endMs,
     this.color,
     this.fontFamily,
+    this.backgroundColorHex,
   }) : super(type: typeKey, startMs: startMs, endMs: endMs);
 
   final String text;
   final double x;
   final double y;
+  // Scales text size; this must round-trip through editTimeline JSON.
   final double scale;
-  final int rotationDeg;
+  final double rotationDeg;
   final String? color;
   final String? fontFamily;
+  final String? backgroundColorHex;
+
+  factory OverlayTextOp.fromJson(Map<String, dynamic> json) {
+    final bg = json['backgroundColorHex'] ?? json['backgroundColor'];
+    double _readDouble(dynamic value, double fallback) {
+      if (value is num) {
+        return value.toDouble();
+      }
+      if (value is String) {
+        final parsed = double.tryParse(value);
+        if (parsed != null) {
+          return parsed;
+        }
+      }
+      return fallback;
+    }
+
+    int _readInt(dynamic value, int fallback) {
+      if (value is num) {
+        return value.toInt();
+      }
+      if (value is String) {
+        final parsed = int.tryParse(value);
+        if (parsed != null) {
+          return parsed;
+        }
+        final parsedDouble = double.tryParse(value);
+        if (parsedDouble != null) {
+          return parsedDouble.round();
+        }
+      }
+      return fallback;
+    }
+
+    double _readScale(Map<String, dynamic> source) {
+      if (!source.containsKey('scale')) {
+        return 1.0;
+      }
+      final parsed = _readDouble(source['scale'], 1.0);
+      if (!parsed.isFinite || parsed <= 0) {
+        return 1.0;
+      }
+      return parsed.clamp(0.5, 3.0).toDouble();
+    }
+
+    return OverlayTextOp(
+      text: json['text'] as String? ?? '',
+      x: _readDouble(json['x'], 0.5),
+      y: _readDouble(json['y'], 0.5),
+      scale: _readScale(json),
+      rotationDeg: _readDouble(json['rotationDeg'], 0.0),
+      startMs: _readInt(json['startMs'], 0),
+      endMs: _readInt(json['endMs'], 0),
+      color: json['color'] as String?,
+      fontFamily: json['fontFamily'] as String?,
+      backgroundColorHex: bg is String ? bg : null,
+    );
+  }
+
+  OverlayTextOp copyWith({
+    String? text,
+    double? x,
+    double? y,
+    double? scale,
+    double? rotationDeg,
+    int? startMs,
+    int? endMs,
+    String? color,
+    String? fontFamily,
+    String? backgroundColorHex,
+  }) {
+    return OverlayTextOp(
+      text: text ?? this.text,
+      x: x ?? this.x,
+      y: y ?? this.y,
+      scale: scale ?? this.scale,
+      rotationDeg: rotationDeg ?? this.rotationDeg,
+      startMs: startMs ?? this.startMs,
+      endMs: endMs ?? this.endMs,
+      color: color ?? this.color,
+      fontFamily: fontFamily ?? this.fontFamily,
+      backgroundColorHex: backgroundColorHex ?? this.backgroundColorHex,
+    );
+  }
 
   @override
   Map<String, dynamic> toJson() => {
@@ -288,12 +507,15 @@ class OverlayTextOp extends EditOp {
         'text': text,
         'x': x,
         'y': y,
-        'scale': scale,
+        'scale': (!scale.isFinite || scale <= 0)
+            ? 1.0
+            : scale.clamp(0.5, 3.0).toDouble(),
         'rotationDeg': rotationDeg,
-        if (startMs != null) 'startMs': startMs,
-        if (endMs != null) 'endMs': endMs,
-        if (color != null) 'color': color,
-        if (fontFamily != null) 'fontFamily': fontFamily,
+        'startMs': startMs,
+        'endMs': endMs,
+        'color': color,
+        'fontFamily': fontFamily,
+        'backgroundColorHex': backgroundColorHex,
       };
 
   @override
@@ -307,5 +529,6 @@ class OverlayTextOp extends EditOp {
         endMs: endMs,
         color: color,
         fontFamily: fontFamily,
+        backgroundColorHex: backgroundColorHex,
       );
 }

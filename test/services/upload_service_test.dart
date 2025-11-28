@@ -314,6 +314,7 @@ class _StubbedApiClient extends ApiClient {
     required String cfUid,
     String? description,
     String visibility = 'public',
+    EditManifest? editManifest,
   }) async {
     createPostCalls += 1;
     onCreatePost?.call();
@@ -322,6 +323,7 @@ class _StubbedApiClient extends ApiClient {
       cfUid: cfUid,
       description: description,
       visibility: visibility,
+      editManifest: editManifest,
     );
 
     Object? behavior;
@@ -390,12 +392,14 @@ class _CreatePostArgs {
     required this.cfUid,
     this.description,
     this.visibility = 'public',
+    this.editManifest,
   });
 
   final String type;
   final String cfUid;
   final String? description;
   final String visibility;
+  final EditManifest? editManifest;
 
   @override
   bool operator ==(Object other) {
@@ -403,9 +407,11 @@ class _CreatePostArgs {
         other.type == type &&
         other.cfUid == cfUid &&
         other.description == description &&
-        other.visibility == visibility;
+        other.visibility == visibility &&
+        other.editManifest == editManifest;
   }
 
   @override
-  int get hashCode => Object.hash(type, cfUid, description, visibility);
+  int get hashCode =>
+      Object.hash(type, cfUid, description, visibility, editManifest);
 }

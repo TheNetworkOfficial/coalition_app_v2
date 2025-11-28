@@ -505,16 +505,29 @@ class ApiClient {
     required String cfUid,
     String? description,
     String visibility = 'public',
+    EditManifest? editManifest,
   }) async {
     final uri = _resolve('/api/posts');
     final trimmedDescription = description?.trim();
+    String? editTimeline;
+    if (editManifest != null) {
+      final manifestJson = editManifest.toJson();
+      editTimeline = jsonEncode(manifestJson);
+    }
     final payload = <String, dynamic>{
       'type': type,
       'cfUid': cfUid,
       'visibility': visibility,
       if (trimmedDescription != null && trimmedDescription.isNotEmpty)
         'description': trimmedDescription,
+      if (editTimeline != null) 'editTimeline': editTimeline,
     };
+    if (kDebugMode) {
+      debugPrint(
+        '[ApiClient][TEMP] createPost: hasEditManifest=${editManifest != null} '
+        'editTimelineLength=${editTimeline?.length}',
+      );
+    }
 
     debugPrint('[ApiClient] POST $uri');
     debugPrint('[ApiClient] createPost payload: $payload');

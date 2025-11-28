@@ -13,6 +13,7 @@ import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../providers/upload_manager.dart';
 import '../services/video_proxy_service.dart';
+import '../widgets/read_only_overlay_text_layer.dart';
 
 class PostReviewTelemetry {
   const PostReviewTelemetry._();
@@ -562,6 +563,15 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
                     color: Colors.black,
                     child: VideoPlayer(controller),
                   ),
+                  if (_editManifest != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: ReadOnlyOverlayTextLayer(
+                          videoController: controller,
+                          editManifest: _editManifest!,
+                        ),
+                      ),
+                    ),
                   Positioned(
                     left: 12,
                     bottom: 12,

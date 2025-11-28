@@ -319,6 +319,9 @@ class _CandidateViewerPageState extends ConsumerState<CandidateViewerPage> {
       duration: item.duration,
       likeCount: item.likesCount,
       isLiked: item.likedByMe,
+      editTimeline: item.editTimeline,
+      editTimelineMap: item.editTimelineMap,
+      editManifest: item.editManifest,
     );
   }
 }

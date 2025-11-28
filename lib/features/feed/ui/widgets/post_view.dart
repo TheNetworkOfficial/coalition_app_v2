@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../../../widgets/read_only_overlay_text_layer.dart';
 import '../../models/post.dart';
 import '../../../engagement/models/post_engagement.dart';
 import '../../../engagement/providers/engagement_providers.dart';
@@ -341,6 +342,7 @@ class PostViewState extends ConsumerState<PostView>
 
   Widget _buildVideo() {
     final controller = _videoController;
+    final overlayManifest = widget.post.editManifest;
     if (controller != null && controller.value.isInitialized) {
       final size = controller.value.size;
       return GestureDetector(
@@ -353,7 +355,19 @@ class PostViewState extends ConsumerState<PostView>
           child: SizedBox(
             width: size.width,
             height: size.height,
-            child: VideoPlayer(controller),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                VideoPlayer(controller),
+                if (overlayManifest != null)
+                  IgnorePointer(
+                    child: ReadOnlyOverlayTextLayer(
+                      videoController: controller,
+                      editManifest: overlayManifest,
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       );
