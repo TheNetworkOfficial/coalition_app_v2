@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
+
+import 'edit_manifest.dart';
 
 @immutable
 class PostItem {
@@ -17,7 +21,10 @@ class PostItem {
     this.caption,
     this.likesCount,
     this.likedByMe,
-  });
+    this.editTimeline,
+    this.editTimelineMap,
+    EditManifest? editManifest,
+  }) : _editManifest = editManifest;
 
   factory PostItem.fromJson(Map<String, dynamic> json) {
     String _requireString(String key) {
@@ -72,10 +79,10 @@ class PostItem {
       if (value is String) {
         final trimmed = value.trim();
         if (trimmed.isNotEmpty) {
-          return trimmed;
+          return trimmed.toUpperCase();
         }
       }
-      return 'UNKNOWN';
+      return 'PROCESSING';
     }
 
     String? _sanitizeThumb(dynamic value) {
@@ -116,6 +123,15 @@ class PostItem {
     final likesCount = (json['likesCount'] as num?)?.toInt() ??
         (json['likeCount'] as num?)?.toInt();
     final likedByMe = json['likedByMe'] as bool?;
+    final rawEditTimeline = json['editTimeline'] ??
+        json['edit_timeline'] ??
+        json['editManifest'] ??
+        json['edit_manifest'];
+    final editTimelineMap = EditManifest.parseTimelineMap(rawEditTimeline);
+    final editTimeline = EditManifest.stringifyTimeline(rawEditTimeline) ??
+        (editTimelineMap != null ? jsonEncode(editTimelineMap) : null);
+    final parsedEditManifest =
+        EditManifest.tryParseFromRawTimeline(rawEditTimeline);
 
     return PostItem(
       id: id,
@@ -130,6 +146,9 @@ class PostItem {
       caption: caption,
       likesCount: likesCount,
       likedByMe: likedByMe,
+      editTimeline: editTimeline,
+      editTimelineMap: editTimelineMap,
+      editManifest: parsedEditManifest,
     );
   }
 
@@ -145,13 +164,61 @@ class PostItem {
   final String? caption;
   final int? likesCount;
   final bool? likedByMe;
+  final String? editTimeline;
+  final Map<String, dynamic>? editTimelineMap;
+  final EditManifest? _editManifest;
 
   Duration get duration => Duration(milliseconds: durationMs);
 
+  EditManifest? get editManifest =>
+      _editManifest ??
+      EditManifest.tryParseFromRawTimeline(editTimelineMap ?? editTimeline);
+
   double get aspectRatio => height <= 0 ? 1 : width / height;
 
-  bool get isReady => status.toUpperCase() == 'READY';
-  bool get isPending => status.toUpperCase() == 'PENDING';
+  String get _normalizedStatus {
+    final trimmed = status.trim();
+    if (trimmed.isEmpty) {
+      return 'PROCESSING';
+    }
+    return trimmed.toUpperCase();
+  }
+
+  bool get _hasPlayableMedia {
+    final playback = playbackUrl?.trim();
+    if (playback == null || playback.isEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  bool get isReady {
+    final normalized = _normalizedStatus;
+    switch (normalized) {
+      case 'READY':
+      case 'PUBLISHED':
+      case 'LIVE':
+      case 'COMPLETE':
+        return true;
+    }
+    if (_hasPlayableMedia) {
+      return true;
+    }
+    return false;
+  }
+
+  bool get isPending {
+    if (isReady) {
+      return false;
+    }
+    const pendingStates = <String>{
+      'PENDING',
+      'PROCESSING',
+      'QUEUED',
+      'UPLOADING',
+    };
+    return pendingStates.contains(_normalizedStatus);
+  }
 }
 
 @immutable

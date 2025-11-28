@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:coalition_app_v2/core/ids.dart' show normalizePostId;
 import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
+import '../../../models/edit_manifest.dart';
 
 enum PostStatus { processing, ready, failed }
 
@@ -21,7 +24,10 @@ class Post {
     this.likeCount,
     this.isLiked,
     this.commentCount,
-  });
+    this.editTimeline,
+    this.editTimelineMap,
+    EditManifest? editManifest,
+  }) : _editManifest = editManifest;
 
   factory Post.fromJson(Map<String, dynamic> json) {
     String? _asString(dynamic value) {
@@ -177,6 +183,16 @@ class Post {
         (json['isLiked'] as bool?);
     final commentCount = (json['commentsCount'] as num?)?.toInt();
 
+    final rawEditTimeline = json['editTimeline'] ??
+        json['edit_timeline'] ??
+        json['editManifest'] ??
+        json['edit_manifest'];
+    final editTimelineMap = EditManifest.parseTimelineMap(rawEditTimeline);
+    final editTimeline = EditManifest.stringifyTimeline(rawEditTimeline) ??
+        (editTimelineMap != null ? jsonEncode(editTimelineMap) : null);
+    final parsedEditManifest =
+        EditManifest.tryParseFromRawTimeline(rawEditTimeline);
+
     return Post(
       id: id,
       userId: userId,
@@ -194,6 +210,9 @@ class Post {
       likeCount: likeCount,
       isLiked: isLiked,
       commentCount: commentCount,
+      editTimeline: editTimeline,
+      editTimelineMap: editTimelineMap,
+      editManifest: parsedEditManifest,
     );
   }
 
@@ -213,4 +232,11 @@ class Post {
   final int? likeCount;
   final bool? isLiked;
   final int? commentCount;
+  final String? editTimeline;
+  final Map<String, dynamic>? editTimelineMap;
+  final EditManifest? _editManifest;
+
+  EditManifest? get editManifest =>
+      _editManifest ??
+      EditManifest.tryParseFromRawTimeline(editTimelineMap ?? editTimeline);
 }

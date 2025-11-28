@@ -20,6 +20,7 @@ import '../pages/create_entry_page.dart';
 import '../pages/events_page.dart';
 import '../pages/edit_candidate_page.dart';
 import '../pages/profile_page.dart';
+import 'route_observers.dart';
 
 /// Root navigator for pages rendered above the shell/tabs.
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -27,6 +28,7 @@ final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 final GoRouter appRouter = GoRouter(
   navigatorKey: rootNavigatorKey,
   initialLocation: '/bootstrap',
+  observers: [appRouteObserver],
   routes: [
     GoRoute(
       path: '/bootstrap',

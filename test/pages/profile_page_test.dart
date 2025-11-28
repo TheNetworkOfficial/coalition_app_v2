@@ -165,6 +165,7 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
   UploadOutcome _outcome;
   final Queue<TaskStatus?> _statusNotifications = Queue<TaskStatus?>();
   final List<PostItem> _pendingPosts = <PostItem>[];
+  final List<UploadTaskInfo> _active = <UploadTaskInfo>[];
 
   @override
   bool get hasActiveUpload => _hasActiveUpload;
@@ -184,7 +185,21 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
   String? get currentTaskId => _currentTaskId;
 
   @override
+  List<UploadTaskInfo> get activeUploads =>
+      List<UploadTaskInfo>.unmodifiable(_active);
+
+  @override
   List<PostItem> get pendingPosts => List<PostItem>.unmodifiable(_pendingPosts);
+
+  @override
+  double get uploadProgress => _progress ?? 0;
+
+  @override
+  bool get hasPendingNotReady =>
+      _pendingPosts.any((post) => !post.isReady);
+
+  @override
+  bool get isUploadHudActive => hasActiveUpload || hasPendingNotReady;
 
   // The real UploadManager exposes some additional getters related to video processing.
   @override
@@ -247,6 +262,13 @@ class _FakeUploadManager extends ChangeNotifier implements UploadManager {
     _currentTaskId = null;
     _statusNotifications.clear();
     super.dispose();
+  }
+
+  @override
+  Future<void> cancelUpload(String taskId) async {
+    _hasActiveUpload = false;
+    _currentTaskId = null;
+    notifyListeners();
   }
 }
 

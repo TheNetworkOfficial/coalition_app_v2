@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'env.dart';
 import 'features/feed/playback/feed_activity_provider.dart';
+import 'widgets/upload_hud.dart';
 
 class AppShell extends ConsumerWidget {
   const AppShell({
@@ -35,13 +37,20 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final activeIndex = navigationShell.currentIndex;
     _setFeedActive(context, ref, activeIndex);
+    final showHud = kShowUploadHud;
 
     return Scaffold(
       // Base StatefulShellRoute asks the shell to render the branch navigators.
       // IndexedStack keeps each branch's navigation stack alive.
-      body: IndexedStack(
-        index: activeIndex,
-        children: branches,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          IndexedStack(
+            index: activeIndex,
+            children: branches,
+          ),
+          if (showHud) const UploadHud(),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: activeIndex,

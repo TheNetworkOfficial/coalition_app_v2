@@ -16,6 +16,7 @@ import '../debug/logging_http_client.dart';
 import '../env.dart';
 import '../features/engagement/models/liker.dart';
 import '../models/create_upload_response.dart';
+import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../models/posts_page.dart';
 import '../models/profile.dart';
@@ -392,6 +393,7 @@ class ApiClient {
     VideoTrimData? trim,
     int? coverFrameMs,
     ImageCropData? imageCrop,
+    EditManifest? editManifest,
   }) async {
     final uri = _resolve('/api/posts/metadata');
     final body = <String, dynamic>{
@@ -421,6 +423,9 @@ class ApiClient {
               'height': imageCrop.height,
               'rotation': imageCrop.rotation,
             },
+      'editTimeline': editManifest == null
+          ? null
+          : jsonEncode(editManifest.toJson()),
     }..removeWhere((key, value) => value == null);
 
     final headers = await _jsonHeaders();
@@ -500,16 +505,29 @@ class ApiClient {
     required String cfUid,
     String? description,
     String visibility = 'public',
+    EditManifest? editManifest,
   }) async {
     final uri = _resolve('/api/posts');
     final trimmedDescription = description?.trim();
+    String? editTimeline;
+    if (editManifest != null) {
+      final manifestJson = editManifest.toJson();
+      editTimeline = jsonEncode(manifestJson);
+    }
     final payload = <String, dynamic>{
       'type': type,
       'cfUid': cfUid,
       'visibility': visibility,
       if (trimmedDescription != null && trimmedDescription.isNotEmpty)
         'description': trimmedDescription,
+      if (editTimeline != null) 'editTimeline': editTimeline,
     };
+    if (kDebugMode) {
+      debugPrint(
+        '[ApiClient][TEMP] createPost: hasEditManifest=${editManifest != null} '
+        'editTimelineLength=${editTimeline?.length}',
+      );
+    }
 
     debugPrint('[ApiClient] POST $uri');
     debugPrint('[ApiClient] createPost payload: $payload');

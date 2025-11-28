@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
 
 import 'package:coalition_app_v2/models/create_upload_response.dart';
+import 'package:coalition_app_v2/models/edit_manifest.dart';
 import 'package:coalition_app_v2/models/post_draft.dart';
 import 'package:coalition_app_v2/services/api_client.dart';
 import 'package:coalition_app_v2/services/tus_uploader.dart';
@@ -302,6 +303,7 @@ class _StubbedApiClient extends ApiClient {
     VideoTrimData? trim,
     int? coverFrameMs,
     ImageCropData? imageCrop,
+    EditManifest? editManifest,
   }) async {
     lastPostedMetadataDescription = description;
   }
@@ -312,6 +314,7 @@ class _StubbedApiClient extends ApiClient {
     required String cfUid,
     String? description,
     String visibility = 'public',
+    EditManifest? editManifest,
   }) async {
     createPostCalls += 1;
     onCreatePost?.call();
@@ -320,6 +323,7 @@ class _StubbedApiClient extends ApiClient {
       cfUid: cfUid,
       description: description,
       visibility: visibility,
+      editManifest: editManifest,
     );
 
     Object? behavior;
@@ -388,12 +392,14 @@ class _CreatePostArgs {
     required this.cfUid,
     this.description,
     this.visibility = 'public',
+    this.editManifest,
   });
 
   final String type;
   final String cfUid;
   final String? description;
   final String visibility;
+  final EditManifest? editManifest;
 
   @override
   bool operator ==(Object other) {
@@ -401,9 +407,11 @@ class _CreatePostArgs {
         other.type == type &&
         other.cfUid == cfUid &&
         other.description == description &&
-        other.visibility == visibility;
+        other.visibility == visibility &&
+        other.editManifest == editManifest;
   }
 
   @override
-  int get hashCode => Object.hash(type, cfUid, description, visibility);
+  int get hashCode =>
+      Object.hash(type, cfUid, description, visibility, editManifest);
 }

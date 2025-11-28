@@ -8,9 +8,44 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
+import '../env.dart';
+import '../models/edit_manifest.dart';
 import '../models/post_draft.dart';
 import '../providers/upload_manager.dart';
 import '../services/video_proxy_service.dart';
+import '../widgets/read_only_overlay_text_layer.dart';
+
+class PostReviewTelemetry {
+  const PostReviewTelemetry._();
+
+  static int? _lastEditorTeardownEpochMs;
+
+  static void recordDualDecoderGuardTriggered() {
+    debugPrint('[DecoderGuard][metric] dual_decoder_guard_triggered=true');
+  }
+
+  static void recordEditorTeardown({required int elapsedMs}) {
+    _lastEditorTeardownEpochMs = DateTime.now().millisecondsSinceEpoch;
+    debugPrint(
+      '[DecoderGuard][metric] editor_teardown_before_navigate_ms=$elapsedMs',
+    );
+  }
+
+  static void logReviewPlayerInitDelay() {
+    final lastTeardownMs = _lastEditorTeardownEpochMs;
+    if (lastTeardownMs == null) {
+      debugPrint(
+        '[DecoderGuard][metric] review_player_init_after_teardown_ms=unknown',
+      );
+      return;
+    }
+    final delta =
+        DateTime.now().millisecondsSinceEpoch - lastTeardownMs;
+    debugPrint(
+      '[DecoderGuard][metric] review_player_init_after_teardown_ms=$delta',
+    );
+  }
+}
 
 class PostReviewPage extends ConsumerStatefulWidget {
   const PostReviewPage({super.key, required this.draft});
@@ -35,20 +70,24 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
   Uint8List? _coverThumbnail;
   bool _isCoverLoading = false;
   Object? _videoInitError;
-  bool _uploadCompleted = false;
+  EditManifest? _editManifest;
 
   @override
   void initState() {
     super.initState();
     _descriptionController =
         TextEditingController(text: widget.draft.description);
+    _editManifest = widget.draft.editManifest?.copy();
 
     if (widget.draft.type == 'video') {
       final initialCover =
           widget.draft.coverFrameMs ?? widget.draft.videoTrim?.startMs ?? 0;
       _coverFrameMs = initialCover;
       if (!kIsWeb) {
-        _initializeVideoPreview();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _initializeVideoPreview();
+        });
       }
     } else {
       _coverFrameMs = widget.draft.coverFrameMs;
@@ -60,12 +99,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     _descriptionController.dispose();
     _videoController?.removeListener(_handleVideoLoop);
     _videoController?.dispose();
-    if (_uploadCompleted) {
-      final proxyPath = widget.draft.proxyFilePath;
-      if (proxyPath != null) {
-        unawaited(VideoProxyService().deleteProxy(proxyPath));
-      }
-    }
+    _cleanupProxyCache();
     super.dispose();
   }
 
@@ -83,43 +117,48 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     final navigator = Navigator.of(context);
 
     try {
-      final updatedDraft = PostDraft(
-        originalFilePath: widget.draft.originalFilePath,
-        proxyFilePath: widget.draft.proxyFilePath,
-        proxyMetadata: widget.draft.proxyMetadata,
-        originalDurationMs: widget.draft.originalDurationMs,
-        type: widget.draft.type,
+      final updatedDraft = widget.draft.copyWith(
         description: _descriptionController.text,
-        videoTrim: widget.draft.videoTrim,
         coverFrameMs: widget.draft.type == 'video'
             ? _effectiveCoverFrameMs
             : widget.draft.coverFrameMs,
-        imageCrop: widget.draft.imageCrop,
+        editManifest: _editManifest ?? widget.draft.editManifest,
       );
 
-      final outcome = await uploadManager.startUpload(
+      final uploadFuture = uploadManager.startUpload(
         draft: updatedDraft,
         description: _descriptionController.text,
       );
 
-      if (!outcome.ok) {
+      if (kBlockOnUpload) {
+        final outcome = await uploadFuture;
         if (!mounted) {
           return;
         }
-        final friendlyMessage = outcome.message ?? 'Failed to finalize upload.';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(friendlyMessage)),
-        );
-        return;
+        if (!outcome.ok) {
+          final friendlyMessage =
+              outcome.message ?? 'Failed to finalize upload.';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(friendlyMessage)),
+          );
+          return;
+        }
+        _cleanupProxyCache();
+        _navigateToFeed(navigator, router);
+      } else {
+        uploadFuture.then((outcome) {
+          if (outcome.ok) {
+            _cleanupProxyCache();
+          } else {
+            debugPrint(
+              '[PostReviewPage] Upload failed after navigation: ${outcome.message}',
+            );
+          }
+        }).catchError((error, stackTrace) {
+          debugPrint('[PostReviewPage] Upload future failed: $error\n$stackTrace');
+        });
+        _navigateToFeed(navigator, router);
       }
-
-      _uploadCompleted = true;
-      final proxyPath = widget.draft.proxyFilePath;
-      if (proxyPath != null) {
-        unawaited(VideoProxyService().deleteProxy(proxyPath));
-      }
-      navigator.popUntil((route) => route.isFirst);
-      router.go('/feed');
     } catch (error) {
       if (!mounted) {
         return;
@@ -136,17 +175,24 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     }
   }
 
+  void _navigateToFeed(NavigatorState navigator, GoRouter router) {
+    navigator.popUntil((route) => route.isFirst);
+    router.go('/feed');
+  }
+
   void _initializeVideoPreview() {
     if (kIsWeb) {
       return;
     }
+    PostReviewTelemetry.logReviewPlayerInitDelay();
     final trim = widget.draft.videoTrim;
     _trimStart =
         trim != null ? Duration(milliseconds: trim.startMs) : Duration.zero;
     _trimEnd = trim != null ? Duration(milliseconds: trim.endMs) : null;
 
-    final controller =
-        VideoPlayerController.file(File(widget.draft.videoPlaybackPath));
+    final controller = VideoPlayerController.file(
+      File(widget.draft.videoPlaybackPath(preferOriginal: true)),
+    );
     _videoController = controller;
     _videoInitFuture = controller.initialize().then((_) {
       _videoDuration = controller.value.duration;
@@ -184,6 +230,13 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     }
   }
 
+  void _cleanupProxyCache() {
+    final proxyPath = widget.draft.proxyFilePath;
+    if (proxyPath != null) {
+      unawaited(VideoProxyService().deleteProxy(proxyPath));
+    }
+  }
+
   Future<void> _refreshCoverThumbnail(int? frameMs) async {
     if (kIsWeb || frameMs == null) {
       return;
@@ -201,6 +254,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
       _coverThumbnail = bytes;
       _isCoverLoading = false;
     });
+    _setPosterFrameManifest(clamped);
   }
 
   Future<Uint8List?> _createThumbnail(int frameMs) async {
@@ -209,7 +263,7 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
     }
     try {
       return await VideoThumbnail.thumbnailData(
-        video: widget.draft.videoPlaybackPath,
+        video: widget.draft.videoPlaybackPath(preferOriginal: true),
         timeMs: frameMs,
         quality: 80,
         imageFormat: ImageFormat.JPEG,
@@ -380,7 +434,13 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
                           currentValue = value;
                         });
                       },
-                      onChangeEnd: updatePreview,
+                      onChangeEnd: (value) {
+                        updatePreview(value);
+                        if (!mounted) return;
+                        setState(() {
+                          _setPosterFrameManifest(value.toInt());
+                        });
+                      },
                     ),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -438,9 +498,16 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
         _coverThumbnail = result.bytes;
       }
     });
+    _setPosterFrameManifest(result.frameMs);
     if (result.bytes == null) {
       unawaited(_refreshCoverThumbnail(result.frameMs));
     }
+  }
+
+  void _setPosterFrameManifest(int frameMs) {
+    final manifest =
+        _editManifest ?? widget.draft.editManifest?.copy() ?? const EditManifest();
+    _editManifest = manifest.copyWith(posterFrameMs: frameMs);
   }
 
   Widget _buildVideoPreview(BorderRadius borderRadius) {
@@ -496,6 +563,15 @@ class _PostReviewPageState extends ConsumerState<PostReviewPage> {
                     color: Colors.black,
                     child: VideoPlayer(controller),
                   ),
+                  if (_editManifest != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: ReadOnlyOverlayTextLayer(
+                          videoController: controller,
+                          editManifest: _editManifest!,
+                        ),
+                      ),
+                    ),
                   Positioned(
                     left: 12,
                     bottom: 12,

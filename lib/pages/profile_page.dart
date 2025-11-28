@@ -615,6 +615,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       likeCount: item.likesCount,
       isLiked: item.likedByMe,
       commentCount: null,
+      editTimeline: item.editTimeline,
+      editTimelineMap: item.editTimelineMap,
+      editManifest: item.editManifest,
     );
   }
 }

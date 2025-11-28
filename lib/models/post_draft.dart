@@ -1,3 +1,4 @@
+import 'edit_manifest.dart';
 import 'video_proxy.dart';
 
 class PostDraft {
@@ -11,6 +12,9 @@ class PostDraft {
     this.videoTrim,
     this.coverFrameMs,
     this.imageCrop,
+    this.sourceAssetId,
+    this.persistedFilePath,
+    this.editManifest,
   }) : assert(type == 'image' || type == 'video');
 
   final String originalFilePath;
@@ -22,16 +26,57 @@ class PostDraft {
   final VideoTrimData? videoTrim;
   final int? coverFrameMs;
   final ImageCropData? imageCrop;
+  final String? sourceAssetId;
+  final String? persistedFilePath;
+  final EditManifest? editManifest;
+
+  PostDraft copyWith({
+    String? originalFilePath,
+    String? description,
+    String? proxyFilePath,
+    VideoProxyMetadata? proxyMetadata,
+    int? originalDurationMs,
+    VideoTrimData? videoTrim,
+    int? coverFrameMs,
+    ImageCropData? imageCrop,
+    String? sourceAssetId,
+    String? persistedFilePath,
+    EditManifest? editManifest,
+  }) {
+    return PostDraft(
+      originalFilePath: originalFilePath ?? this.originalFilePath,
+      type: type,
+      description: description ?? this.description,
+      proxyFilePath: proxyFilePath ?? this.proxyFilePath,
+      proxyMetadata: proxyMetadata ?? this.proxyMetadata,
+      originalDurationMs: originalDurationMs ?? this.originalDurationMs,
+      videoTrim: videoTrim ?? this.videoTrim,
+      coverFrameMs: coverFrameMs ?? this.coverFrameMs,
+      imageCrop: imageCrop ?? this.imageCrop,
+      sourceAssetId: sourceAssetId ?? this.sourceAssetId,
+      persistedFilePath: persistedFilePath ?? this.persistedFilePath,
+      editManifest: editManifest ?? this.editManifest,
+    );
+  }
 
   bool get hasVideoProxy => proxyFilePath != null && proxyMetadata != null;
 
-  String get videoPlaybackPath => proxyFilePath ?? originalFilePath;
-
-  String resolveUploadPath({required bool preferProxy}) {
-    if (preferProxy && hasVideoProxy) {
-      return proxyFilePath!;
+  String videoPlaybackPath({bool preferOriginal = true}) {
+    final original = persistedFilePath ?? originalFilePath;
+    final proxy = proxyFilePath;
+    if (preferOriginal) {
+      if (original.isNotEmpty) {
+        return original;
+      }
+      if (proxy != null && proxy.isNotEmpty) {
+        return proxy;
+      }
+      return original;
     }
-    return originalFilePath;
+    if (proxy != null && proxy.isNotEmpty) {
+      return proxy;
+    }
+    return original;
   }
 }
 

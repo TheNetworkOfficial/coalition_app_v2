@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:coalition_app_v2/utils/cloudflare_stream.dart';
 import 'package:coalition_app_v2/widgets/user_avatar.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+
+import 'package:coalition_app_v2/models/edit_manifest.dart';
+import 'read_only_overlay_text_layer.dart';
 
 enum FeedMediaType { image, video }
 
@@ -16,7 +21,10 @@ class FeedEntry {
     this.aspectRatio,
     this.authorName,
     this.authorAvatarUrl,
-  });
+    this.editTimeline,
+    this.editTimelineMap,
+    EditManifest? editManifest,
+  }) : _editManifest = editManifest;
 
   factory FeedEntry.fromJson(
     Map<String, dynamic> json, {
@@ -45,6 +53,7 @@ class FeedEntry {
       }
       return null;
     }
+
 
     final typeString = _asString(json['type'])?.toLowerCase() ?? '';
     final type =
@@ -96,6 +105,15 @@ class FeedEntry {
 
     authorName ??= _asString(json['authorName']) ?? _asString(json['username']);
     avatarUrl ??= _asString(json['authorAvatarUrl']);
+    final rawEditTimeline = json['editTimeline'] ??
+        json['edit_timeline'] ??
+        json['editManifest'] ??
+        json['edit_manifest'];
+    final editTimelineMap = EditManifest.parseTimelineMap(rawEditTimeline);
+    final editTimeline = EditManifest.stringifyTimeline(rawEditTimeline) ??
+        (editTimelineMap != null ? jsonEncode(editTimelineMap) : null);
+    final parsedEditManifest =
+        EditManifest.tryParseFromRawTimeline(rawEditTimeline);
 
     if (type == FeedMediaType.image) {
       if (imageUrl == null) {
@@ -110,6 +128,9 @@ class FeedEntry {
         aspectRatio: aspectRatio,
         authorName: authorName,
         authorAvatarUrl: avatarUrl,
+        editTimeline: editTimeline,
+        editTimelineMap: editTimelineMap,
+        editManifest: parsedEditManifest,
       );
     } else {
       if (videoUrl == null) {
@@ -124,6 +145,9 @@ class FeedEntry {
         aspectRatio: aspectRatio,
         authorName: authorName,
         authorAvatarUrl: avatarUrl,
+        editTimeline: editTimeline,
+        editTimelineMap: editTimelineMap,
+        editManifest: parsedEditManifest,
       );
     }
   }
@@ -137,6 +161,13 @@ class FeedEntry {
   final double? aspectRatio;
   final String? authorName;
   final String? authorAvatarUrl;
+  final String? editTimeline;
+  final Map<String, dynamic>? editTimelineMap;
+  final EditManifest? _editManifest;
+
+  EditManifest? get editManifest =>
+      _editManifest ??
+      EditManifest.tryParseFromRawTimeline(editTimelineMap ?? editTimeline);
 }
 
 class FeedItem extends StatefulWidget {
@@ -398,6 +429,7 @@ class _VideoContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final videoController = controller;
+    final overlayManifest = item.editManifest;
     final aspectRatio = videoController?.value.isInitialized == true
         ? videoController!.value.aspectRatio
         : (item.aspectRatio ?? 9 / 16);
@@ -409,7 +441,19 @@ class _VideoContent extends StatelessWidget {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.done &&
               videoController.value.isInitialized) {
-            return VideoPlayer(videoController);
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                VideoPlayer(videoController),
+                if (overlayManifest != null)
+                  IgnorePointer(
+                    child: ReadOnlyOverlayTextLayer(
+                      videoController: videoController,
+                      editManifest: overlayManifest,
+                    ),
+                  ),
+              ],
+            );
           }
           return _VideoPlaceholder(item: item);
         },

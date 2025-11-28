@@ -22,16 +22,6 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
-subprojects {
-    tasks.withType<JavaCompile>().configureEach {
-        sourceCompatibility = JavaVersion.VERSION_11.toString()
-        targetCompatibility = JavaVersion.VERSION_11.toString()
-        if ("-Xlint:-options" !in options.compilerArgs) {
-            options.compilerArgs.add("-Xlint:-options")
-        }
-    }
-}
-
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

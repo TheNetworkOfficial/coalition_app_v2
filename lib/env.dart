@@ -1,3 +1,4 @@
+// cspell:ignore Unmetered UNMETERED
 import 'package:flutter/foundation.dart';
 
 const String kApiBaseUrl =
@@ -5,11 +6,31 @@ const String kApiBaseUrl =
 const bool kAuthBypassEnabled =
     bool.fromEnvironment('AUTH_BYPASS', defaultValue: false);
 const bool kPreferVideoProxyUploads =
-    bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: true);
+    bool.fromEnvironment('UPLOAD_VIDEO_PROXY', defaultValue: false);
+const bool _kLegacyNativeTusUploader =
+    bool.fromEnvironment('USE_NATIVE_TUS_UPLOADER', defaultValue: true);
+const bool kUseNativeTusUploader =
+    bool.fromEnvironment('USE_NATIVE_TUS', defaultValue: _kLegacyNativeTusUploader);
+const bool kShowUploadHud =
+    bool.fromEnvironment('SHOW_UPLOAD_HUD', defaultValue: true);
+const bool kUsePushReplacementForReview = bool.fromEnvironment(
+  'USE_PUSH_REPLACEMENT_FOR_REVIEW',
+  defaultValue: false,
+);
+const bool kShowEditContinueBarrier =
+    bool.fromEnvironment('SHOW_EDIT_CONTINUE_BARRIER', defaultValue: false);
+const bool kTusRequireUnmeteredNetwork =
+    bool.fromEnvironment('TUS_REQUIRE_UNMETERED', defaultValue: false);
 // Feature flag to enable segmented (chunked) preview proxying (10s segments).
 // Enabled by default; pass --dart-define=ENABLE_SEGMENTED_PREVIEW=false to opt out.
 const bool kEnableSegmentedPreview =
     bool.fromEnvironment('ENABLE_SEGMENTED_PREVIEW', defaultValue: true);
+const bool kBlockOnUpload =
+    bool.fromEnvironment('BLOCK_ON_UPLOAD', defaultValue: false);
+const bool kEnableNativeEditorPreview = bool.fromEnvironment(
+  'ENABLE_NATIVE_EDITOR_PREVIEW',
+  defaultValue: false,
+);
 const String kCloudflareImagesAccountHash =
     String.fromEnvironment('CF_IMAGES_ACCOUNT_HASH', defaultValue: '');
 const String kCloudflareImagesVariant =
