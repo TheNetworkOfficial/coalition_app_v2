@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 
 abstract class EditOp {
   const EditOp({required this.type, this.startMs, this.endMs});

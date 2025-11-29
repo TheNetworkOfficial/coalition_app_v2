@@ -8,6 +8,8 @@ import 'package:http_parser/http_parser.dart';
 import 'package:coalition_app_v2/features/admin/models/admin_application.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate.dart';
 import 'package:coalition_app_v2/features/candidates/models/candidate_update.dart';
+import 'package:coalition_app_v2/features/events/models/event.dart';
+import 'package:coalition_app_v2/features/events/models/event_draft.dart';
 import 'package:coalition_app_v2/features/tags/models/tag_models.dart';
 
 import 'package:coalition_app_v2/features/engagement/utils/ids.dart';
@@ -936,6 +938,43 @@ class ApiClient {
     return List<TagCategory>.unmodifiable(categories);
   }
 
+  Future<List<TagCategory>> getEventTagCatalog() async {
+    final uri = _resolve('/api/eventTagCatalog');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.get(uri, headers: headers);
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while loading event tag catalog',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw HttpException('eventTagCatalog $statusCode');
+    }
+    if (response.body.isEmpty) {
+      return const <TagCategory>[];
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected event tag catalog response');
+    }
+    final rawCategories = decoded['categories'];
+    final categories = <TagCategory>[];
+    if (rawCategories is List) {
+      for (final entry in rawCategories) {
+        if (entry is Map<String, dynamic>) {
+          categories.add(TagCategory.fromJson(entry));
+        }
+      }
+    }
+    return List<TagCategory>.unmodifiable(categories);
+  }
+
   Future<TagCategory> createTagCategory({
     required String name,
     int order = 0,
@@ -1123,6 +1162,196 @@ class ApiClient {
       response,
       fallbackId: trimmedCategoryId,
       operation: 'delete tag in category',
+    );
+  }
+
+  Future<TagCategory> createEventTagCategory({
+    required String name,
+    int order = 0,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw ArgumentError('name must not be empty');
+    }
+    final uri = _resolve('/api/eventTagCatalog');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      'name': trimmedName,
+      'order': order,
+    };
+    final response = await _httpClient.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackName: trimmedName,
+      operation: 'create event tag category',
+    );
+  }
+
+  Future<TagCategory> updateEventTagCategory({
+    required String categoryId,
+    String? name,
+    int? order,
+  }) async {
+    final trimmedId = categoryId.trim();
+    if (trimmedId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    if ((name == null || name.trim().isEmpty) && order == null) {
+      throw ArgumentError('name or order must be provided');
+    }
+    final encodedId = Uri.encodeComponent(trimmedId);
+    final uri = _resolve('/api/eventTagCatalog/$encodedId');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+      if (order != null) 'order': order,
+    };
+    final response = await _httpClient.patch(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedId,
+      fallbackName: name?.trim(),
+      operation: 'update event tag category',
+    );
+  }
+
+  Future<void> deleteEventTagCategory(String categoryId) async {
+    final trimmedId = categoryId.trim();
+    if (trimmedId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmedId);
+    final uri = _resolve('/api/eventTagCatalog/$encodedId');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.delete(uri, headers: headers);
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while deleting event tag category',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Event tag category not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to delete event tag category: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+  }
+
+  Future<TagCategory> addEventTagToCategory({
+    required String categoryId,
+    required String label,
+    String? value,
+  }) async {
+    final trimmedId = categoryId.trim();
+    if (trimmedId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    final trimmedLabel = label.trim();
+    if (trimmedLabel.isEmpty) {
+      throw ArgumentError('label must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmedId);
+    final uri = _resolve('/api/eventTagCatalog/$encodedId/tags');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      'label': trimmedLabel,
+      if (value != null && value.trim().isNotEmpty) 'value': value.trim(),
+    };
+    final response = await _httpClient.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedId,
+      operation: 'add event tag to category',
+    );
+  }
+
+  Future<TagCategory> updateEventTagInCategory({
+    required String categoryId,
+    required String tagId,
+    String? label,
+    String? value,
+  }) async {
+    final trimmedCategoryId = categoryId.trim();
+    final trimmedTagId = tagId.trim();
+    if (trimmedCategoryId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    if (trimmedTagId.isEmpty) {
+      throw ArgumentError('tagId must not be empty');
+    }
+    if ((label == null || label.trim().isEmpty) &&
+        (value == null || value.trim().isEmpty)) {
+      throw ArgumentError('label or value must be provided');
+    }
+    final encodedCategoryId = Uri.encodeComponent(trimmedCategoryId);
+    final encodedTagId = Uri.encodeComponent(trimmedTagId);
+    final uri =
+        _resolve('/api/eventTagCatalog/$encodedCategoryId/tags/$encodedTagId');
+    final headers = await _jsonHeaders();
+    final payload = <String, dynamic>{
+      if (label != null && label.trim().isNotEmpty) 'label': label.trim(),
+      if (value != null && value.trim().isNotEmpty) 'value': value.trim(),
+    };
+    final response = await _httpClient.patch(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedCategoryId,
+      operation: 'update event tag in category',
+    );
+  }
+
+  Future<TagCategory> deleteEventTagInCategory({
+    required String categoryId,
+    required String tagId,
+  }) async {
+    final trimmedCategoryId = categoryId.trim();
+    final trimmedTagId = tagId.trim();
+    if (trimmedCategoryId.isEmpty) {
+      throw ArgumentError('categoryId must not be empty');
+    }
+    if (trimmedTagId.isEmpty) {
+      throw ArgumentError('tagId must not be empty');
+    }
+    final encodedCategoryId = Uri.encodeComponent(trimmedCategoryId);
+    final encodedTagId = Uri.encodeComponent(trimmedTagId);
+    final uri =
+        _resolve('/api/eventTagCatalog/$encodedCategoryId/tags/$encodedTagId');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.delete(uri, headers: headers);
+    return _parseTagCategoryResponse(
+      response,
+      fallbackId: trimmedCategoryId,
+      operation: 'delete event tag in category',
     );
   }
 
@@ -1639,6 +1868,499 @@ class ApiClient {
     }
 
     return LikersPage.fromJson(decoded);
+  }
+
+  Future<({List<Event> items, String? cursor})> getEvents({
+    int limit = 20,
+    String? cursor,
+    String? tag,
+    String? tags,
+    String? town,
+    DateTime? after,
+    String? query,
+  }) async {
+    final resolvedLimit = limit <= 0 ? 20 : limit;
+    final queryParameters = <String, String>{
+      'limit': resolvedLimit.toString(),
+      if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
+      if (tag != null && tag.trim().isNotEmpty) 'tag': tag.trim(),
+      if (tags != null && tags.trim().isNotEmpty) 'tags': tags.trim(),
+      if (town != null && town.trim().isNotEmpty) 'town': town.trim(),
+      if (after != null) 'after': after.toUtc().toIso8601String(),
+      if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
+    };
+
+    final baseUri = _resolve('/api/events');
+    final uri = queryParameters.isEmpty
+        ? baseUri
+        : baseUri.replace(
+            queryParameters: {
+              if (baseUri.hasQuery) ...baseUri.queryParameters,
+              ...queryParameters,
+            },
+          );
+
+    http.Response? response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final forceRefresh = attempt == 1;
+      final headers = await _composeHeaders(
+        null,
+        forceRefreshAuth: forceRefresh,
+      );
+      response = await _httpClient.get(
+        uri,
+        headers: headers.isEmpty ? null : headers,
+      );
+      final statusCode = response.statusCode;
+      final isAuthError = statusCode == HttpStatus.unauthorized ||
+          statusCode == HttpStatus.forbidden;
+      if (isAuthError && !forceRefresh) {
+        await _authService?.fetchAuthToken(forceRefresh: true);
+        continue;
+      }
+      break;
+    }
+
+    if (response == null) {
+      throw ApiException('Failed to load events: no response');
+    }
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while loading events',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      return (items: const <Event>[], cursor: null);
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to load events: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return (items: const <Event>[], cursor: null);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected events response format');
+    }
+
+    final rawItems = decoded['items'];
+    final items = rawItems is List
+        ? rawItems
+            .whereType<Map>()
+            .map((raw) {
+              try {
+                final m = Map<String, dynamic>.from(raw);
+                final fallbackId =
+                    (m['eventId'] ?? m['id'] ?? m['event_id'] ?? '').toString();
+                m['eventId'] = fallbackId;
+                return Event.fromJson(m);
+              } catch (error, stackTrace) {
+                debugPrint(
+                  '[ApiClient] Skipping malformed event item: $error\n$stackTrace',
+                );
+                return null;
+              }
+            })
+            .whereType<Event>()
+            .toList()
+        : <Event>[];
+
+    final rawCursor = decoded['cursor'] ?? decoded['nextCursor'];
+    String? nextCursor;
+    if (rawCursor is String) {
+      final trimmed = rawCursor.trim();
+      if (trimmed.isNotEmpty) {
+        nextCursor = trimmed;
+      }
+    }
+
+    return (
+      items: List<Event>.unmodifiable(items),
+      cursor: nextCursor,
+    );
+  }
+
+  Future<({List<Event> items, String? cursor})> getMyEvents({
+    required String status,
+    String? cursor,
+    int limit = 20,
+  }) async {
+    final resolvedStatus = status.trim().isEmpty ? 'active' : status.trim();
+    final resolvedLimit = limit <= 0 ? 20 : limit;
+    final queryParameters = <String, String>{
+      'status': resolvedStatus,
+      'limit': resolvedLimit.toString(),
+      if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
+    };
+
+    final baseUri = _resolve('/api/my/events');
+    final uri = baseUri.replace(
+      queryParameters: {
+        if (baseUri.hasQuery) ...baseUri.queryParameters,
+        ...queryParameters,
+      },
+    );
+
+    http.Response? response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final forceRefresh = attempt == 1;
+      final headers = await _composeHeaders(
+        null,
+        forceRefreshAuth: forceRefresh,
+      );
+      response = await _httpClient.get(
+        uri,
+        headers: headers.isEmpty ? null : headers,
+      );
+      final statusCode = response.statusCode;
+      final isAuthError = statusCode == HttpStatus.unauthorized ||
+          statusCode == HttpStatus.forbidden;
+      if (isAuthError && !forceRefresh) {
+        await _authService?.fetchAuthToken(forceRefresh: true);
+        continue;
+      }
+      break;
+    }
+
+    if (response == null) {
+      throw ApiException('Failed to load events: no response');
+    }
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while loading events',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      return (items: const <Event>[], cursor: null);
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to load events: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return (items: const <Event>[], cursor: null);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('Unexpected events response format');
+    }
+
+    final rawItems = decoded['items'];
+    final items = rawItems is List
+        ? rawItems
+            .whereType<Map>()
+            .map((raw) {
+              try {
+                final m = Map<String, dynamic>.from(raw);
+                final fallbackId =
+                    (m['eventId'] ?? m['id'] ?? m['event_id'] ?? '').toString();
+                m['eventId'] = fallbackId;
+                return Event.fromJson(m);
+              } catch (error, stackTrace) {
+                debugPrint(
+                  '[ApiClient] Skipping malformed event item: $error\n$stackTrace',
+                );
+                return null;
+              }
+            })
+            .whereType<Event>()
+            .toList()
+        : <Event>[];
+
+    final rawCursor = decoded['cursor'] ?? decoded['nextCursor'];
+    String? nextCursor;
+    if (rawCursor is String) {
+      final trimmed = rawCursor.trim();
+      if (trimmed.isNotEmpty) {
+        nextCursor = trimmed;
+      }
+    }
+
+    return (
+      items: List<Event>.unmodifiable(items),
+      cursor: nextCursor,
+    );
+  }
+
+  Future<Event> getEvent(String id) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('id must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmed);
+    final response = await get('/api/events/$encodedId');
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Event not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to load event: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      throw ApiException('Empty response while loading event');
+    }
+
+    final decoded = jsonDecode(response.body);
+    final map = _extractEventMap(decoded);
+    if (map == null) {
+      throw ApiException('Unexpected event response format');
+    }
+
+    return Event.fromJson(map);
+  }
+
+  Future<Event> createEvent(EventDraft draft) async {
+    final response = await postJson(
+      '/api/events',
+      body: draft.toJson(),
+    );
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to create event: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      throw ApiException('Empty response while creating event');
+    }
+
+    final decoded = jsonDecode(response.body);
+    final map = _extractEventMap(decoded);
+    if (map == null) {
+      throw ApiException('Unexpected event response format');
+    }
+
+    return Event.fromJson(map);
+  }
+
+  Future<Event> updateEvent(String eventId, EventDraft draft) async {
+    final trimmed = eventId.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('eventId must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmed);
+    final uri = _resolve('/api/events/$encodedId');
+    final headers = await _jsonHeaders();
+    final payload = jsonEncode(draft.toJson());
+
+    final response = await _httpClient.patch(
+      uri,
+      headers: headers,
+      body: payload,
+    );
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Event not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to update event: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      throw ApiException('Empty response while updating event');
+    }
+
+    final decoded = jsonDecode(response.body);
+    final map = _extractEventMap(decoded);
+    if (map == null) {
+      throw ApiException('Unexpected event response format');
+    }
+
+    return Event.fromJson(map);
+  }
+
+  Future<void> deleteEvent(String eventId) async {
+    final trimmed = eventId.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('eventId must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmed);
+    final uri = _resolve('/api/events/$encodedId');
+    final headers = await _jsonHeaders();
+
+    final response = await _httpClient.delete(
+      uri,
+      headers: headers,
+    );
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.forbidden) {
+      throw ApiException(
+        'Forbidden while deleting event',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Event not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to delete event: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    if (response.body.isEmpty) {
+      return;
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map<String, dynamic>) {
+      final okValue = decoded['ok'];
+      if (okValue is bool && okValue) {
+        return;
+      }
+    }
+
+    throw ApiException(
+      'Unexpected response while deleting event',
+      statusCode: statusCode,
+      details: response.body.isEmpty ? null : response.body,
+    );
+  }
+
+  Future<({bool isAttending, int attendeeCount, Event? event})>
+      signupForEvent(String id) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('id must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmed);
+    final uri = _resolve('/api/events/$encodedId/signup');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(const <String, String>{}),
+    );
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Event not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to sign up for event: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    return _parseEventSignupResponse(
+      response,
+      defaultAttending: true,
+    );
+  }
+
+  Future<({bool isAttending, int attendeeCount, Event? event})>
+      cancelEventSignup(String id) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('id must not be empty');
+    }
+    final encodedId = Uri.encodeComponent(trimmed);
+    final uri = _resolve('/api/events/$encodedId/signup');
+    final headers = await _jsonHeaders();
+    final response = await _httpClient.delete(
+      uri,
+      headers: headers,
+    );
+
+    final statusCode = response.statusCode;
+    if (statusCode == HttpStatus.unauthorized) {
+      throw ApiException('Unauthorized', statusCode: statusCode);
+    }
+    if (statusCode == HttpStatus.notFound) {
+      throw ApiException(
+        'Event not found',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw ApiException(
+        'Failed to cancel signup: $statusCode',
+        statusCode: statusCode,
+        details: response.body.isEmpty ? null : response.body,
+      );
+    }
+
+    return _parseEventSignupResponse(
+      response,
+      defaultAttending: false,
+    );
   }
 
   Future<({List<Candidate> items, String? cursor})> getCandidates({
@@ -2183,6 +2905,44 @@ class ApiClient {
     return null;
   }
 
+  ({bool isAttending, int attendeeCount, Event? event})
+      _parseEventSignupResponse(
+    http.Response response, {
+    required bool defaultAttending,
+  }) {
+    if (response.body.isEmpty) {
+      return (
+        isAttending: defaultAttending,
+        attendeeCount: defaultAttending ? 1 : 0,
+        event: null,
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      return (
+        isAttending: defaultAttending,
+        attendeeCount: defaultAttending ? 1 : 0,
+        event: null,
+      );
+    }
+    final eventMap = _extractEventMap(decoded);
+    final event =
+        eventMap != null ? Event.fromJson(eventMap) : null;
+    final count = (decoded['attendeeCount'] as num?)?.toInt() ??
+        event?.attendeeCount ??
+        (defaultAttending ? 1 : 0);
+    final attending =
+        decoded['isAttending'] == true || decoded['attending'] == true
+            ? true
+            : event?.isAttending ?? defaultAttending;
+
+    return (
+      isAttending: attending,
+      attendeeCount: count,
+      event: event,
+    );
+  }
+
   Map<String, dynamic>? _extractCandidateMap(dynamic payload) {
     if (payload is Map<String, dynamic>) {
       final candidate = payload['candidate'];
@@ -2193,6 +2953,22 @@ class ApiClient {
           payload.containsKey('id') ||
           payload.containsKey('name');
       if (hasCandidateFields) {
+        return Map<String, dynamic>.from(payload);
+      }
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _extractEventMap(dynamic payload) {
+    if (payload is Map<String, dynamic>) {
+      final event = payload['event'];
+      if (event is Map<String, dynamic>) {
+        return Map<String, dynamic>.from(event);
+      }
+      final hasEventFields = payload.containsKey('eventId') ||
+          payload.containsKey('id') ||
+          payload.containsKey('title');
+      if (hasEventFields) {
         return Map<String, dynamic>.from(payload);
       }
     }

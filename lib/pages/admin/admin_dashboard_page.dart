@@ -11,7 +11,11 @@ class AdminDashboardPage extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final location = GoRouterState.of(context).uri.toString();
-        final currentIndex = location.startsWith('/admin/tags') ? 1 : 0;
+        final currentIndex = location.startsWith('/admin/tags')
+            ? 1
+            : location.startsWith('/admin/event-tags')
+                ? 2
+                : 0;
         final useRail = constraints.maxWidth >= 720;
         if (useRail) {
           return Scaffold(
@@ -35,12 +39,19 @@ class AdminDashboardPage extends StatelessWidget {
                       selectedIcon: Icon(Icons.label),
                       label: Text('Candidate Tags'),
                     ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.event_available_outlined),
+                      selectedIcon: Icon(Icons.event_available),
+                      label: Text('Event Tags'),
+                    ),
                   ],
                   onDestinationSelected: (index) {
                     if (index == 0) {
                       context.go('/admin/applications');
                     } else if (index == 1) {
                       context.go('/admin/tags');
+                    } else if (index == 2) {
+                      context.go('/admin/event-tags');
                     }
                   },
                 ),
@@ -52,7 +63,7 @@ class AdminDashboardPage extends StatelessWidget {
         }
 
         return DefaultTabController(
-          length: 2,
+          length: 3,
           initialIndex: currentIndex,
           child: Scaffold(
             appBar: AppBar(
@@ -64,13 +75,16 @@ class AdminDashboardPage extends StatelessWidget {
                   }
                   if (index == 0) {
                     context.go('/admin/applications');
-                  } else {
+                  } else if (index == 1) {
                     context.go('/admin/tags');
+                  } else {
+                    context.go('/admin/event-tags');
                   }
                 },
                 tabs: const [
                   Tab(text: 'Applications'),
                   Tab(text: 'Candidate Tags'),
+                  Tab(text: 'Event Tags'),
                 ],
               ),
             ),
@@ -79,6 +93,7 @@ class AdminDashboardPage extends StatelessWidget {
               children: [
                 currentIndex == 0 ? child : const SizedBox.shrink(),
                 currentIndex == 1 ? child : const SizedBox.shrink(),
+                currentIndex == 2 ? child : const SizedBox.shrink(),
               ],
             ),
           ),

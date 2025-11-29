@@ -443,6 +443,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     usernameLabel: usernameLabel,
                     onSaveProfile: _saveProfile,
                     onEditCandidatePage: _handleEditCandidatePage,
+                    onManageEvents: _handleManageEvents,
                     onToggleFollow: onToggleFollow,
                     showActions: _isViewingSelf,
                   ),
@@ -534,6 +535,13 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       return;
     }
     context.pushNamed('candidate_edit');
+  }
+
+  void _handleManageEvents() {
+    if (!mounted) {
+      return;
+    }
+    context.pushNamed('manage_events');
   }
 
   void _openAdminDashboard() {
@@ -629,6 +637,7 @@ class _ProfileDetailsSection extends ConsumerStatefulWidget {
     required this.usernameLabel,
     required this.onSaveProfile,
     this.onEditCandidatePage,
+    this.onManageEvents,
     this.onToggleFollow,
     this.showActions = true,
   });
@@ -638,6 +647,7 @@ class _ProfileDetailsSection extends ConsumerStatefulWidget {
   final String usernameLabel;
   final Future<void> Function(ProfileUpdate update) onSaveProfile;
   final VoidCallback? onEditCandidatePage;
+  final VoidCallback? onManageEvents;
   final bool showActions;
   final Future<void> Function(String targetUserId, bool next)? onToggleFollow;
 
@@ -758,9 +768,12 @@ class _ProfileDetailsSectionState
     final toggleFollow = widget.onToggleFollow;
     final candidateStatus = (profile?.candidateAccessStatus ?? 'none').trim();
     final candidateEditHandler = widget.onEditCandidatePage;
+    final manageEventsHandler = widget.onManageEvents;
     final bool showCandidateEditButton = widget.showActions &&
         candidateStatus == 'approved' &&
         candidateEditHandler != null;
+    final bool showManageEventsButton =
+        showCandidateEditButton && manageEventsHandler != null;
     final bool canEdit =
         widget.showActions && !widget.isLoading && profile != null;
 
@@ -836,10 +849,25 @@ class _ProfileDetailsSectionState
                   _ProfileStatsRow(profile: profile),
                   if (showCandidateEditButton) ...[
                     const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: widget.isLoading ? null : candidateEditHandler,
-                      icon: const Icon(Icons.campaign_outlined),
-                      label: const Text('Edit candidate page'),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed:
+                              widget.isLoading ? null : candidateEditHandler,
+                          icon: const Icon(Icons.campaign_outlined),
+                          label: const Text('Edit candidate page'),
+                        ),
+                        if (showManageEventsButton)
+                          OutlinedButton.icon(
+                            onPressed: widget.isLoading
+                                ? null
+                                : manageEventsHandler,
+                            icon: const Icon(Icons.event_note_outlined),
+                            label: const Text('Manage events'),
+                          ),
+                      ],
                     ),
                   ],
                   if (!widget.showActions &&

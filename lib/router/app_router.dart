@@ -3,6 +3,7 @@ import 'package:coalition_app_v2/features/auth/ui/confirm_code_page.dart';
 import 'package:coalition_app_v2/features/feed/models/post.dart';
 import 'package:coalition_app_v2/features/feed/ui/feed_page.dart';
 import 'package:coalition_app_v2/features/feed/ui/pages/post_player_page.dart';
+import 'package:coalition_app_v2/features/events/models/event.dart';
 import 'package:coalition_app_v2/pages/candidate_access_page.dart';
 import 'package:coalition_app_v2/pages/settings_page.dart';
 import 'package:flutter/material.dart';
@@ -12,13 +13,17 @@ import '../app_shell.dart';
 import '../pages/admin/admin_application_detail_page.dart';
 import '../pages/admin/admin_applications_page.dart';
 import '../pages/admin/admin_dashboard_page.dart';
+import '../pages/admin/admin_event_tags_page.dart';
 import '../pages/admin/admin_tags_page.dart';
 import '../pages/bootstrap_page.dart';
 import '../pages/candidate_viewer_page.dart';
 import '../pages/candidates_page.dart';
 import '../pages/create_entry_page.dart';
 import '../pages/events_page.dart';
+import '../pages/event_viewer_page.dart';
 import '../pages/edit_candidate_page.dart';
+import '../pages/events/event_edit_page.dart';
+import '../pages/events/manage_events_page.dart';
 import '../pages/profile_page.dart';
 import 'route_observers.dart';
 
@@ -139,6 +144,39 @@ final GoRouter appRouter = GoRouter(
       },
     ),
     GoRoute(
+      path: '/manage-events',
+      name: 'manage_events',
+      parentNavigatorKey: rootNavigatorKey,
+      pageBuilder: (context, state) => const MaterialPage<void>(
+        child: ManageEventsPage(),
+      ),
+    ),
+    GoRoute(
+      path: '/manage-events/new',
+      name: 'event_create',
+      parentNavigatorKey: rootNavigatorKey,
+      pageBuilder: (context, state) => MaterialPage<void>(
+        key: state.pageKey,
+        child: const EventEditPage(),
+      ),
+    ),
+    GoRoute(
+      path: '/manage-events/:id/edit',
+      name: 'event_edit',
+      parentNavigatorKey: rootNavigatorKey,
+      pageBuilder: (context, state) {
+        final eventId = state.pathParameters['id'] ?? '';
+        final event = state.extra is Event ? state.extra as Event : null;
+        return MaterialPage<void>(
+          key: state.pageKey,
+          child: EventEditPage(
+            eventId: eventId,
+            event: event,
+          ),
+        );
+      },
+    ),
+    GoRoute(
       path: '/admin',
       parentNavigatorKey: rootNavigatorKey,
       redirect: (context, state) => '/admin/applications',
@@ -174,6 +212,13 @@ final GoRouter appRouter = GoRouter(
           name: 'admin_tags',
           pageBuilder: (context, state) => const NoTransitionPage(
             child: AdminTagsPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/admin/event-tags',
+          name: 'admin_event_tags',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: AdminEventTagsPage(),
           ),
         ),
       ],
@@ -248,6 +293,19 @@ final GoRouter appRouter = GoRouter(
               pageBuilder: (context, state) => const NoTransitionPage(
                 child: EventsPage(),
               ),
+              routes: [
+                GoRoute(
+                  path: ':id',
+                  name: 'event_view',
+                  pageBuilder: (context, state) {
+                    final id = state.pathParameters['id']!;
+                    return MaterialPage<void>(
+                      key: state.pageKey,
+                      child: EventViewerPage(eventId: id),
+                    );
+                  },
+                ),
+              ],
             ),
           ],
         ),
